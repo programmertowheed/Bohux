@@ -10,7 +10,6 @@
                     │           revisions, audit)              │
                     │   │                                      │
                     │   ├──▶ Temporal (deploy sagas)            │
-                    │   ├──▶ NATS JetStream (events, log fanout)│
                     │   └──▶ OpenBao / Vault (secret refs)      │
                     └───────────────▲──────────────────────────┘
                                     │ mTLS, agent dials OUT
@@ -41,9 +40,10 @@ migrations, shift traffic, gate on health, finalize or compensate. Durable workf
 execution survives control plane restarts mid-deploy and gives retries and compensation
 for free. See ADR-0002.
 
-### Eventing: NATS JetStream
-Pub/sub, KV, and object store in one binary. Carries log streaming, agent fan-out, and
-work distribution. Avoids running Redis plus Kafka plus a separate object store.
+### Eventing: none (agent streams + Postgres)
+No message bus. Agents hold one outbound gRPC stream each: assignments go down, status and
+log tails come up. Work distribution is Temporal task queues. Cross-replica notification
+uses Postgres `LISTEN/NOTIFY`, with the row as the truth. See ADR-0009.
 
 ### Agent (data plane)
 Same binary as the control plane, agent mode. One per node. **Pull-based**: the node dials

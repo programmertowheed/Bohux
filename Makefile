@@ -24,5 +24,5 @@ conformance: ## Provider conformance — the gate for any new provider
 build: ## Build the single binary
 	go build -o bin/kiln ./cmd/kiln
 
-run-dev: ## Local stack: postgres, temporal, nats
+run-dev: ## Local stack: postgres, temporal
 	docker compose -f deploy/dev/compose.yaml up -d
