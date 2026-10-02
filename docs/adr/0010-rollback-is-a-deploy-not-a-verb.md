@@ -1,8 +1,8 @@
 # ADR-0010: Rollback is a deploy of a prior release, not a provider verb
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-02
-- **Deciders:** Towheed (pending review)
+- **Deciders:** Towheed
 
 ## Context
 Two accepted ADRs disagree. ADR-0004 says rollback is "apply revision N-1, not a special

@@ -1,8 +1,8 @@
 # ADR-0009: No NATS — Postgres plus agent gRPC streams
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-02
-- **Deciders:** Towheed (pending review)
+- **Deciders:** Towheed
 
 ## Context
 `01-architecture.md` lists NATS JetStream (pub/sub, KV, object store) for log streaming,

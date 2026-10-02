@@ -1,8 +1,8 @@
 # ADR-0007: Providers execute in the agent; workflows assign, agents converge
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-02
-- **Deciders:** Towheed (pending review)
+- **Deciders:** Towheed
 
 ## Context
 The docs never said where a provider runs. `provider-interface.md` has `Status` "called

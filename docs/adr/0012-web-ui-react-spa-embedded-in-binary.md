@@ -1,8 +1,8 @@
 # ADR-0012: Web UI is a React SPA (Vite), embedded in the Go binary
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-02
-- **Deciders:** Towheed (pending review)
+- **Deciders:** Towheed
 
 ## Context
 The dashboard arrives in v0.2. The choice was never recorded. Constraints that decide it:

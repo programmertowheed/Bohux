@@ -1,8 +1,8 @@
 # ADR-0008: Secret values on the node — sealed cache, separate secret files
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-02
-- **Deciders:** Towheed (pending review)
+- **Deciders:** Towheed
 
 ## Context
 Three accepted rules collide:
