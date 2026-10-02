@@ -13,6 +13,7 @@ A self-hostable deployment platform: a reconciliation kernel plus pluggable prov
 | Know why a decision was made | `docs/adr/` |
 | Know what is in scope now | `docs/plan/02-roadmap.md` |
 | Add a deployment target | `docs/specs/provider-interface.md` |
+| See the API plan | `docs/specs/api-contract.md` |
 | Work in this repo with Claude Code | `CLAUDE.md` |
 
 ## Status
