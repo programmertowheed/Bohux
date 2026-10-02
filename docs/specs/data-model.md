@@ -5,7 +5,7 @@ Postgres only. Immutable revisions, not in-place updates — see ADR-0004.
 ## Hierarchy
 
 ```
-Tenant ─▶ Project ─▶ Environment ─▶ Service ─▶ Release ─▶ Deployment
+Tenant ─▶ Project ─▶ Environment ─▶ App ─▶ Release ─▶ Deployment
                                    └─ Resource (db, cache, bucket, queue)
 ```
 
@@ -16,7 +16,7 @@ Tenant ─▶ Project ─▶ Environment ─▶ Service ─▶ Release ─▶ De
 | `tenants` | Root of every scope. No row anywhere without a tenant_id. |
 | `projects` | Unit of grouping and RBAC assignment. |
 | `environments` | dev/staging/prod/preview-*. Holds provider binding and config. |
-| `services` | A deployable unit. Points at a source (repo, image, static dir). |
+| `apps` | A deployable unit (named App, not Service — ADR-0014). Points at a source (repo, image, static dir). |
 | `resources` | Attached dependencies: databases, caches, buckets, queues. |
 | `releases` | **Immutable.** artifact digest + config revision + provenance ref. |
 | `deployments` | One attempt to reconcile a release onto an environment. |

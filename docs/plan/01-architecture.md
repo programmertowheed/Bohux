@@ -92,7 +92,7 @@ path.
 ## Resource hierarchy
 
 ```
-Tenant ─▶ Project ─▶ Environment ─▶ Service ─▶ Release ─▶ Deployment
+Tenant ─▶ Project ─▶ Environment ─▶ App ─▶ Release ─▶ Deployment
                                    └─ Resource (db, cache, bucket, queue)
 ```
 

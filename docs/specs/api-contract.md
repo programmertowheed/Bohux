@@ -1,6 +1,6 @@
 # API contract plan
 
-**Status:** draft — plan only. `proto/` is written from this once the open questions at
+**Status:** draft — plan only. `proto/` is written from this once the two open questions at
 the bottom are answered. Governs ADR-0006 (proto is truth), ADR-0007 (agent protocol),
 ADR-0008 (secrets), ADR-0010 (rollback), ADR-0011 (v0.1 scope).
 
@@ -32,13 +32,13 @@ Kept separate so agent changes never force a public API version bump, and vice v
    text never contains secret values (rule 3).
 8. **Secrets** appear only as `SecretRef { key, handle }`. The one exception is
    `SetSecretRequest.value`, marked sensitive and redacted by an interceptor before any
-   logging or tracing (see open question 2).
+   logging or tracing (ADR-0014).
 9. Field ordering and numbering: never reuse a field number; `reserved` on removal.
 
 ## Resources
 
 ```
-Tenant ─▶ Project ─▶ Environment ─▶ Service ─▶ Release ─▶ Deployment
+Tenant ─▶ Project ─▶ Environment ─▶ App ─▶ Release ─▶ Deployment
                 │                 └─ (Resource: db/cache — v0.2, not in v0.1 proto)
                 └─ RoleBinding (principal → viewer | deployer | owner)
 Node (tenant-scoped; bound to Environments via provider binding)
@@ -51,8 +51,8 @@ ApiToken, AuditEvent, Revision (read-only views)
 | Project | slug, display_name | CRUD |
 | RoleBinding | project_id, principal_id, role | Create/delete |
 | Environment | project_id, slug, `ProviderBinding { provider, node_id \| target_ref }`, config | CRUD |
-| Service | environment_id, slug, Source, Runtime, `repeated SecretRef` | CRUD; each update = revision |
-| Release | service_id, artifact_digest, config_revision_id, source_ref, provenance_ref, sbom_ref | **Immutable.** No update or delete RPC; retention GC (ADR-0010) |
+| App | environment_id, slug, Source, Runtime, `repeated SecretRef` | CRUD; each update = revision |
+| Release | app_id, artifact_digest, config_revision_id, source_ref, provenance_ref, sbom_ref | **Immutable.** No update or delete RPC; retention GC (ADR-0010) |
 | Deployment | release_id, environment_id, strategy, state, workflow_id, `rollback_of` | Created only; state is output-only |
 | Node | slug, agent_version, protocol_version, last_seen, provider descriptors, state | Registered by agent; revoke via API |
 | ApiToken | name, role scope, expires_at, last_used_at | Create (secret shown once) / revoke |
@@ -70,7 +70,7 @@ Marked **0.1** = in v0.1 per ADR-0011; **later** = reserved shape, not written y
 | TenantService | GetTenant | 0.1 (CreateTenant is a bootstrap CLI step, not an RPC) |
 | ProjectService | Create/Get/List/Update/DeleteProject, Set/Delete/ListRoleBindings | 0.1 |
 | EnvironmentService | Create/Get/List/Update/DeleteEnvironment | 0.1 |
-| ServiceService* | Create/Get/List/Update/DeleteService, ScaleService | 0.1 |
+| AppService | Create/Get/List/Update/DeleteApp, ScaleApp | 0.1 |
 | ReleaseService | CreateRelease (from Git ref → build, or from image digest), Get/ListReleases | 0.1 |
 | DeploymentService | CreateDeployment, Get/ListDeployments, WatchDeployment (server stream), Rollback, CancelDeployment | 0.1 |
 | WorkloadService | StreamLogs (server stream), Exec (bidi) | 0.1 |
@@ -88,7 +88,7 @@ Notes:
 - **Rollback** = `CreateDeployment` of an older Release with `rollback_of` set.
   `DeploymentService.Rollback` is a convenience that picks the last healthy Release
   (ADR-0010). There is no other rollback path.
-- **ScaleService** writes a new Service revision and a new assignment; no new Release.
+- **ScaleApp** writes a new App revision and a new assignment; no new Release.
 - **Exec is bidirectional streaming**, which ConnectRPC cannot carry from browsers. The
   CLI gets Exec in v0.1; the UI does not. That is allowed — rule 8 forbids the UI having
   *more* than the CLI, not less.
@@ -130,25 +130,26 @@ timeout → compensation writes gen N+2 with the previous Release.
 
 ```
 proto/kiln/v1/       common.proto  identity.proto  tenancy.proto  project.proto
-                     environment.proto  service.proto  release.proto  deployment.proto
+                     environment.proto  app.proto  release.proto  deployment.proto
                      workload.proto  node.proto  secret.proto  audit.proto
 proto/kiln/agent/v1/ agent.proto
 ```
 
-## Open questions (answer before `proto/` is written)
+## Decided (ADR-0014)
 
-1. **Rename the `Service` resource to `App`?** "Service" collides with gRPC `service`,
-   giving `ServiceService` and confusing docs. Renaming later is a breaking change.
-   Recommendation: rename to `App`.
-2. **Can secret values pass through the Kiln API?** Option A: `SetSecret` accepts the
-   value and writes it to OpenBao (easy UX, value transits Kiln memory, redacted).
-   Option B: users write to OpenBao themselves; Kiln only stores the path. Recommendation:
-   A, with the interceptor and a conformance test that the value never reaches logs.
-3. **Use `google.api.field_behavior` annotations** (REQUIRED, OUTPUT_ONLY, IMMUTABLE)
-   via a buf dependency, or plain comments? Recommendation: annotations — linters and
-   generated clients can enforce them.
-4. **Final project name.** The package name `kiln.v1` goes into the wire format and
-   every generated client. Renaming after the proto ships is breaking. Pick the real
-   name before `proto/` is written.
-5. **Go module path.** Replaces `github.com/ORG/kiln` in `go_package`. Needs the GitHub
-   org or user that will own the repo.
+1. **The deployable resource is `App`, not `Service`.** RPC service is `AppService`;
+   CLI is `kiln app …`; table is `apps`.
+2. **Secret values may pass through the API.** `SecretService.SetSecret` accepts the
+   value, writes it to OpenBao, and stores only the handle. The value field is redacted
+   by an interceptor before any log, trace, or error; a test asserts it never appears.
+3. **Field rules use `google.api.field_behavior` annotations** (`REQUIRED`,
+   `OUTPUT_ONLY`, `IMMUTABLE`), pulled in as a `buf` dependency.
+
+## Still open (block writing `proto/`)
+
+4. **Final project name.** The package name (`kiln.v1` today) goes into the wire format
+   and every generated client; renaming after `proto/` ships is breaking. Deferred by
+   the owner on 2026-10-02.
+5. **Go module path** (`github.com/<owner>/<name>`). Depends on 4.
+
+Everything else in this plan can be reviewed now; `proto/` is written only after 4 and 5.

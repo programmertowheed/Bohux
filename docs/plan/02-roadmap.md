@@ -8,7 +8,7 @@ not the missing features.
 **Goal: one service, one VPS, deployed and rolled back from a CLI — obeying every hard
 rule.** Scope is fixed by ADR-0011.
 
-- [ ] `proto/` contract for Tenant/Project/Environment/Service/Release/Deployment, plus
+- [ ] `proto/` contract for Tenant/Project/Environment/App/Release/Deployment, plus
       the agent protocol (ADR-0007); `tenant_id` on every resource
 - [ ] Postgres schema: revisions, audit events in the same transaction, row-level security
 - [ ] Control plane API over ConnectRPC
