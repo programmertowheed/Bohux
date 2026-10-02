@@ -55,7 +55,7 @@ rule.** Scope is fixed by ADR-0011.
 - [ ] Break-glass prod access with session recording
 - [ ] Self-upgrade, node drain/cordon, cert rotation
 - [ ] Cost attribution per service
-- [ ] WASM plugin runtime opened to third parties
+- [ ] gRPC provider plugin protocol opened to third parties (ADR-0016)
 
 ## Deliberately deferred
 Multi-region traffic steering, FaaS providers, continuous profiling, compliance evidence

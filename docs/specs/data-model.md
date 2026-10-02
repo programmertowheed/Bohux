@@ -33,7 +33,7 @@ Tenant ─▶ Project ─▶ Environment ─▶ App ─▶ Release ─▶ Deploy
   build once, deploy everywhere.
 - A state change without a `revisions` row is a bug.
 - `audit_events` commit with the change. If the change committed, the audit record exists.
-- Current state is a view over the latest revision per resource, not a separate truth.
+- Current state is a head table pointing at the latest revision, updated in the same transaction with a CAS on the parent revision (ADR-0017). Not a separate truth.
 
 ## Deferred
 

@@ -36,7 +36,7 @@ Connect-Query generated from `proto/` (ADR-0013).
 ### Desired state: Postgres
 Every mutation creates an immutable revision row: actor, timestamp, diff, parent revision.
 Audit log, rollback, and change history fall out of the data model rather than being
-features added later. See `docs/specs/data-model.md` and ADR-0004.
+features added later. See `docs/specs/data-model.md` and ADR-0004 and ADR-0017.
 
 ### Orchestration: Temporal
 A deploy is a long-running saga: build, scan, sign, push, provision dependencies, run
@@ -61,7 +61,7 @@ never mean apps cannot self-heal. See ADR-0003.
 ### Providers
 The extension boundary. The same app spec targets single-host Docker, Swarm, Nomad,
 Kubernetes, ECS/Fargate, Lambda/Cloud Run, systemd on bare metal, or static-to-CDN. A
-provider implements `Describe` plus seven verbs (rollback is a deploy, ADR-0010). See `docs/specs/provider-interface.md` and ADR-0005.
+provider implements `Describe` plus seven verbs (rollback is a deploy, ADR-0010). See `docs/specs/provider-interface.md` and ADR-0005; third-party providers are gRPC plugins (ADR-0016).
 
 Providers run inside the agent, never in the control plane. Deploy workflows write an
 assignment and wait for the agent to report convergence (ADR-0007).

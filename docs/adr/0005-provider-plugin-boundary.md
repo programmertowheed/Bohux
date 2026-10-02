@@ -1,6 +1,6 @@
 # ADR-0005: Provider boundary with a fixed verb set
 
-- **Status:** accepted; verb list amended by ADR-0010 (no Rollback verb)
+- **Status:** accepted; verb list amended by ADR-0010 (no Rollback verb); plugin mechanism superseded by ADR-0016 (gRPC plugins, WASM deferred)
 - **Date:** 2026-10-02
 
 ## Context

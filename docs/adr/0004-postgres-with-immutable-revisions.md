@@ -1,6 +1,6 @@
 # ADR-0004: Postgres as the only datastore, with immutable revisions
 
-- **Status:** accepted
+- **Status:** accepted; "materialised view" clarified by ADR-0017 (head table)
 - **Date:** 2026-10-02
 
 ## Context
