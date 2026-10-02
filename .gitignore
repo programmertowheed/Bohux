@@ -1,0 +1,13 @@
+/bin/
+/dist/
+/gen/
+*.test
+*.out
+.env
+.env.*
+!.env.example
+/web/node_modules/
+/web/dist/
+.DS_Store
+/data/
+*.local.yaml
