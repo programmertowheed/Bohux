@@ -79,10 +79,10 @@ CLI and API before UI.
 - [ ] Remote MCP endpoint with OAuth (ADR-0018 "revisit when")
 - [ ] Deploy/ownership hand-off links for agencies (Vercel "claim deployments" analogue)
 
-**Explicitly not pursued (non-goals or out of category)**
+**Covered by integration, not built (non-goals or out of category)**
 CDN, image optimisation, ISR, edge middleware, WAF/bot management, AI gateway, code
-sandboxes, web analytics, built-in CI, metrics/log storage, whitelabeling. We integrate
-with tools that do these.
+sandboxes, web analytics, built-in CI, metrics/log storage, whitelabeling. Users get these
+through documented integrations (e.g. Cloudflare in front of Caddy, Grafana via OTLP).
 
 ## Deliberately deferred
 Multi-region traffic steering, FaaS providers, continuous profiling, compliance evidence
