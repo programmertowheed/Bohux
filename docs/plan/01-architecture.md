@@ -18,7 +18,7 @@
                     │  agent ──▶ container runtime             │
                     │  agent ──▶ Envoy / Caddy (ingress)       │
                     │  agent ──▶ OTEL collector                │
-                    │  BuildKit on dedicated builder nodes     │
+                    │  BuildKit (builder nodes when >1 node)   │
                     └──────────────────────────────────────────┘
 ```
 
@@ -64,8 +64,9 @@ assignment and wait for the agent to report convergence (ADR-0007).
 
 ### Build layer: BuildKit
 Content-hash-keyed remote cache. Auto-detection via Cloud Native Buildpacks and Nixpacks,
-Dockerfile passthrough, Nix/Bazel escape hatch for monorepos. Builds run on dedicated
-builder nodes, never on a node serving traffic. Every artifact gets an SBOM, SLSA
+Dockerfile passthrough, Nix/Bazel escape hatch for monorepos. With more than one node,
+builds run on dedicated builder nodes, never on a node serving traffic; a single-node
+install builds locally under CPU/memory limits (ADR-0011). Every artifact gets an SBOM, SLSA
 provenance, and a cosign signature at build time — retrofitting supply chain security is
 miserable.
 

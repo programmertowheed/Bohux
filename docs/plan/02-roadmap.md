@@ -4,32 +4,42 @@ Phased so that the plugin boundary and the workflow model land early. Those two 
 let v2 through v8 happen without a rewrite, and the rewrite is what kills these projects —
 not the missing features.
 
-## v0.1 — Walking skeleton (weeks 1–6)
-**Goal: one service, one VPS, deployed and rolled back from a CLI.**
+## v0.1 — Walking skeleton (weeks 1–10)
+**Goal: one service, one VPS, deployed and rolled back from a CLI — obeying every hard
+rule.** Scope is fixed by ADR-0011.
 
-- [ ] `proto/` contract for Project/Environment/Service/Release/Deployment
-- [ ] Postgres schema with revision table and audit events
+- [ ] `proto/` contract for Tenant/Project/Environment/Service/Release/Deployment, plus
+      the agent protocol (ADR-0007); `tenant_id` on every resource
+- [ ] Postgres schema: revisions, audit events in the same transaction, row-level security
 - [ ] Control plane API over ConnectRPC
-- [ ] Agent registration, mTLS, outbound dial, heartbeat
-- [ ] Docker provider: `plan`, `apply`, `status`, `logs`, `destroy`
-- [ ] Temporal deploy workflow: build → push → apply → health gate → finalize
-- [ ] BuildKit integration, Dockerfile only
-- [ ] `kiln deploy`, `kiln logs`, `kiln rollback`
-- [ ] Rollback tested in CI before forward path merges (see CLAUDE.md rule 5)
+- [ ] API tokens, fixed roles (`viewer`/`deployer`/`owner`), permission check on every
+      RPC, audit event on every mutation
+- [ ] Agent registration, mTLS, outbound stream, sealed secret cache (ADR-0008), offline
+      reconcile loop
+- [ ] Docker provider: `Describe` + all seven verbs, conformance suite green
+- [ ] Temporal deploy workflow: build → push → assign → wait healthy → finalize, with
+      compensation; rollback is the same workflow (ADR-0010)
+- [ ] BuildKit, Dockerfile only; builds may run on the serving node in single-node mode,
+      resource-limited
+- [ ] OpenBao as the one secrets backend, shipped in the install bundle
+- [ ] `kiln deploy`, `kiln logs`, `kiln rollback`, `kiln exec`, `kiln scale`
+- [ ] Compensation/rollback tested in CI before forward path merges (CLAUDE.md rule 5)
+- [ ] Footprint measured on a 2GB VPS and published; <1GB left for workloads reopens
+      ADR-0002
+- [ ] `.claude/skills/new-workflow/` and `deploy/dev/compose.yaml` exist
 
-**Exit criterion:** Kiln deploys Kiln.
+**Exit criterion:** Kiln deploys Kiln, and rolls itself back.
 
-## v0.2 — Usable by someone who is not us (weeks 7–14)
-- [ ] Remaining provider verbs: `exec`, `scale`, `rollback`
+## v0.2 — Usable by someone who is not us (weeks 11–18)
 - [ ] Buildpacks + Nixpacks auto-detection
-- [ ] Secrets: embedded OpenBao, envelope encryption, per-env keys
+- [ ] Secrets: envelope encryption, per-env keys
 - [ ] Managed Postgres/Redis as Resources, with backups
 - [ ] Ingress: Caddy, automatic TLS, DNS
 - [ ] Web UI (read-only first, then mutations)
-- [ ] RBAC and audit log surfaced in API and UI
+- [ ] Audit log and RBAC surfaced in the UI
 - [ ] Git push and webhook triggers
 
-## v0.3 — The reason to choose this (weeks 15–24)
+## v0.3 — The reason to choose this (weeks 19–28)
 - [ ] Preview environments per PR, with seeded data
 - [ ] Blue/green and canary via Envoy xDS
 - [ ] OTEL correlation, deploy markers, SLO burn-rate health gate
