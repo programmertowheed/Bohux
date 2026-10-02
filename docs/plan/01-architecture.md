@@ -29,6 +29,9 @@ gRPC core served over ConnectRPC so browsers speak it directly without a transla
 proxy, with a generated REST/OpenAPI gateway alongside. `proto/` is the source of truth;
 the CLI, UI, and SDKs are all generated clients. See ADR-0006.
 
+The web UI is a React SPA built with Vite and embedded in the Go binary; no Node process
+runs in any deployment (ADR-0012).
+
 ### Desired state: Postgres
 Every mutation creates an immutable revision row: actor, timestamp, diff, parent revision.
 Audit log, rollback, and change history fall out of the data model rather than being
