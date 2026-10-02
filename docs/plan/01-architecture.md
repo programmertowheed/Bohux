@@ -57,7 +57,7 @@ never mean apps cannot self-heal. See ADR-0003.
 ### Providers
 The extension boundary. The same app spec targets single-host Docker, Swarm, Nomad,
 Kubernetes, ECS/Fargate, Lambda/Cloud Run, systemd on bare metal, or static-to-CDN. A
-provider implements eight verbs. See `docs/specs/provider-interface.md` and ADR-0005.
+provider implements `Describe` plus seven verbs (rollback is a deploy, ADR-0010). See `docs/specs/provider-interface.md` and ADR-0005.
 
 Providers run inside the agent, never in the control plane. Deploy workflows write an
 assignment and wait for the agent to report convergence (ADR-0007).

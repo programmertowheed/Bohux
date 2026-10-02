@@ -13,7 +13,7 @@ the conformance suite is green — not when it deploys something once by hand.
 1. **Check the interface has not drifted.** `internal/provider/provider.go` is
    authoritative; the spec doc may lag.
 2. **Scaffold** `providers/<name>/` with `provider.go`, `plan.go`, `apply.go`,
-   `status.go`, `logs.go`, `exec.go`, `scale.go`, `rollback.go`, `destroy.go`.
+   `status.go`, `logs.go`, `exec.go`, `scale.go`, `destroy.go`.
    One file per verb — keeps PRs reviewable.
 3. **Implement `Describe` first.** Declare capabilities honestly. A capability you
    declare is a promise the API will hold you to.
@@ -43,9 +43,9 @@ the conformance suite is green — not when it deploys something once by hand.
 
 ## Done means
 
-- [ ] All nine methods implemented
+- [ ] All eight methods implemented (`Describe` + seven verbs)
 - [ ] Conformance suite green against a real target
-- [ ] Rollback has a test (CLAUDE.md rule 5)
+- [ ] Re-applying the previous release converges and orphans nothing (CLAUDE.md rule 5, ADR-0010)
 - [ ] Artifacts written to disk and verified readable without Kiln
 - [ ] No secret appears in any artifact or log line
 - [ ] Docs page written

@@ -35,10 +35,6 @@ type Provider interface {
     // Scale adjusts replica count or resource allocation.
     Scale(ctx context.Context, req ScaleRequest) error
 
-    // Rollback returns to a previous Release. Held to the same standard as
-    // Apply — see CLAUDE.md rule 5.
-    Rollback(ctx context.Context, req RollbackRequest) error
-
     // Destroy removes everything Apply created. MUST be complete; orphaned
     // resources are a conformance failure.
     Destroy(ctx context.Context, ref ResourceRef) error
@@ -47,7 +43,7 @@ type Provider interface {
 
 ## Rules
 
-1. **All nine methods or no merge.** Partial providers are rejected (CLAUDE.md rule 4).
+1. **All eight methods (`Describe` + seven verbs) or no merge.** Partial providers are rejected (CLAUDE.md rule 4).
    A target that genuinely cannot do something returns `ErrUnsupported` and declares the
    gap in `Descriptor.Capabilities` so the API can reject the request up front — it does
    not silently no-op.
@@ -70,7 +66,8 @@ type Provider interface {
 - apply again, unchanged → no-op, no churn
 - apply a changed spec → converges
 - kill mid-apply, apply again → converges, no duplicates
-- rollback → previous release live
+- rollback = apply the previous release again → previous release live, nothing orphaned.
+  There is no `Rollback` verb; going back is a deploy of a prior release (ADR-0010)
 - destroy → nothing orphaned (checked by enumerating the target)
 - logs and exec stream and terminate cleanly
 - secrets never appear in any emitted artifact or log line; on disk they appear only in
