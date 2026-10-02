@@ -13,7 +13,7 @@ names and most domains taken.
 
 ## Decision
 The product is **Bohux** (from Bangla বহু, *bohu*, "many" — deploy many kinds of app,
-anywhere), published by **Bohumix** (bohumix.co).
+anywhere), published by **Bohumix** (bohumix.com).
 
 - GitHub org `bohumix`, repo `github.com/bohumix/bohux`; Go module the same.
 - Proto packages `bohux.v1` and `bohux.agent.v1`.
