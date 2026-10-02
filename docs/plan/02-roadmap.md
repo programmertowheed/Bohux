@@ -58,7 +58,37 @@ rule.** Scope is fixed by ADR-0011.
 - [ ] Cost attribution per service
 - [ ] gRPC provider plugin protocol opened to third parties (ADR-0016)
 
+## v1.x — Parity (ordered by user demand, not committed dates)
+Basics that Coolify, Dokploy and Vercel users expect, checked against their docs on
+2026-10-02. Each still needs the hard rules: tenant scope, permission check, audit event,
+CLI and API before UI. Order within a tier follows user requests.
+
+**Tier 1 — expected by every self-hosted PaaS user**
+- [ ] Notifications on deploy/failure/rollback (Slack, Discord, email, webhook)
+- [ ] Scheduled jobs (cron) per app, run as Temporal schedules (rule 6)
+- [ ] Docker Compose apps (multi-container) as a first-class App source
+- [ ] More managed resources: MySQL/MariaDB, MongoDB, ClickHouse, with backups to S3
+- [ ] Volume management and volume backups to S3-compatible storage
+- [ ] Web terminal into a running container (UI over the existing `Exec` verb)
+- [ ] Basic server and app resource view (CPU/memory/disk) from node agents — current
+      values only; history goes to the user's OTLP backend (non-goal: metrics storage)
+- [ ] Private registry credentials, SSH key and Git source management in the UI
+- [ ] Monorepo watch paths: only deploy when files under given paths change
+- [ ] Team invites and member management in the UI
+
+**Tier 2 — adoption drivers**
+- [ ] One-click app templates, implemented as Compose import (no bespoke template format)
+- [ ] Preview deployment protection (password / SSO in front of preview URLs)
+- [ ] Custom roles beyond `viewer`/`deployer`/`owner`
+- [ ] Remote MCP endpoint with OAuth (ADR-0018 "revisit when")
+- [ ] Deploy/ownership hand-off links for agencies (Vercel "claim deployments" analogue)
+
+**Explicitly not pursued (non-goals or out of category)**
+CDN, image optimisation, ISR, edge middleware, WAF/bot management, AI gateway, code
+sandboxes, web analytics, built-in CI, metrics/log storage, whitelabeling. We integrate
+with tools that do these.
+
 ## Deliberately deferred
-One-click app templates (Compose import), more managed resource types, multi-region traffic steering, FaaS providers, continuous profiling, compliance evidence
+Multi-region traffic steering, FaaS providers, continuous profiling, compliance evidence
 export, marketplace. All are v1.x+. Writing them down here is how we stop arguing about
 them in v0.1.
