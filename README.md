@@ -2,6 +2,7 @@
 
 A self-hostable deployment platform: a reconciliation kernel plus pluggable providers.
 
+Website: [bohux.com](https://bohux.com) · Code: [github.com/bohumix/bohux](https://github.com/bohumix/bohux) · By [Bohumix](https://bohumix.com)
 
 ## Where to start
 

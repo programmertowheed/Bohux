@@ -3,7 +3,7 @@
 Bohux is a self-hostable deployment platform. A reconciliation kernel plus pluggable
 providers. Read `docs/plan/00-vision.md` before your first task in this repo.
 
-**Product: Bohux** by Bohumix (bohumix.com). Repo: `github.com/bohumix/bohux`. ADR-0015.
+**Product: Bohux** by Bohumix (bohumix.com). Website: bohux.com. Repo: `github.com/bohumix/bohux`. ADR-0015.
 
 ## Orientation (read in this order)
 
