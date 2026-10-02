@@ -38,6 +38,7 @@ rule.** Scope is fixed by ADR-0011.
 - [ ] Web UI (read-only first, then mutations)
 - [ ] Audit log and RBAC surfaced in the UI
 - [ ] Git push and webhook triggers
+- [ ] MCP server: `bohux mcp` over stdio, tools generated from `proto/` (ADR-0018)
 
 ## v0.3 — The reason to choose this (weeks 19–28)
 - [ ] Preview environments per PR, with seeded data
