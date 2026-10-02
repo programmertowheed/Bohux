@@ -54,7 +54,9 @@ type Provider interface {
 2. **Apply writes readable artifacts to disk** (Compose file, manifest, unit file) before
    acting on them. A user who deletes Kiln keeps a working system (CLAUDE.md rule 2).
 3. **Never log secret values.** Specs arrive with secrets as handles; resolve them as late
-   as possible and never into an error string.
+   as possible and never into an error string. Values are written only to the target's
+   declared secret mechanism (Docker: a 0600 `secrets.env` via `env_file`; K8s: `Secret`;
+   systemd: `LoadCredential=`), never into the readable artifact (ADR-0008).
 4. **No direct database access.** Providers receive a resolved Spec and return results.
    They do not know Postgres exists.
 5. **Target-specific features go in `Spec.Raw`,** a passthrough blob the provider
@@ -71,7 +73,9 @@ type Provider interface {
 - rollback → previous release live
 - destroy → nothing orphaned (checked by enumerating the target)
 - logs and exec stream and terminate cleanly
-- secrets never appear in any emitted artifact or log line
+- secrets never appear in any emitted artifact or log line; on disk they appear only in
+  the declared secret file/object and the agent's sealed cache (ADR-0008)
+- secret rotation re-renders the secret file and restarts affected workloads
 
 ```
 go test ./providers/_conformance -provider=docker -target=$TEST_HOST

@@ -1,6 +1,6 @@
 # ADR-0003: Pull-based agent, autonomous reconciliation
 
-- **Status:** accepted
+- **Status:** accepted; amended by ADR-0008 (secret values in the node cache)
 - **Date:** 2026-10-02
 
 ## Context
