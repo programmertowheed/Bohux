@@ -24,6 +24,31 @@ The platform owns the lifecycle *concepts* (build, promote, deploy, observe, rol
 audit) and owns almost none of the *implementations* (it does not store metrics, does not
 implement a proxy, does not invent a secrets backend).
 
+## Positioning
+
+**"The self-hosted platform you can trust with production."** Not "a Coolify
+alternative". We do not win on feature count; we win on what the others cannot do:
+
+- Apps keep running when the control plane is down.
+- Rollback is tested before the forward path, and fires automatically on a failed
+  health gate.
+- Every change is an immutable, audited revision.
+- Backups are proven by scheduled restore drills.
+- Deleting Bohux leaves plain, running Compose/K8s artifacts — no lock-in.
+
+Reliability is invisible in a feature list, so it must be demonstrated: the launch demo
+kills the control plane while the app stays up, and ships a bad deploy that rolls itself
+back.
+
+## Feature parity — later, not never
+
+By v0.2 Bohux covers the basics users actually rely on in Coolify/Dokploy (git-push
+deploys, Dockerfile/Nixpacks builds, automatic TLS and domains, Postgres/Redis with
+backups, a web UI, rollback). The long tail — one-click app templates (likely via Compose
+import), more managed resource types, additional providers — is a post-v1 goal, earned in
+order of user demand. Parity never overrides the non-goals below: we integrate with
+metrics stores, CI systems and CDNs; we do not become them.
+
 ## Non-goals — read these twice
 
 These are the things that kill projects in this space.
