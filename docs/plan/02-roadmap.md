@@ -59,6 +59,6 @@ rule.** Scope is fixed by ADR-0011.
 - [ ] gRPC provider plugin protocol opened to third parties (ADR-0016)
 
 ## Deliberately deferred
-Multi-region traffic steering, FaaS providers, continuous profiling, compliance evidence
+One-click app templates (Compose import), more managed resource types, multi-region traffic steering, FaaS providers, continuous profiling, compliance evidence
 export, marketplace. All are v1.x+. Writing them down here is how we stop arguing about
 them in v0.1.
