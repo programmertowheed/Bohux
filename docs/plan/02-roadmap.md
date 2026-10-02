@@ -39,6 +39,12 @@ rule.** Scope is fixed by ADR-0011.
 - [ ] Audit log and RBAC surfaced in the UI
 - [ ] Git push and webhook triggers
 - [ ] MCP server: `bohux mcp` over stdio, tools generated from `proto/` (ADR-0018)
+- [ ] Notifications on deploy/failure/rollback (Slack, Discord, email, webhook)
+- [ ] Team invites and member management (CLI + UI)
+- [ ] Web terminal into a running container (UI over the existing `Exec` verb)
+- [ ] Private registry credentials, SSH key and Git source management
+- [ ] Basic server and app resource view (CPU/memory/disk) from node agents — current
+      values only; history goes to the user's OTLP backend (non-goal: metrics storage)
 
 ## v0.3 — The reason to choose this (weeks 19–28)
 - [ ] Preview environments per PR, with seeded data
@@ -48,6 +54,10 @@ rule.** Scope is fixed by ADR-0011.
 - [ ] Schema migrations as a gated workflow step
 - [ ] **Scheduled automated restore drills** — a backup you have not restored is a feeling
 - [ ] Second provider (Swarm) — proves the boundary is real
+- [ ] Scheduled jobs (cron) per app, run as Temporal schedules (rule 6) — needs workflow design
+- [ ] Docker Compose apps (multi-container) as an App source — needs an ADR (changes App)
+- [ ] Volume management and volume backups to S3-compatible storage
+- [ ] Monorepo watch paths: only deploy when files under given paths change
 
 ## v1.0 — Trustworthy
 - [ ] Kubernetes provider
@@ -57,27 +67,13 @@ rule.** Scope is fixed by ADR-0011.
 - [ ] Self-upgrade, node drain/cordon, cert rotation
 - [ ] Cost attribution per service
 - [ ] gRPC provider plugin protocol opened to third parties (ADR-0016)
+- [ ] More managed resources: MySQL/MariaDB, MongoDB, ClickHouse, with backups to S3
+- [ ] One-click app templates, implemented as Compose import (no bespoke template format)
 
 ## v1.x — Parity (ordered by user demand, not committed dates)
-Basics that Coolify, Dokploy and Vercel users expect, checked against their docs on
-2026-10-02. Each still needs the hard rules: tenant scope, permission check, audit event,
-CLI and API before UI. Order within a tier follows user requests.
-
-**Tier 1 — expected by every self-hosted PaaS user**
-- [ ] Notifications on deploy/failure/rollback (Slack, Discord, email, webhook)
-- [ ] Scheduled jobs (cron) per app, run as Temporal schedules (rule 6)
-- [ ] Docker Compose apps (multi-container) as a first-class App source
-- [ ] More managed resources: MySQL/MariaDB, MongoDB, ClickHouse, with backups to S3
-- [ ] Volume management and volume backups to S3-compatible storage
-- [ ] Web terminal into a running container (UI over the existing `Exec` verb)
-- [ ] Basic server and app resource view (CPU/memory/disk) from node agents — current
-      values only; history goes to the user's OTLP backend (non-goal: metrics storage)
-- [ ] Private registry credentials, SSH key and Git source management in the UI
-- [ ] Monorepo watch paths: only deploy when files under given paths change
-- [ ] Team invites and member management in the UI
-
-**Tier 2 — adoption drivers**
-- [ ] One-click app templates, implemented as Compose import (no bespoke template format)
+Competitor features (Coolify, Dokploy, Vercel docs, checked 2026-10-02) not needed to win
+first users. Each still needs the hard rules: tenant scope, permission check, audit event,
+CLI and API before UI.
 - [ ] Preview deployment protection (password / SSO in front of preview URLs)
 - [ ] Custom roles beyond `viewer`/`deployer`/`owner`
 - [ ] Remote MCP endpoint with OAuth (ADR-0018 "revisit when")
