@@ -59,6 +59,9 @@ The extension boundary. The same app spec targets single-host Docker, Swarm, Nom
 Kubernetes, ECS/Fargate, Lambda/Cloud Run, systemd on bare metal, or static-to-CDN. A
 provider implements eight verbs. See `docs/specs/provider-interface.md` and ADR-0005.
 
+Providers run inside the agent, never in the control plane. Deploy workflows write an
+assignment and wait for the agent to report convergence (ADR-0007).
+
 ### Build layer: BuildKit
 Content-hash-keyed remote cache. Auto-detection via Cloud Native Buildpacks and Nixpacks,
 Dockerfile passthrough, Nix/Bazel escape hatch for monorepos. Builds run on dedicated

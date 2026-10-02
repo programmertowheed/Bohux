@@ -2,6 +2,9 @@
 
 The extension boundary. Small on purpose — see ADR-0005.
 
+Providers execute only inside an agent, never in the control plane (ADR-0007). The agent
+calls `Status` and `Apply` in one reconcile loop against its cached assignment.
+
 ## Contract
 
 ```go
