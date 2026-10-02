@@ -1,9 +1,9 @@
-# Kiln — working rules
+# Bohux — working rules
 
-Kiln is a self-hostable deployment platform. A reconciliation kernel plus pluggable
+Bohux is a self-hostable deployment platform. A reconciliation kernel plus pluggable
 providers. Read `docs/plan/00-vision.md` before your first task in this repo.
 
-**Codename `kiln` is a placeholder.** Rename before v0.1 ships.
+**Product: Bohux** by Bohumix (bohumix.co). Repo: `github.com/bohumix/bohux`. ADR-0015.
 
 ## Orientation (read in this order)
 
@@ -21,7 +21,7 @@ These are not style preferences. Violating one is a bug, not a disagreement.
    known good state when it cannot reach the control plane. Never add a code path where
    a running workload depends on the control plane being up.
 2. **No lock-in by construction.** Every provider writes real, readable artifacts to disk
-   (Compose files, K8s manifests, systemd units). A user who deletes Kiln still has a
+   (Compose files, K8s manifests, systemd units). A user who deletes Bohux still has a
    running, comprehensible system.
 3. **Secrets never land in Postgres, logs, traces, or error strings.** Secret values are
    referenced by handle. If you are about to log a struct that might contain one, use the

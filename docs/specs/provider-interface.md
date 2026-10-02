@@ -48,7 +48,7 @@ type Provider interface {
    gap in `Descriptor.Capabilities` so the API can reject the request up front — it does
    not silently no-op.
 2. **Apply writes readable artifacts to disk** (Compose file, manifest, unit file) before
-   acting on them. A user who deletes Kiln keeps a working system (CLAUDE.md rule 2).
+   acting on them. A user who deletes Bohux keeps a working system (CLAUDE.md rule 2).
 3. **Never log secret values.** Specs arrive with secrets as handles; resolve them as late
    as possible and never into an error string. Values are written only to the target's
    declared secret mechanism (Docker: a 0600 `secrets.env` via `env_file`; K8s: `Secret`;

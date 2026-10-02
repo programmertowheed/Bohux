@@ -1,6 +1,6 @@
 ---
 name: write-runbook
-description: Use when adding or changing an operational procedure for Kiln — incident response, upgrades, restores, node drain, cert rotation, break-glass access. Also use when a failure mode in docs/plan/01-architecture.md gains a handling procedure. Produces a runbook in docs/runbooks/.
+description: Use when adding or changing an operational procedure for Bohux — incident response, upgrades, restores, node drain, cert rotation, break-glass access. Also use when a failure mode in docs/plan/01-architecture.md gains a handling procedure. Produces a runbook in docs/runbooks/.
 ---
 
 # Writing a runbook

@@ -12,7 +12,7 @@ multi-region, or compliance evidence.
 So teams migrate twice: off the managed platform onto a PaaS, then off the PaaS onto
 Kubernetes. Both migrations are expensive and neither teaches them anything.
 
-## What Kiln is
+## What Bohux is
 
 A reconciliation kernel with a provider boundary.
 
@@ -31,7 +31,7 @@ These are the things that kill projects in this space.
 - **Not a Kubernetes replacement.** K8s is a provider target, not a competitor.
 - **Not a metrics/logs/traces storage backend.** Emit OTLP, integrate, move on.
 - **Not a secrets manager.** Interface to Vault/OpenBao/cloud KMS.
-- **Not a CI system.** Integrate with GitHub Actions, GitLab CI, Buildkite. Kiln's build
+- **Not a CI system.** Integrate with GitHub Actions, GitLab CI, Buildkite. Bohux's build
   layer exists to produce a deployable artifact, not to run your test matrix.
 - **Not a Git host, not an IdP, not an APM.**
 - **Not "any language, any framework, any cloud" in v1.** It is Docker on one VPS in v1.
@@ -46,7 +46,7 @@ questionnaire in their future and they know it.
 ## How we will know it worked
 
 - A new provider can be written by an outside contributor in a weekend.
-- A user can delete Kiln and still have a running, debuggable system.
+- A user can delete Bohux and still have a running, debuggable system.
 - "Who changed prod, when, and what did it look like before" is answerable from the data
   model, not from a log grep.
 - The platform deploys itself through its own pipeline. If it cannot, it is not ready.

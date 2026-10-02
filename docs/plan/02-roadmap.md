@@ -22,13 +22,13 @@ rule.** Scope is fixed by ADR-0011.
 - [ ] BuildKit, Dockerfile only; builds may run on the serving node in single-node mode,
       resource-limited
 - [ ] OpenBao as the one secrets backend, shipped in the install bundle
-- [ ] `kiln deploy`, `kiln logs`, `kiln rollback`, `kiln exec`, `kiln scale`
+- [ ] `bohux deploy`, `bohux logs`, `bohux rollback`, `bohux exec`, `bohux scale`
 - [ ] Compensation/rollback tested in CI before forward path merges (CLAUDE.md rule 5)
 - [ ] Footprint measured on a 2GB VPS and published; <1GB left for workloads reopens
       ADR-0002
 - [ ] `.claude/skills/new-workflow/` and `deploy/dev/compose.yaml` exist
 
-**Exit criterion:** Kiln deploys Kiln, and rolls itself back.
+**Exit criterion:** Bohux deploys Bohux, and rolls itself back.
 
 ## v0.2 — Usable by someone who is not us (weeks 11–18)
 - [ ] Buildpacks + Nixpacks auto-detection

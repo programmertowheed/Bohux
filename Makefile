@@ -22,7 +22,7 @@ conformance: ## Provider conformance — the gate for any new provider
 	go test ./providers/_conformance -provider=$(PROVIDER) -target=$(TARGET) -v
 
 build: ## Build the single binary
-	go build -o bin/kiln ./cmd/kiln
+	go build -o bin/bohux ./cmd/bohux
 
 run-dev: ## Local stack: postgres, temporal
 	docker compose -f deploy/dev/compose.yaml up -d

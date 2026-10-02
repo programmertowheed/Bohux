@@ -1,6 +1,6 @@
 ---
 name: new-provider
-description: Use when adding a new deployment target to Kiln (Swarm, Kubernetes, Nomad, ECS, systemd, static/CDN) or when modifying the provider interface itself. Covers the required verb set, the conformance suite, the artifact-on-disk rule, and registration.
+description: Use when adding a new deployment target to Bohux (Swarm, Kubernetes, Nomad, ECS, systemd, static/CDN) or when modifying the provider interface itself. Covers the required verb set, the conformance suite, the artifact-on-disk rule, and registration.
 ---
 
 # Adding a provider
@@ -20,7 +20,7 @@ the conformance suite is green — not when it deploys something once by hand.
 4. **Implement `Plan` before `Apply`.** Plan must not mutate. If you find yourself
    needing to create something to compute a diff, the diff is wrong.
 5. **Write the artifact to disk in `Apply` before acting on it** (CLAUDE.md rule 2). A
-   user who deletes Kiln keeps a working system. For Swarm that is a stack file, for K8s
+   user who deletes Bohux keeps a working system. For Swarm that is a stack file, for K8s
    a manifest set, for systemd a unit file.
 6. **Make `Apply` resumable.** Kill the process at every step and re-run. It must
    converge, not duplicate.
@@ -46,6 +46,6 @@ the conformance suite is green — not when it deploys something once by hand.
 - [ ] All eight methods implemented (`Describe` + seven verbs)
 - [ ] Conformance suite green against a real target
 - [ ] Re-applying the previous release converges and orphans nothing (CLAUDE.md rule 5, ADR-0010)
-- [ ] Artifacts written to disk and verified readable without Kiln
+- [ ] Artifacts written to disk and verified readable without Bohux
 - [ ] No secret appears in any artifact or log line
 - [ ] Docs page written

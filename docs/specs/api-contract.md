@@ -8,8 +8,8 @@ ADR-0008 (secrets), ADR-0010 (rollback), ADR-0011 (v0.1 scope).
 
 | Package | Who calls it | Compatibility |
 |---|---|---|
-| `kiln.v1` | CLI, web UI, SDKs, scripts | Public API. `buf breaking` at FILE level; breaking changes need `v2`. |
-| `kiln.agent.v1` | Agents only | Agent protocol. Control plane supports protocol N and N-1 (ADR-0003). |
+| `bohux.v1` | CLI, web UI, SDKs, scripts | Public API. `buf breaking` at FILE level; breaking changes need `v2`. |
+| `bohux.agent.v1` | Agents only | Agent protocol. Control plane supports protocol N and N-1 (ADR-0003). |
 
 Kept separate so agent changes never force a public API version bump, and vice versa.
 
@@ -22,7 +22,7 @@ Kept separate so agent changes never force a public API version bump, and vice v
    message has `tenant_id`, `actor`, `approver`, or `user` fields. Fixes the forgeable
    `ApproveGateRequest.approver` in the current draft (rule 10).
 3. **IDs** are server-generated UUIDv7 strings (time-ordered, index-friendly). Resources a
-   human types also have a `slug`, unique within the parent (`kiln deploy api -e prod`).
+   human types also have a `slug`, unique within the parent (`bohux deploy api -e prod`).
 4. **Every mutation** takes `idempotency_key` and, for updates/deletes,
    `expected_revision_id` (optimistic concurrency — a stale write fails with `ABORTED`).
 5. **Every mutation** writes a revision and an audit event in one transaction (ADR-0004);
@@ -60,7 +60,7 @@ ApiToken, AuditEvent, Revision (read-only views)
 `DeploymentState` gains `COMPENSATING` and `CANCELLED`. `AWAITING_APPROVAL` stays
 reserved but unused until approval gates ship (not v0.1).
 
-## Public services (`kiln.v1`)
+## Public services (`bohux.v1`)
 
 Marked **0.1** = in v0.1 per ADR-0011; **later** = reserved shape, not written yet.
 
@@ -93,7 +93,7 @@ Notes:
   CLI gets Exec in v0.1; the UI does not. That is allowed — rule 8 forbids the UI having
   *more* than the CLI, not less.
 
-## Agent protocol (`kiln.agent.v1`)
+## Agent protocol (`bohux.agent.v1`)
 
 ```
 AgentService.Register(RegisterRequest) returns (RegisterResponse)
@@ -129,27 +129,24 @@ timeout → compensation writes gen N+2 with the previous Release.
 ## Files
 
 ```
-proto/kiln/v1/       common.proto  identity.proto  tenancy.proto  project.proto
+proto/bohux/v1/       common.proto  identity.proto  tenancy.proto  project.proto
                      environment.proto  app.proto  release.proto  deployment.proto
                      workload.proto  node.proto  secret.proto  audit.proto
-proto/kiln/agent/v1/ agent.proto
+proto/bohux/agent/v1/ agent.proto
 ```
 
-## Decided (ADR-0014)
+## Decided (ADR-0014, ADR-0015)
 
 1. **The deployable resource is `App`, not `Service`.** RPC service is `AppService`;
-   CLI is `kiln app …`; table is `apps`.
+   CLI is `bohux app …`; table is `apps`.
 2. **Secret values may pass through the API.** `SecretService.SetSecret` accepts the
    value, writes it to OpenBao, and stores only the handle. The value field is redacted
    by an interceptor before any log, trace, or error; a test asserts it never appears.
 3. **Field rules use `google.api.field_behavior` annotations** (`REQUIRED`,
    `OUTPUT_ONLY`, `IMMUTABLE`), pulled in as a `buf` dependency.
 
-## Still open (block writing `proto/`)
+4. **Name: Bohux**, by Bohumix. Packages `bohux.v1` and `bohux.agent.v1` (ADR-0015).
+5. **Go module: `github.com/bohumix/bohux`** (ADR-0015).
 
-4. **Final project name.** The package name (`kiln.v1` today) goes into the wire format
-   and every generated client; renaming after `proto/` ships is breaking. Deferred by
-   the owner on 2026-10-02.
-5. **Go module path** (`github.com/<owner>/<name>`). Depends on 4.
-
-Everything else in this plan can be reviewed now; `proto/` is written only after 4 and 5.
+No open questions remain. `proto/` can be written from this plan when the owner ends
+the planning phase.

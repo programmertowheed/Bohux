@@ -1,10 +1,10 @@
 syntax = "proto3";
 
-// Source of truth for the Kiln API (ADR-0006). Change this first, regenerate,
+// Source of truth for the Bohux API (ADR-0006). Change this first, regenerate,
 // then implement. Never hand-edit generated code.
-package kiln.v1;
+package bohux.v1;
 
-option go_package = "github.com/ORG/kiln/gen/kiln/v1;kilnv1";
+option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
 
 import "google/protobuf/timestamp.proto";
 

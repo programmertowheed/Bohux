@@ -80,7 +80,7 @@ that runs the deploy. Caddy as the lightweight option for single-node installs t
 not want Envoy's footprint.
 
 ### Observability: OpenTelemetry, no storage of our own
-Everything emits OTLP to the user's backend. What Kiln owns is **correlation**: every
+Everything emits OTLP to the user's backend. What Bohux owns is **correlation**: every
 deploy emits a marker, and the health gate queries real SLO burn rate before promoting.
 Automatic rollback on SLO violation is the feature; the dashboard is not.
 

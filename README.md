@@ -1,8 +1,7 @@
-# Kiln
+# Bohux
 
 A self-hostable deployment platform: a reconciliation kernel plus pluggable providers.
 
-> **Codename is a placeholder.** Rename before v0.1.
 
 ## Where to start
 
@@ -22,7 +21,7 @@ Pre-v0.1. The documentation is ahead of the code on purpose — the decisions we
 first so the implementation does not have to re-litigate them.
 
 Current milestone: **v0.1 walking skeleton** — one service, one VPS, deploy and roll back
-from a CLI. Exit criterion: Kiln deploys Kiln.
+from a CLI. Exit criterion: Bohux deploys Bohux.
 
 ## Layout
 
@@ -34,9 +33,9 @@ docs/adr/              decisions — numbered, dated, immutable
 docs/specs/            interface and data contracts
 docs/runbooks/         operational procedures
 proto/                 the API contract; source of truth (ADR-0006)
-cmd/kiln/              single binary; modes: controlplane, agent, cli
+cmd/bohux/              single binary; modes: controlplane, agent, cli
 internal/              implementation
 providers/             deployment targets + conformance suite
 web/                   dashboard
-deploy/                how Kiln deploys itself
+deploy/                how Bohux deploys itself
 ```

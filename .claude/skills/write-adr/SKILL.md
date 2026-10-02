@@ -1,6 +1,6 @@
 ---
 name: write-adr
-description: Use before implementing any hard-to-reverse decision in Kiln — a new dependency, a data model shape, a protocol or interface change, a storage engine, an orchestration mechanism. Also use when a task's design is being re-litigated and the reasoning needs to be recorded. Produces a numbered, immutable ADR in docs/adr/.
+description: Use before implementing any hard-to-reverse decision in Bohux — a new dependency, a data model shape, a protocol or interface change, a storage engine, an orchestration mechanism. Also use when a task's design is being re-litigated and the reasoning needs to be recorded. Produces a numbered, immutable ADR in docs/adr/.
 ---
 
 # Writing an ADR
