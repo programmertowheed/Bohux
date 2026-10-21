@@ -38,18 +38,16 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S8b — logs and exec (⏳, next to start). S7d (OpenBao auto-unseal)
+- **Slice:** S8c — backup and restore (⏳, next to start). S7d (OpenBao auto-unseal)
   belongs with the install bundle in S9
-- **Exact next step:** WorkloadService.StreamLogs relayed over the agent stream
-  (control plane sends `LogRequest`, agent answers `LogChunk`s from the provider's
-  Logs verb).
+- **Exact next step:** decide the archive format and its encryption (operator-held key,
+  ADR-0020 item 7) — an ADR if it adds a dependency — then `bohux admin backup`.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S8b (logs and exec) on
-> branch `claude/relaxed-rubin-76m7dl`, following ADR-0007, api-contract.md, and
-> CLAUDE.md rules 3, 8 and 10 (exec sessions are audited). Start Postgres, Docker,
-> Temporal and OpenBao (tracker *Known gaps*). Verify with build, vet, golangci-lint (also with the integration
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S8c (backup and restore)
+> on branch `claude/relaxed-rubin-76m7dl`, following ADR-0020 item 7 and CLAUDE.md
+> rule 3. Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*). Verify with build, vet, golangci-lint (also with the integration
 > tag), unit and integration tests. Tick boxes, update the tracker and the next
 > session prompt, commit, push, and give me the next prompt.
 
@@ -607,11 +605,19 @@ Split into sub-slices, one session each.
       rollback, scale to 0 and back
 - [x] `docs/reference/config.md` CLI section
 
-#### S8b — logs and exec ⏳
-- [ ] WorkloadService.StreamLogs and Exec relayed over the agent stream (`LogRequest`
-      / `LogChunk`, `ExecOpen` / `ExecData` / `ExecOutput`; audited; values of secrets
-      never logged); agent side through the provider's Logs and Exec verbs
-- [ ] `bohux logs <app> -e <env> [-f]`, `bohux exec <app> -e <env> -- <cmd>`
+#### S8b — logs and exec ✅
+- [x] agentapi `Logs` / `Exec` relays over the node's stream session (waiters per
+      request/session; slow log clients drop lines rather than stall the stream; exec
+      output waits up to 2 s); `CloseStdin` vs detach kept apart (found: detaching on
+      client EOF dropped the exit and hung the call)
+- [x] Agent `relays`: log requests (cancellable, follow), exec sessions (stdout/stderr
+      pumps, stdin, resize, exit; 126 when it cannot start), through the provider's
+      Logs and Exec via the Reconciler; one outbox into the stream's sender
+- [x] WorkloadService.StreamLogs (viewer) and Exec (deployer, audited per session;
+      first message must be `start`)
+- [x] `bohux logs`, `bohux exec … -- cmd` (exit status propagated by the binary). Unit
+      tests for the relays; the CLI drives both in `TestBuildEndToEnd`, which also
+      checks each exec session is audited
 
 #### S8c — backup and restore ⏳
 - [ ] `bohux admin backup | restore` (Postgres dump, OpenBao snapshot, node CA;
@@ -735,6 +741,9 @@ Split into sub-slices, one session each.
 - **Next:** S8, split first.
 - S8 split into S8a–S8c. S8a done: `bohux deploy | rollback | scale`, driven end to end.
 - **Next:** S8b.
+- S8b done: logs and exec through WorkloadService and the agent stream, CLI commands,
+  exec audited.
+- **Next:** S8c.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by

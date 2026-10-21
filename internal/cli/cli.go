@@ -1,4 +1,5 @@
-// Package cli is the bohux command-line client: deploy, rollback, scale. It is a
+// Package cli is the bohux command-line client: deploy, rollback, scale, logs, exec.
+// It is a
 // client of the public API and nothing more (CLAUDE.md rule 8): every command is RPCs
 // any other client could make.
 package cli
@@ -37,7 +38,9 @@ var ErrUsage = errors.New("usage")
 // Commands lists the CLI's commands for the binary's usage text.
 const Commands = `  deploy          build or import a release of an app and deploy it
   rollback        deploy the app's last healthy release again
-  scale           change an app's replicas`
+  scale           change an app's replicas
+  logs            print an app's log lines
+  exec            run a command in one of an app's instances`
 
 // Run executes one CLI command.
 func Run(ctx context.Context, cmd string, args []string, stdout io.Writer, getenv func(string) string) error {
@@ -49,6 +52,10 @@ func Run(ctx context.Context, cmd string, args []string, stdout io.Writer, geten
 		return c.rollback(ctx, args)
 	case "scale":
 		return c.scale(ctx, args)
+	case "logs":
+		return c.logs(ctx, args)
+	case "exec":
+		return c.exec(ctx, args)
 	}
 	return fmt.Errorf("unknown command %q: %w", cmd, ErrUsage)
 }
@@ -63,6 +70,7 @@ type command struct {
 	apps        bohuxv1connect.AppServiceClient
 	releases    bohuxv1connect.ReleaseServiceClient
 	deployments bohuxv1connect.DeploymentServiceClient
+	workloads   bohuxv1connect.WorkloadServiceClient
 }
 
 // target is the flags every App command takes.
@@ -118,6 +126,7 @@ func (c *command) connect() error {
 	c.apps = bohuxv1connect.NewAppServiceClient(hc, base)
 	c.releases = bohuxv1connect.NewReleaseServiceClient(hc, base)
 	c.deployments = bohuxv1connect.NewDeploymentServiceClient(hc, base)
+	c.workloads = bohuxv1connect.NewWorkloadServiceClient(hc, base)
 	return nil
 }
 

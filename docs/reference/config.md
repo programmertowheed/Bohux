@@ -98,7 +98,7 @@ BOHUX_DATABASE_URL='postgres://bohux_app:bohux-dev@localhost:5432/bohux_app?sslm
 |---|---|---|
 | `BOHUX_TEST_POSTGRES_URL` | `go test -tags=integration` | DSN of a role that can create roles and databases. Each test creates and drops its own. |
 
-## CLI: `bohux deploy | rollback | scale`
+## CLI: `bohux deploy | rollback | scale | logs | exec`
 
 The CLI is a client of the public API (CLAUDE.md rule 8). It has no config file in
 v0.1; it reads:
@@ -120,3 +120,8 @@ Apps are named by slug: `bohux deploy api -p shop -e prod`.
   last healthy Release before the current one, or the one named.
 - `bohux scale <app> -e <env> --replicas <n>` changes replicas; the node follows at once
   (ADR-0027).
+- `bohux logs <app> -e <env> [-f] [--tail <n>] [--since <duration>] [--instance <name>]`
+  prints the App's log lines, relayed from its node; `-f` keeps following.
+- `bohux exec <app> -e <env> [--instance <name>] -- <command> [args…]` runs a command in
+  one of the App's instances and exits with its status. v0.1 forwards no standard input
+  and has no TTY. Every session is audited; its input and output are not recorded.

@@ -66,6 +66,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, os.Args[1:], os.Stdout, os.Getenv); err != nil {
+		// `bohux exec` exits with the remote command's status, quietly.
+		var exit *cli.ExitError
+		if errors.As(err, &exit) {
+			os.Exit(exit.Code)
+		}
 		slog.Error("bohux failed", "err", err)
 		os.Exit(1)
 	}
@@ -141,7 +146,8 @@ func runAgent(ctx context.Context, stateDir string) error {
 	rec := &agent.Reconciler{State: st, Cache: cache, Provider: p}
 	opts := agent.RunOptions{State: st, Cache: cache, Reports: rec, Disk: disk,
 		Providers: []*bohuxv1.ProviderDescriptor{descriptorProto(desc)},
-		Builder:   &agent.Builder{Disk: disk, WorkDir: filepath.Join(stateDir, "builds")}}
+		Builder:   &agent.Builder{Disk: disk, WorkDir: filepath.Join(stateDir, "builds")},
+		Workloads: rec}
 
 	tasks := []func(context.Context) error{
 		rec.Run,
@@ -268,7 +274,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 		return nil
 	case "agent":
 		return agentCommand(ctx, args[1:], getenv, d)
-	case "deploy", "rollback", "scale":
+	case "deploy", "rollback", "scale", "logs", "exec":
 		if err := cli.Run(ctx, args[0], args[1:], stdout, getenv); err != nil {
 			if errors.Is(err, cli.ErrUsage) {
 				return fmt.Errorf("%w\n\n%w", err, errUsage)

@@ -23,6 +23,7 @@ import (
 
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/gen/bohux/v1/bohuxv1connect"
+	"github.com/bohumix/bohux/internal/cli"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/store/fixture"
 	"github.com/bohumix/bohux/internal/store/storetest"
@@ -34,7 +35,7 @@ const e2eDockerfile = `FROM busybox:1.36
 ARG VERSION
 ARG BROKEN
 RUN mkdir -p /www && echo "$VERSION" > /www/version && if [ -z "$BROKEN" ]; then echo ok > /www/healthz; fi
-CMD ["httpd", "-f", "-p", "8080", "-h", "/www"]
+CMD ["sh", "-c", "echo started $(cat /www/version); exec httpd -f -p 8080 -h /www"]
 `
 
 func freeAddr(t *testing.T) string {
@@ -386,6 +387,28 @@ func TestBuildEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool { got, _ := get(served); return got == "g1" }, "scaled to 1, g1 to serve again")
+
+	out, err = bohux("logs", "built", "-e", "prod", "--tail", "20")
+	if err != nil || !strings.Contains(out, "started g1") {
+		t.Errorf("logs = %q, %v; want the workload's start line", out, err)
+	}
+	out, err = bohux("exec", "built", "-e", "prod", "--", "cat", "/www/version")
+	if err != nil || strings.TrimSpace(out) != "g1" {
+		t.Errorf("exec = %q, %v; want g1", out, err)
+	}
+	_, err = bohux("exec", "built", "-e", "prod", "--", "sh", "-c", "exit 3")
+	var exit *cli.ExitError
+	if !errors.As(err, &exit) || exit.Code != 3 {
+		t.Errorf("exec of a failing command = %v, want exit status 3", err)
+	}
+	// Every exec session is audited (rule 10); its input and output are not.
+	var sessions int
+	if err := s.st.InTenant(s.ctx, s.tenant, func(tx *store.Tx) error {
+		return tx.QueryRow(s.ctx, `SELECT count(*) FROM audit_events
+			WHERE action = '/bohux.v1.WorkloadService/Exec' AND resource_id = $1`, uuid.MustParse(app)).Scan(&sessions)
+	}); err != nil || sessions != 2 {
+		t.Errorf("audited exec sessions = %d, %v; want 2", sessions, err)
+	}
 }
 
 func waitFor(t *testing.T, ok func() bool, what string) {
