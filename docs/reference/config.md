@@ -38,6 +38,28 @@ Applies migrations, creates the tenant, and prints a tenant-wide owner API token
 (ADR-0023) to stdout. That is the only time the token is shown; only its hash is
 stored (ADR-0022). Use it to create project-scoped tokens for day-to-day use.
 
+## `bohux agent register`
+
+| Flag | Environment | Default | Meaning |
+|---|---|---|---|
+| `--control-plane` | | none, required | The control plane's agent address, `host:port` (its `--agent-listen`). |
+| `--token` | `BOHUX_BOOTSTRAP_TOKEN` | none, required | The `bxb_` token from `NodeService.CreateBootstrapToken`. Prefer the env var so the token stays out of shell history. Single use. |
+| `--ca-cert-sha256` | | none, required | The `ca_cert_sha256` returned with the token. The agent trusts only the CA with this hash (ADR-0024). |
+| `--state-dir` | `BOHUX_AGENT_STATE_DIR` | `/var/lib/bohux-agent` | Where the node's keys, certificate, pinned CA, and identity are written (0700 directory, 0600 files). |
+
+Refuses to run if Docker `live-restore` is off (ADR-0020 item 9), or if the directory
+already holds a registration.
+
+## `bohux agent run`
+
+| Flag | Environment | Default | Meaning |
+|---|---|---|---|
+| `--state-dir` | `BOHUX_AGENT_STATE_DIR` | `/var/lib/bohux-agent` | The registered state. |
+
+Connects to the control plane recorded at registration over mTLS and keeps the
+stream open, reconnecting with backoff (1 s doubling to 1 min; 5 min after a
+`VersionRejected`). It never exits because the control plane is away (rule 1).
+
 ## The database role
 
 The DSN's role must own the Bohux schema and must be neither a superuser nor

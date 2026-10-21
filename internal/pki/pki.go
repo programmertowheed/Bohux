@@ -263,6 +263,8 @@ func (a *Authority) SignNodeCSR(csrPEM []byte, tenant, node uuid.UUID) ([]byte, 
 }
 
 // ServerCertificate issues a certificate for the agent listener, named ServerName.
+// The chain includes the CA certificate so a new agent can pin it by hash before it
+// has a copy (ADR-0024).
 func (a *Authority) ServerCertificate() (tls.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -274,7 +276,7 @@ func (a *Authority) ServerCertificate() (tls.Certificate, error) {
 		return tls.Certificate{}, err
 	}
 	block, _ := pem.Decode(certPEM)
-	return tls.Certificate{Certificate: [][]byte{block.Bytes}, PrivateKey: key}, nil
+	return tls.Certificate{Certificate: [][]byte{block.Bytes, a.caCert.Raw}, PrivateKey: key}, nil
 }
 
 func (a *Authority) issue(pub crypto.PublicKey, subject pkix.Name, dns []string, uris []*url.URL, usage x509.ExtKeyUsage, life time.Duration) ([]byte, error) {

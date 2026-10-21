@@ -38,27 +38,29 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S4c2 — agent process (⏳, next to start)
-- **Exact next step:** `internal/agent` state directory (keys, cert, pinned CA, node
-  id, signing key) and `bohux agent register`.
+- **Slice:** S4d — assignments (⏳, next to start)
+- **Exact next step:** an `assignments` migration (node, generation, signed payload,
+  key id) and the control-plane code that builds, signs, stores, and pushes a node's
+  full-state assignment on `Connect`.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S4c2 (agent process) on
-> branch `claude/relaxed-rubin-76m7dl`, following ADR-0003, ADR-0020 item 9, ADR-0024.
-> Build internal/agent: a 0700 state directory holding the ECDSA key, X25519 sealing
-> key, client cert, pinned CA, node id, and assignment signing public key;
-> `bohux agent register --control-plane <addr> --token <bxb_...> --ca-cert-sha256 <hex>`
-> (pins the CA by hash on the first TLS handshake, refuses without Docker live-restore
-> via an interface so tests need no Docker); `bohux agent run` dialing Connect over
-> mTLS, sending Hello, handling Ping and VersionRejected (keep running, retry later),
-> reconnecting with capped exponential backoff, and closing the stream with
-> CloseRequest on shutdown (see the S4c1 note). Document the flags in
-> docs/reference/config.md. Test against a real control-plane agent listener on the
-> local Postgres: register, connect, node online, agent stopped, node offline, wrong CA
-> pin refused, live-restore off refused. Verify with build, vet, golangci-lint (also
-> with the integration tag) and tests. Tick boxes, update the tracker and the next
-> session prompt, commit, push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S4d (assignments) on
+> branch `claude/relaxed-rubin-76m7dl`, following ADR-0007, ADR-0008, ADR-0024 and the
+> agent protocol in api-contract.md. Control plane: an assignments table (tenant, node,
+> generation unique per node, payload bytes, signature, key id; append-only), a function
+> that writes the next generation for a node from given workloads (signed with
+> internal/pki; secret values sealed with nacl/box to the node's sealing key, resolved
+> through an interface so tests need no OpenBao), and pushing the latest assignment on
+> Connect and when a new one is written. Agent: verify signature, node id, and that the
+> generation is higher than the cached one; cache it atomically on disk (0600, still
+> sealed); Ack; send Hello.applied_generation from the cache. Define the sealed
+> plaintext message in agent.proto first. Test: tampered signature, wrong node, older
+> generation ignored, cache survives an agent restart, secret values never in the
+> cache file in clear or in logs. If the slice is too big, stop at a clean point and
+> split it in the tracker. Verify with buf lint/generate (tracker recipe), build, vet,
+> golangci-lint (also with the integration tag) and tests. Tick boxes, update the
+> tracker and the next session prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -310,10 +312,18 @@ Split into sub-slices, one session each.
   agent drops TCP, which the server sees. Half-open links: once StatusReports flow
   (S4d/S4e), close streams silent for 3 report intervals.
 
-#### S4c2 — agent process ⏳
-- [ ] `bohux agent register` / `bohux agent run`: state dir, CA pin, mTLS `Connect`,
-      `Hello`, reconnect with backoff, `VersionRejected` handled without stopping
-- [ ] Refuse to register without Docker `live-restore` (ADR-0020)
+#### S4c2 — agent process ✅
+- [x] `internal/agent`: state dir (0700/0600; ECDSA key, X25519 sealing key, cert,
+      pinned CA, identity); `Register` pins the CA by hash from the server's chain
+      (the agent listener now sends the CA in its chain); `Run` keeps the stream open,
+      reconnects with capped backoff, waits 5 min after `VersionRejected`, never exits
+      on control-plane absence, and closes its side in order on shutdown
+- [x] Refuses to register without Docker `live-restore` (`docker info`, behind an
+      interface); refuses a second registration into the same state dir
+- [x] `bohux agent register` / `bohux agent run`, documented in config.md
+- [x] Integration tests against a real agent listener: lifecycle online → offline,
+      wrong pin, live-restore off, rejected version keeps running, control plane down
+      then back. Not smoke-tested as a binary here (no Docker daemon)
 
 #### S4d — assignments ⏳
 - [ ] Assignments table; signed, generation-numbered full-state assignments pushed on
@@ -390,6 +400,7 @@ Split into sub-slices, one session each.
 - S3e split into S3e1–S3e3, all done: Project, Environment, App services. **S3 done.**
 - Split S4 into S4a–S4e. S4a done: ADR-0024 proposed (O9).
 - S4c split; S4c1 done: control-plane `Connect` with skew policy and online state.
+  S4c2 done: the agent process (`bohux agent register|run`).
 - S4b split into S4b1/S4b2, both done: `internal/pki`, NodeService, data dir, agent
   TLS listener, Register.
 - S3d done: `internal/secrets` redaction, access-log interceptor, rule 3 test.

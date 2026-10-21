@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/bohumix/bohux/internal/agent"
 	"github.com/bohumix/bohux/internal/api"
 	"github.com/bohumix/bohux/internal/controlplane"
 	"github.com/bohumix/bohux/internal/store"
@@ -26,7 +27,9 @@ commands:
   version         print the version
   controlplane    run the control plane API
   admin migrate   apply database migrations and exit
-  admin bootstrap create a tenant and print its first owner token`)
+  admin bootstrap create a tenant and print its first owner token
+  agent register  enroll this node with a bootstrap token (once)
+  agent run       run the node agent`)
 
 // Environment fallbacks for flags. See docs/reference/config.md.
 const (
@@ -34,10 +37,13 @@ const (
 	envAgentListenAddr = "BOHUX_AGENT_LISTEN_ADDR"
 	envDatabaseURL     = "BOHUX_DATABASE_URL"
 	envDataDir         = "BOHUX_DATA_DIR"
+	envAgentStateDir   = "BOHUX_AGENT_STATE_DIR"
+	envBootstrapToken  = "BOHUX_BOOTSTRAP_TOKEN"
 
 	defaultListenAddr      = "127.0.0.1:7400"
 	defaultAgentListenAddr = "127.0.0.1:7443"
 	defaultDataDir         = "/var/lib/bohux"
+	defaultAgentStateDir   = "/var/lib/bohux-agent"
 )
 
 func main() {
@@ -54,9 +60,23 @@ type deps struct {
 	runControlPlane func(context.Context, controlplane.Config) error
 	migrate         func(context.Context, string) error
 	bootstrap       func(ctx context.Context, dsn, slug, displayName string) (token string, err error)
+	agentRegister   func(context.Context, agent.RegisterOptions) error
+	agentRun        func(ctx context.Context, stateDir string) error
 }
 
-var defaultDeps = deps{runControlPlane: controlplane.Run, migrate: store.MigrateDSN, bootstrap: bootstrap}
+var defaultDeps = deps{
+	runControlPlane: controlplane.Run, migrate: store.MigrateDSN, bootstrap: bootstrap,
+	agentRegister: agent.Register, agentRun: runAgent,
+}
+
+// runAgent loads the agent's state and runs it until ctx ends.
+func runAgent(ctx context.Context, stateDir string) error {
+	st, err := agent.Load(stateDir)
+	if err != nil {
+		return err
+	}
+	return agent.Run(ctx, agent.RunOptions{State: st})
+}
 
 // bootstrap migrates, then creates the tenant and its first token.
 func bootstrap(ctx context.Context, dsn, slug, displayName string) (string, error) {
@@ -132,8 +152,49 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 			return fmt.Errorf("admin migrate: %w", err)
 		}
 		return nil
+	case "agent":
+		return agentCommand(ctx, args[1:], getenv, d)
 	default:
 		return fmt.Errorf("unknown command %q: %w", args[0], errUsage)
+	}
+}
+
+func agentCommand(ctx context.Context, args []string, getenv func(string) string, d deps) error {
+	if len(args) == 0 {
+		return fmt.Errorf("agent: missing subcommand: %w", errUsage)
+	}
+	fs := newFlagSet("agent " + args[0])
+	stateDir := fs.String("state-dir", envOr(getenv, envAgentStateDir, defaultAgentStateDir),
+		"agent keys and identity (env "+envAgentStateDir+")")
+	switch args[0] {
+	case "register":
+		cp := fs.String("control-plane", "", "control plane agent address, host:port (required)")
+		token := fs.String("token", getenv(envBootstrapToken),
+			"bootstrap token; prefer the env var so it stays out of shell history (env "+envBootstrapToken+")")
+		pin := fs.String("ca-cert-sha256", "", "node CA pin from CreateBootstrapToken (required)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return fmt.Errorf("agent register: %w", err)
+		}
+		if *cp == "" || *token == "" || *pin == "" {
+			return errors.New("agent register: --control-plane, --token (or " + envBootstrapToken +
+				"), and --ca-cert-sha256 are required")
+		}
+		err := d.agentRegister(ctx, agent.RegisterOptions{StateDir: *stateDir, ControlPlane: *cp,
+			Token: *token, CACertSHA256: *pin, Docker: agent.DockerCLI{}})
+		if err != nil {
+			return fmt.Errorf("agent register: %w", err)
+		}
+		return nil
+	case "run":
+		if err := fs.Parse(args[1:]); err != nil {
+			return fmt.Errorf("agent run: %w", err)
+		}
+		if err := d.agentRun(ctx, *stateDir); err != nil {
+			return fmt.Errorf("agent run: %w", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("agent: unknown subcommand %q: %w", args[0], errUsage)
 	}
 }
 

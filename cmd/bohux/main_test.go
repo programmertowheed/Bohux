@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/bohumix/bohux/internal/agent"
 	"github.com/bohumix/bohux/internal/controlplane"
 )
 
@@ -13,13 +14,13 @@ var errCalled = errors.New("called")
 
 func TestRun(t *testing.T) {
 	tests := []struct {
-		name      string
-		args      []string
-		env       map[string]string
-		want      string
-		wantErr   error
-		wantCfg   controlplane.Config
-		wantDBURL string
+		name    string
+		args    []string
+		env     map[string]string
+		want    string
+		wantErr error
+		wantCfg controlplane.Config
+		wantArg string
 	}{
 		{name: "no args", args: nil, wantErr: errUsage},
 		{name: "version", args: []string{"version"}, want: "dev\n"},
@@ -42,31 +43,47 @@ func TestRun(t *testing.T) {
 		{name: "admin migrate needs a database", args: []string{"admin", "migrate"},
 			wantErr: errMissing},
 		{name: "admin migrate", wantErr: errCalled,
-			args:      []string{"admin", "migrate", "--database-url", "postgres://m"},
-			wantDBURL: "postgres://m"},
+			args:    []string{"admin", "migrate", "--database-url", "postgres://m"},
+			wantArg: "postgres://m"},
 		{name: "admin unknown subcommand", args: []string{"admin", "nope"}, wantErr: errUsage},
 		{name: "admin bootstrap needs a slug", wantErr: errMissing,
 			args: []string{"admin", "bootstrap", "--database-url", "postgres://b"}},
+		{name: "agent register needs its flags", wantErr: errMissing,
+			args: []string{"agent", "register", "--control-plane", "cp:7443"}},
+		{name: "agent register takes the token from env", wantErr: errCalled,
+			args: []string{"agent", "register", "--control-plane", "cp:7443", "--ca-cert-sha256", "ab"},
+			env:  map[string]string{envBootstrapToken: "bxb_x"}, wantArg: "cp:7443|bxb_x|ab|" + defaultAgentStateDir},
+		{name: "agent run uses the state dir", wantErr: errCalled,
+			args: []string{"agent", "run", "--state-dir", "/s"}, wantArg: "/s"},
+		{name: "agent unknown subcommand", args: []string{"agent", "nope"}, wantErr: errUsage},
 		{name: "admin bootstrap prints the token once", want: bootstrapOut,
-			args:      []string{"admin", "bootstrap", "--database-url", "postgres://b", "--slug", "acme"},
-			wantDBURL: "postgres://b"},
+			args:    []string{"admin", "bootstrap", "--database-url", "postgres://b", "--slug", "acme"},
+			wantArg: "postgres://b"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var gotCfg controlplane.Config
-			var gotDBURL string
+			var gotArg string
 			d := deps{
 				runControlPlane: func(_ context.Context, c controlplane.Config) error {
 					gotCfg = c
 					return errCalled
 				},
 				migrate: func(_ context.Context, dsn string) error {
-					gotDBURL = dsn
+					gotArg = dsn
 					return errCalled
 				},
 				bootstrap: func(_ context.Context, dsn, slug, _ string) (string, error) {
-					gotDBURL = dsn
+					gotArg = dsn
 					return "bxa_token-for-" + slug, nil
+				},
+				agentRegister: func(_ context.Context, o agent.RegisterOptions) error {
+					gotArg = o.ControlPlane + "|" + o.Token + "|" + o.CACertSHA256 + "|" + o.StateDir
+					return errCalled
+				},
+				agentRun: func(_ context.Context, dir string) error {
+					gotArg = dir
+					return errCalled
 				},
 			}
 			getenv := func(k string) string { return tt.env[k] }
@@ -85,8 +102,8 @@ func TestRun(t *testing.T) {
 			if gotCfg != tt.wantCfg {
 				t.Errorf("controlplane config = %+v, want %+v", gotCfg, tt.wantCfg)
 			}
-			if gotDBURL != tt.wantDBURL {
-				t.Errorf("migrate DSN = %q, want %q", gotDBURL, tt.wantDBURL)
+			if gotArg != tt.wantArg {
+				t.Errorf("dependency argument = %q, want %q", gotArg, tt.wantArg)
 			}
 		})
 	}
