@@ -11,10 +11,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/descriptorpb"
 
 	"github.com/bohumix/bohux/internal/auth"
+	"github.com/bohumix/bohux/internal/secrets"
 	"github.com/bohumix/bohux/internal/store"
 )
 
@@ -106,36 +105,10 @@ func (i *idempotency) record(ctx context.Context, tx *store.Tx, resourceType str
 // requestHash is SHA-256 of the request, deterministically serialized, with every
 // debug_redact field cleared, so a secret value never feeds a stored hash (ADR-0022).
 func requestHash(req proto.Message) ([]byte, error) {
-	clone := proto.Clone(req)
-	clearRedacted(clone.ProtoReflect())
-	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(clone)
+	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(secrets.Redacted(req))
 	if err != nil {
 		return nil, fmt.Errorf("hash request: %w", err)
 	}
 	h := sha256.Sum256(b)
 	return h[:], nil
-}
-
-func clearRedacted(m protoreflect.Message) {
-	m.Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
-		if opts, ok := fd.Options().(*descriptorpb.FieldOptions); ok && opts.GetDebugRedact() {
-			m.Clear(fd)
-			return true
-		}
-		switch {
-		case fd.IsList() && fd.Message() != nil:
-			l := v.List()
-			for i := 0; i < l.Len(); i++ {
-				clearRedacted(l.Get(i).Message())
-			}
-		case fd.IsMap() && fd.MapValue().Message() != nil:
-			v.Map().Range(func(_ protoreflect.MapKey, mv protoreflect.Value) bool {
-				clearRedacted(mv.Message())
-				return true
-			})
-		case !fd.IsList() && !fd.IsMap() && fd.Message() != nil:
-			clearRedacted(v.Message())
-		}
-		return true
-	})
 }

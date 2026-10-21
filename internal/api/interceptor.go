@@ -75,5 +75,6 @@ func (i *authInterceptor) check(ctx context.Context, procedure, authorization st
 	if p.Role < perm.MinRole || (perm.TenantWide && !p.TenantWide()) {
 		return ctx, connect.NewError(connect.CodePermissionDenied, auth.ErrPermissionDenied)
 	}
+	recordPrincipal(ctx, p.ID)
 	return auth.WithPrincipal(ctx, p), nil
 }

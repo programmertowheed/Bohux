@@ -38,25 +38,24 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S3d — redaction (⏳, next to start)
-- **Exact next step:** a ConnectRPC interceptor in `internal/api` that guarantees
-  `debug_redact` fields never reach logs, traces, or error strings, plus the redacting
-  wrapper CLAUDE.md rule 3 names in `internal/secrets`.
+- **Slice:** S3e — resource handlers (⏳, next to start)
+- **Exact next step:** ProjectService in `internal/api` (replacing its Unimplemented
+  stub), following the IdentityService patterns.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S3d (redaction) on branch
-> `claude/relaxed-rubin-76m7dl`. CLAUDE.md rule 3 names a redacting wrapper in
-> internal/secrets: build it (a slog.LogValuer / fmt-safe wrapper for any proto message
-> that blanks every debug_redact field, reusing the walk in internal/api/idempotency.go
-> rather than duplicating it), then a ConnectRPC logging interceptor in internal/api
-> that logs each call (procedure, code, duration, principal ID) through it and never
-> logs a raw request. Prove rule 3 with tests: SetSecretRequest.value,
-> CreateApiTokenResponse.secret, and CreateBootstrapTokenResponse.token never appear in
-> captured logs or error strings, including on handler errors. Mount it in the control
-> plane. Verify with build, vet, golangci-lint (also with the integration tag) and
-> tests (integration on the local Postgres). Tick boxes, update the tracker and the next
-> session prompt, commit, push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S3e (resource handlers) on
+> branch `claude/relaxed-rubin-76m7dl`. Implement ProjectService, EnvironmentService
+> and AppService in internal/api, replacing their Unimplemented stubs, following the
+> IdentityService patterns: store write path with audit events, ADR-0022 idempotency,
+> `expected_revision_id`, ADR-0023 two-step authorization (auth.RequireProject in
+> every handler; ListProjects filtered for project-scoped tokens), lookup by id or
+> slug, paging. App source/runtime/secrets are stored as protojson (data-model.md
+> "Schema rules"). Test over real ConnectRPC on the local Postgres, including a token
+> from another project and a stale revision. If the slice is too big, stop at a clean
+> point and split it in the tracker. Verify with build, vet, golangci-lint (also with
+> the integration tag) and tests. Tick boxes, update the tracker and the next session
+> prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -233,9 +232,17 @@ Split into sub-slices, one session each.
 - [x] Integration tests over real ConnectRPC; binary smoke test: bootstrap, duplicate
       slug refused, `WhoAmI` over HTTP JSON, unauthenticated call refused
 
-#### S3d — redaction ⏳
-- [ ] Secret-redacting interceptor (rule 3) and a test that `SetSecretRequest.value`
-      and token secrets never reach logs, traces, or error strings
+#### S3d — redaction ✅
+- [x] `internal/secrets`: `Redacted` (clears every `debug_redact` field, any depth) and
+      the `Message` wrapper (String/GoString/Format/LogValue all redacted), tested for
+      every redacted field in bohux.v1 and the agent protocol
+- [x] Access-log interceptor (outermost; procedure, code, duration, principal; never a
+      body). Rule 3 integration test: `SetSecretRequest.value` and token secrets absent
+      from logs and error strings on success, bad token, denial, and unimplemented
+- [x] Every bohux.v1 service is mounted; unwritten ones answer `Unimplemented` behind
+      auth and logging
+- Traces: no tracing exists yet. When OpenTelemetry is added, span attributes must
+  go through `secrets.Message` too.
 
 #### S3e — resource handlers ⏳
 - [ ] ProjectService, EnvironmentService, AppService on the store, each mutation with
@@ -312,6 +319,7 @@ Split into sub-slices, one session each.
   rule for gates: write the ADR as *proposed*, build on it, list it under *Waiting on
   the owner* (O6 onward).
 - S2a done: ADR-0021 (goose on pgx).
+- S3d done: `internal/secrets` redaction, access-log interceptor, rule 3 test.
 - S3c3 done: bootstrap command, Identity/Tenant handlers, idempotency records, all
   tested over real ConnectRPC; end-to-end binary smoke test passed.
 - S3c2 done: ADR-0023 (O8), proto + migration for tenant-wide tokens, `internal/api`

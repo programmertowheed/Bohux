@@ -30,9 +30,22 @@ func (s *Server) now() time.Time {
 
 // Mount registers every implemented service on mux behind the auth interceptor.
 func (s *Server) Mount(mux *http.ServeMux) {
-	opts := connect.WithInterceptors(NewAuthInterceptor(s.Authn))
+	// Logging is outermost so it records denied calls too.
+	opts := connect.WithInterceptors(NewLoggingInterceptor(), NewAuthInterceptor(s.Authn))
 	mux.Handle(bohuxv1connect.NewIdentityServiceHandler(&identityService{s}, opts))
 	mux.Handle(bohuxv1connect.NewTenantServiceHandler(&tenantService{s}, opts))
+
+	// Not written yet: mounted so every RPC is authenticated, logged, and answers
+	// Unimplemented rather than 404. Each is replaced as its slice lands.
+	mux.Handle(bohuxv1connect.NewProjectServiceHandler(bohuxv1connect.UnimplementedProjectServiceHandler{}, opts))
+	mux.Handle(bohuxv1connect.NewEnvironmentServiceHandler(bohuxv1connect.UnimplementedEnvironmentServiceHandler{}, opts))
+	mux.Handle(bohuxv1connect.NewAppServiceHandler(bohuxv1connect.UnimplementedAppServiceHandler{}, opts))
+	mux.Handle(bohuxv1connect.NewReleaseServiceHandler(bohuxv1connect.UnimplementedReleaseServiceHandler{}, opts))
+	mux.Handle(bohuxv1connect.NewDeploymentServiceHandler(bohuxv1connect.UnimplementedDeploymentServiceHandler{}, opts))
+	mux.Handle(bohuxv1connect.NewWorkloadServiceHandler(bohuxv1connect.UnimplementedWorkloadServiceHandler{}, opts))
+	mux.Handle(bohuxv1connect.NewNodeServiceHandler(bohuxv1connect.UnimplementedNodeServiceHandler{}, opts))
+	mux.Handle(bohuxv1connect.NewSecretServiceHandler(bohuxv1connect.UnimplementedSecretServiceHandler{}, opts))
+	mux.Handle(bohuxv1connect.NewAuditServiceHandler(bohuxv1connect.UnimplementedAuditServiceHandler{}, opts))
 }
 
 // metaRow is the ResourceMeta columns every head+revision read selects, in this order:
