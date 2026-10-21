@@ -38,19 +38,15 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S9 — exit: Bohux deploys Bohux (⏳, next to start; split it first).
-  Includes S7d (OpenBao auto-unseal), the install bundle, the nightly backup schedule,
-  runbooks, and the footprint re-measure
-- **Exact next step:** split S9; the first sub-slice is the install bundle shape
-  (what runs where on one VPS: Postgres, Temporal, OpenBao, the control plane, the
-  agent), which needs an ADR.
+- **Slice:** S9b — agent-side fallback (⏳, next to start)
+- **Exact next step:** add `Workload.fallback` and `fallback_after` to agent.proto, then
+  write the fallback's tests in `internal/agent` before the code (rule 5).
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then split slice S9 (exit: Bohux deploys
-> Bohux) into sub-slices and do the first on branch `claude/relaxed-rubin-76m7dl`,
-> following ADR-0011, ADR-0020 (items 1, 6, 7), and the `write-adr` and
-> `write-runbook` skills. Start Postgres, Docker, Temporal and OpenBao (tracker *Known
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S9b (agent-side fallback)
+> on branch `claude/relaxed-rubin-76m7dl`, following ADR-0031, ADR-0026, and CLAUDE.md
+> rules 1, 5 and 9. Start Postgres, Docker, Temporal and OpenBao (tracker *Known
 > gaps*). Verify with build, vet, golangci-lint (also with the integration
 > tag), unit and integration tests. Tick boxes, update the tracker and the next
 > session prompt, commit, push, and give me the next prompt.
@@ -73,6 +69,8 @@ work is in right now*.
 | O13 | Accept or reject ADR-0027 (replicas are not part of a Release; ScaleApp writes the App revision and the assignment in one transaction). Built on already | S6e onward |
 | O14 | Accept or reject ADR-0028 (builds run in the agent over its stream, on a resource-limited buildx `docker-container` builder named `bohux`, `--load` into dockerd; public Git only in v0.1). Built on already | S7c onward |
 | O15 | Accept or reject ADR-0029 (backup archive: age-encrypted tar; logical Postgres copy over a privileged DSN; every OpenBao version; node CA). Adds `filippo.io/age`. Built on already | S8c onward |
+| O16 | Accept or reject ADR-0030 (single-VPS layout: agent as a systemd unit, infra as one Compose project, control plane as an App of itself installed through a seed). Built on already | S9 |
+| O17 | Accept or reject ADR-0031 (agent-side fallback: previous workload + deadline, applied only when the control plane cannot compensate). Changes agent.proto. Built on already | S9b onward |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -651,10 +649,43 @@ Split into sub-slices, one session each.
 - **Not done (ADR-0020 item 7):** the scheduled nightly backup (a Temporal schedule)
   and S3 targets. Planned with the install bundle (S9)
 
-### S9 — Exit: Bohux deploys Bohux ⏳
-- [ ] Bohux deploys itself and rolls itself back, end to end
-- [ ] Footprint re-measured and published
-- [ ] Runbooks: backup key handling, OpenBao unseal key (`write-runbook`)
+### S9 — Exit: Bohux deploys Bohux 🔄
+Split into sub-slices, one session each. Includes S7d (OpenBao auto-unseal).
+
+#### S9a — install layout and self-deploy design ✅
+- [x] Proposed ADR-0030 (O16): base (dockerd, binary, agent as a systemd unit), infra
+      (Postgres, Temporal, OpenBao as one Compose project), and the control plane as an
+      App of itself (`bohux/system/controlplane`), installed by `scripts/install.sh`
+      through a seed control plane
+- [x] Proposed ADR-0031 (O17): agent-side fallback — a workload carries the previous
+      workload and a deadline; the agent applies it only if the new one was never
+      healthy, the deadline passed, and nothing newer arrived
+
+#### S9b — agent-side fallback ⏳
+- [ ] Proto first: `Workload.fallback`, `Workload.fallback_after`
+- [ ] Rollback test first (rule 5): a new workload never healthy, no control plane →
+      the agent applies the fallback after the deadline, keeps it across restarts, and
+      a newer assignment wins; a workload that was healthy keeps no fallback
+- [ ] The deploy workflow's `AssignRelease` sets the fallback to the workload it
+      replaces and the deadline to health timeout + 2 min
+
+#### S9c — the control plane as an image ⏳
+- [ ] `Dockerfile` for the `bohux` binary (control plane mode), config by env, data dir
+      as a mounted host path; ports published by the App
+
+#### S9d — install bundle ⏳
+- [ ] `deploy/install/`: infra Compose (Postgres, Temporal, OpenBao with auto-unseal,
+      ADR-0020 item 6 / S7d), agent systemd unit, `scripts/install.sh` (idempotent)
+
+#### S9e — Bohux deploys Bohux ⏳
+- [ ] End to end on a CI VM: install, deploy a new control-plane version, roll it back,
+      deploy a broken one (falls back); downtime of the control plane measured
+- [ ] Footprint re-measured and published (with O2)
+
+#### S9f — schedules and runbooks ⏳
+- [ ] Nightly backup as a Temporal schedule (ADR-0020 item 7), local path target
+- [ ] Runbooks (`write-runbook`): backup key custody and restore, OpenBao unseal key,
+      infra upgrades
 
 ## Known gaps and notes
 - **`buf.lock` missing.** Whoever has registry access (CI, or a local machine) runs
@@ -774,6 +805,8 @@ Split into sub-slices, one session each.
 - S8c done: ADR-0029 proposed (O15), `bohux admin backup | restore`, the restore drill
   end to end; control-plane shutdown no longer waits on streams. **S8 done.**
 - **Next:** S9, split first.
+- S9 split into S9a–S9f. S9a done: ADR-0030 (O16) and ADR-0031 (O17) proposed.
+- **Next:** S9b.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by
