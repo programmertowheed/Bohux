@@ -33,6 +33,7 @@ var errUsage = errors.New(`usage: bohux <command>
 
 commands:
 ` + cli.Commands + `
+` + cli.ResourceCommands + `
   version         print the version
   controlplane    run the control plane API
   admin migrate   apply database migrations and exit
@@ -95,11 +96,13 @@ type deps struct {
 	bootstrap       func(ctx context.Context, dsn, slug, displayName string) (token string, err error)
 	agentRegister   func(context.Context, agent.RegisterOptions) error
 	agentRun        func(ctx context.Context, cfg agentConfig) error
+	// stdin is what `bohux secret set` reads the value from.
+	stdin io.Reader
 }
 
 var defaultDeps = deps{
 	runControlPlane: controlplane.Run, migrate: store.MigrateDSN, bootstrap: bootstrap,
-	agentRegister: agent.Register, agentRun: runAgent,
+	agentRegister: agent.Register, agentRun: runAgent, stdin: os.Stdin,
 }
 
 // nodeProvider is the provider this agent runs: one agent, one target (ADR-0007). v0.1
@@ -327,8 +330,8 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 		return nil
 	case "agent":
 		return agentCommand(ctx, args[1:], getenv, d)
-	case "deploy", "rollback", "scale", "logs", "exec":
-		if err := cli.Run(ctx, args[0], args[1:], stdout, getenv); err != nil {
+	case "deploy", "rollback", "scale", "logs", "exec", "project", "env", "app", "route", "secret", "node":
+		if err := cli.Run(ctx, args[0], args[1:], d.stdin, stdout, getenv); err != nil {
 			if errors.Is(err, cli.ErrUsage) {
 				return fmt.Errorf("%w\n\n%w", err, errUsage)
 			}

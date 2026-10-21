@@ -38,16 +38,16 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S10f — zero-downtime deploys (🔄, ADR-0035 written)
+- **Slice:** S11 — the CLI covers the API (🔄)
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** `provider.ResourceRef.Slot` (Docker project suffix; empty slot =
-  today's names) with a conformance check, then the agent's switch (ADR-0035 item 3).
+- **Exact next step:** switch `scripts/selfdeploy-test.sh` (and the installer where it
+  can) from `curl` to the new CLI commands; run the self-deploy test.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S10f (zero-downtime deploys,
-> ADR-0035) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
+> Read CLAUDE.md and docs/plan/03-progress.md, then finish slice S11 (the CLI covers the
+> API, ADR-0036) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
 > and ADR-0034. Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*).
 > Verify with build, vet, golangci-lint (also with the integration tag), unit and
 > integration tests. Tick boxes, update the tracker and the next session prompt,
@@ -77,6 +77,7 @@ work is in right now*.
 | O19 | Accept or reject ADR-0033 (nightly backup: Temporal schedule in the control plane, read-only `BYPASSRLS` role `bohux_backup`, local directory with retention 7; S3 deferred). Built on already | S9f |
 | O20 | Accept or reject ADR-0034 (routes on Apps, hosts unique across tenants, routes are App state, the agent programs its node's Caddy, providers report endpoints). Changes app.proto and agent.proto. Built on already | S10 |
 | O21 | Accept or reject ADR-0035 (zero-downtime deploys: two slots per routed App, switched by the agent through one ingress load). Changes the provider ResourceRef. Built on already | S10f |
+| O22 | Accept or reject ADR-0036 (CLI resource commands: `bohux <noun> <verb>`, JSON output is the API's protojson, secret values only from stdin) | S11 |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -772,7 +773,7 @@ Split into sub-slices, one session each. Includes S7d (OpenBao auto-unseal).
 Scope: `02-roadmap.md` v0.2. Ingress first: zero-downtime deploys, TLS and domains
 build on it, and the CLI warns about host-port downtime until it lands.
 
-### S10 — Routes and the node ingress 🔄
+### S10 — Routes and the node ingress ✅
 Shape: ADR-0034 (O20). Split into sub-slices, one session each.
 
 #### S10a — design and contract ✅
@@ -839,14 +840,31 @@ Shape: ADR-0034 (O20). Split into sub-slices, one session each.
 - [x] Self-deploy test: an App `hello` with route `hello.localhost` deployed through the
       CLI is served over HTTPS by the ingress. **Passed here**, with everything before it
 
-#### S10f — zero-downtime deploys ⏳
+#### S10f — zero-downtime deploys ✅
 - [x] Proposed ADR-0035 (O21): the agent switches a routed App without host ports
       between two slots (`ResourceRef.Slot`, `blue`/`green`): apply the other slot, cut
       the ingress over in one load once it is healthy, record it, destroy the old one;
       a Release that never turns healthy never takes traffic
-- [ ] `ResourceRef.Slot` in the provider names (Docker: project suffix), conformance
-- [ ] Agent slot state (`slots.json`) and the switch; status during a switch
-- [ ] Self-deploy test: a second deploy of `hello` while a client polls it, no failures
+- [x] `ResourceRef.Slot` in the provider names (Docker: project suffix, empty = today's
+      names); conformance case "slots of one app are independent workloads"
+- [x] Agent: `slots.json` (live slot and its spec hash), the switch, the cut-over after
+      a successful ingress load, the old slot destroyed after the switch is recorded;
+      tested broken release first, then compensation, cut-over, failed cut-over,
+      crash in place, agent restart. ADR-0035 item 6 amended while proposed: any spec
+      change switches (replicas, secrets), routes alone do not
+- [x] Self-deploy test: a second deploy of `hello` while a client polls every 100 ms:
+      **127 requests, none failed** (passed here, with everything before it)
+
+### S11 — The CLI covers the API (ADR-0036) 🔄
+Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
+
+- [x] Proposed ADR-0036 (O22): `bohux <noun> <verb>`, `-o json` = the API's protojson,
+      secret values only from stdin, `--idempotency-key`, no prompts
+- [x] `project list|create`, `env list|create --node`, `app list|show|create`,
+      `route list|add|remove`, `secret list|set [--app]`, `node list|token`; unit
+      tests and an integration test against a real API server (OpenBao included)
+- [ ] The self-deploy test and the installer use the CLI instead of `curl` where a
+      command exists
 
 ## Known gaps and notes
 - **`buf.lock` missing.** Whoever has registry access (CI, or a local machine) runs
@@ -941,7 +959,9 @@ Shape: ADR-0034 (O20). Split into sub-slices, one session each.
 - S10d done: the agent programs Caddy; health includes the route; real-Caddy test.
 - S10e done: Caddy in the install bundle; the self-deploy test serves an App on a
   route. ADR-0035 (zero-downtime) proposed (O21).
-- **Next:** S10f.
+- S10f done: zero-downtime deploys by slots; 127 polled requests, none failed. S10 done.
+- S11 started: ADR-0036 proposed (O22), resource commands with tests.
+- **Next:** finish S11.
 
 ### 2026-10-21 (auto run 2, S6a) — branch `claude/relaxed-rubin-76m7dl`
 - Owner asked again for an automatic run, slice after slice, until the session ends.

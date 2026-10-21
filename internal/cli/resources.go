@@ -1,0 +1,673 @@
+package cli
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"strconv"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+
+	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
+)
+
+// Resource commands are `bohux <noun> <verb>` (ADR-0036).
+
+// ResourceCommands lists the resource commands for the binary's usage text.
+const ResourceCommands = `  project list|create      projects
+  env list|create          environments of a project (-p)
+  app list|show|create     apps of an environment (-p, -e)
+  route list|add|remove    an app's hosts on the node's ingress
+  secret list|set          an environment's secrets; set reads the value from stdin
+  node list|token          nodes, and bootstrap tokens to register one`
+
+// IsResource reports whether cmd is a resource noun.
+func IsResource(cmd string) bool {
+	switch cmd {
+	case "project", "env", "app", "route", "secret", "node":
+		return true
+	}
+	return false
+}
+
+// resource is one invocation's shared flags and plumbing.
+type resource struct {
+	*command
+	fs       *flag.FlagSet
+	t        target
+	output   *string
+	idemKey  *string
+	stdin    io.Reader
+	verbName string
+}
+
+func (c *command) resource(noun string, args []string, stdin io.Reader) (*resource, []string, error) {
+	if len(args) == 0 {
+		return nil, nil, fmt.Errorf("%s: missing verb: %w", noun, ErrUsage)
+	}
+	fs, t := c.flags(noun + " " + args[0])
+	r := &resource{command: c, fs: fs, t: t, stdin: stdin, verbName: noun + " " + args[0],
+		output:  fs.String("o", "table", "output: table or json"),
+		idemKey: fs.String("idempotency-key", "", "idempotency key; a fresh one by default")}
+	return r, args[1:], nil
+}
+
+// positional parses flags around exactly n positional arguments.
+func (r *resource) positional(args []string, n int, names string) ([]string, error) {
+	var pos []string
+	for {
+		if err := r.fs.Parse(args); err != nil {
+			return nil, fmt.Errorf("%s: %w: %w", r.verbName, err, ErrUsage)
+		}
+		rest := r.fs.Args()
+		if len(rest) == 0 {
+			break
+		}
+		pos, args = append(pos, rest[0]), rest[1:]
+	}
+	if len(pos) != n {
+		return nil, fmt.Errorf("%s: want %s: %w", r.verbName, names, ErrUsage)
+	}
+	if *r.output != "table" && *r.output != "json" {
+		return nil, fmt.Errorf("%s: -o must be table or json: %w", r.verbName, ErrUsage)
+	}
+	return pos, r.connect()
+}
+
+func (r *resource) key() string {
+	if *r.idemKey != "" {
+		return *r.idemKey
+	}
+	return key()
+}
+
+// emit prints msg as protojson with -o json, else the table.
+func (r *resource) emit(msg proto.Message, header []string, rows [][]string) error {
+	if *r.output == "json" {
+		b, err := protojson.MarshalOptions{UseProtoNames: true, Multiline: true}.Marshal(msg)
+		if err != nil {
+			return fmt.Errorf("encode output: %w", err)
+		}
+		r.printf("%s\n", b)
+		return nil
+	}
+	tw := tabwriter.NewWriter(r.out, 0, 4, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, strings.Join(header, "\t"))
+	for _, row := range rows {
+		_, _ = fmt.Fprintln(tw, strings.Join(row, "\t"))
+	}
+	return tw.Flush()
+}
+
+// runResource dispatches `bohux <noun> <verb>`.
+func (c *command) runResource(ctx context.Context, noun string, args []string, stdin io.Reader) error {
+	r, rest, err := c.resource(noun, args, stdin)
+	if err != nil {
+		return err
+	}
+	verb := noun + " " + args[0]
+	switch verb {
+	case "project list":
+		return r.projectList(ctx, rest)
+	case "project create":
+		return r.projectCreate(ctx, rest)
+	case "env list":
+		return r.envList(ctx, rest)
+	case "env create":
+		return r.envCreate(ctx, rest)
+	case "app list":
+		return r.appList(ctx, rest)
+	case "app show":
+		return r.appShow(ctx, rest)
+	case "app create":
+		return r.appCreate(ctx, rest)
+	case "route list":
+		return r.routeList(ctx, rest)
+	case "route add":
+		return r.routeChange(ctx, rest, true)
+	case "route remove":
+		return r.routeChange(ctx, rest, false)
+	case "secret list":
+		return r.secretList(ctx, rest)
+	case "secret set":
+		return r.secretSet(ctx, rest)
+	case "node list":
+		return r.nodeList(ctx, rest)
+	case "node token":
+		return r.nodeToken(ctx, rest)
+	}
+	return fmt.Errorf("unknown command %q: %w", verb, ErrUsage)
+}
+
+// --- project ---------------------------------------------------------------------
+
+func (r *resource) projectList(ctx context.Context, args []string) error {
+	if _, err := r.positional(args, 0, "no arguments"); err != nil {
+		return err
+	}
+	resp := &bohuxv1.ListProjectsResponse{}
+	token := ""
+	for {
+		page, err := r.projects.ListProjects(ctx, call(r.token, &bohuxv1.ListProjectsRequest{PageToken: token}))
+		if err != nil {
+			return fmt.Errorf("list projects: %w", err)
+		}
+		resp.Projects = append(resp.Projects, page.Msg.GetProjects()...)
+		if token = page.Msg.GetNextPageToken(); token == "" {
+			break
+		}
+	}
+	rows := make([][]string, 0, len(resp.GetProjects()))
+	for _, p := range resp.GetProjects() {
+		rows = append(rows, []string{p.GetSlug(), p.GetDisplayName(), p.GetMeta().GetId()})
+	}
+	return r.emit(resp, []string{"SLUG", "NAME", "ID"}, rows)
+}
+
+func (r *resource) projectCreate(ctx context.Context, args []string) error {
+	name := r.fs.String("name", "", "display name")
+	pos, err := r.positional(args, 1, "a project slug")
+	if err != nil {
+		return err
+	}
+	resp, err := r.projects.CreateProject(ctx, call(r.token, &bohuxv1.CreateProjectRequest{
+		Slug: pos[0], DisplayName: *name, IdempotencyKey: r.key()}))
+	if err != nil {
+		return fmt.Errorf("create project: %w", err)
+	}
+	p := resp.Msg.GetProject()
+	return r.emit(resp.Msg, []string{"SLUG", "NAME", "ID"}, [][]string{{p.GetSlug(), p.GetDisplayName(), p.GetMeta().GetId()}})
+}
+
+// --- env -------------------------------------------------------------------------
+
+func (r *resource) projectID(ctx context.Context) (string, error) {
+	if *r.t.project == "" {
+		return "", fmt.Errorf("-p (project) or %s is required: %w", EnvProject, ErrUsage)
+	}
+	p, err := r.projects.GetProject(ctx, call(r.token, &bohuxv1.GetProjectRequest{
+		Lookup: &bohuxv1.GetProjectRequest_Slug{Slug: *r.t.project}}))
+	if err != nil {
+		return "", fmt.Errorf("project %q: %w", *r.t.project, err)
+	}
+	return p.Msg.GetProject().GetMeta().GetId(), nil
+}
+
+func (r *resource) envID(ctx context.Context) (string, error) {
+	if *r.t.env == "" {
+		return "", fmt.Errorf("-e (environment) is required: %w", ErrUsage)
+	}
+	project, err := r.projectID(ctx)
+	if err != nil {
+		return "", err
+	}
+	e, err := r.envs.GetEnvironment(ctx, call(r.token, &bohuxv1.GetEnvironmentRequest{
+		Lookup: &bohuxv1.GetEnvironmentRequest_Slug{Slug: &bohuxv1.EnvironmentSlug{ProjectId: project, Slug: *r.t.env}}}))
+	if err != nil {
+		return "", fmt.Errorf("environment %q: %w", *r.t.env, err)
+	}
+	return e.Msg.GetEnvironment().GetMeta().GetId(), nil
+}
+
+func (r *resource) envList(ctx context.Context, args []string) error {
+	if _, err := r.positional(args, 0, "no arguments"); err != nil {
+		return err
+	}
+	project, err := r.projectID(ctx)
+	if err != nil {
+		return err
+	}
+	resp := &bohuxv1.ListEnvironmentsResponse{}
+	token := ""
+	for {
+		page, err := r.envs.ListEnvironments(ctx, call(r.token, &bohuxv1.ListEnvironmentsRequest{ProjectId: project, PageToken: token}))
+		if err != nil {
+			return fmt.Errorf("list environments: %w", err)
+		}
+		resp.Environments = append(resp.Environments, page.Msg.GetEnvironments()...)
+		if token = page.Msg.GetNextPageToken(); token == "" {
+			break
+		}
+	}
+	rows := make([][]string, 0, len(resp.GetEnvironments()))
+	for _, e := range resp.GetEnvironments() {
+		b := e.GetProviderBinding()
+		rows = append(rows, []string{e.GetSlug(), b.GetProvider(), b.GetNodeId(), e.GetMeta().GetId()})
+	}
+	return r.emit(resp, []string{"SLUG", "PROVIDER", "NODE", "ID"}, rows)
+}
+
+func (r *resource) envCreate(ctx context.Context, args []string) error {
+	node := r.fs.String("node", "", "slug of the node the environment runs on (required)")
+	providerName := r.fs.String("provider", "docker", "provider the node runs it with")
+	pos, err := r.positional(args, 1, "an environment slug")
+	if err != nil {
+		return err
+	}
+	if *node == "" {
+		return fmt.Errorf("env create: --node is required: %w", ErrUsage)
+	}
+	project, err := r.projectID(ctx)
+	if err != nil {
+		return err
+	}
+	nodeID, err := r.nodeID(ctx, *node)
+	if err != nil {
+		return err
+	}
+	resp, err := r.envs.CreateEnvironment(ctx, call(r.token, &bohuxv1.CreateEnvironmentRequest{ProjectId: project,
+		Slug: pos[0], ProviderBinding: &bohuxv1.ProviderBinding{Provider: *providerName,
+			Target: &bohuxv1.ProviderBinding_NodeId{NodeId: nodeID}},
+		IdempotencyKey: r.key()}))
+	if err != nil {
+		return fmt.Errorf("create environment: %w", err)
+	}
+	e := resp.Msg.GetEnvironment()
+	return r.emit(resp.Msg, []string{"SLUG", "PROVIDER", "NODE", "ID"},
+		[][]string{{e.GetSlug(), *providerName, nodeID, e.GetMeta().GetId()}})
+}
+
+// --- node ------------------------------------------------------------------------
+
+func (r *resource) nodes(ctx context.Context) (*bohuxv1.ListNodesResponse, error) {
+	resp := &bohuxv1.ListNodesResponse{}
+	token := ""
+	for {
+		page, err := r.nodesAPI.ListNodes(ctx, call(r.token, &bohuxv1.ListNodesRequest{PageToken: token}))
+		if err != nil {
+			return nil, fmt.Errorf("list nodes: %w", err)
+		}
+		resp.Nodes = append(resp.Nodes, page.Msg.GetNodes()...)
+		if token = page.Msg.GetNextPageToken(); token == "" {
+			return resp, nil
+		}
+	}
+}
+
+func (r *resource) nodeID(ctx context.Context, slug string) (string, error) {
+	resp, err := r.nodes(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, n := range resp.GetNodes() {
+		if n.GetSlug() == slug {
+			return n.GetMeta().GetId(), nil
+		}
+	}
+	return "", fmt.Errorf("no node %q", slug)
+}
+
+func (r *resource) nodeList(ctx context.Context, args []string) error {
+	if _, err := r.positional(args, 0, "no arguments"); err != nil {
+		return err
+	}
+	resp, err := r.nodes(ctx)
+	if err != nil {
+		return err
+	}
+	rows := make([][]string, 0, len(resp.GetNodes()))
+	for _, n := range resp.GetNodes() {
+		seen := "never"
+		if n.GetLastSeenAt() != nil {
+			seen = n.GetLastSeenAt().AsTime().UTC().Format(time.RFC3339)
+		}
+		rows = append(rows, []string{n.GetSlug(), strings.ToLower(strings.TrimPrefix(n.GetState().String(), "NODE_STATE_")),
+			n.GetAgentVersion(), seen, n.GetMeta().GetId()})
+	}
+	return r.emit(resp, []string{"SLUG", "STATE", "AGENT", "LAST SEEN", "ID"}, rows)
+}
+
+// nodeToken prints a bootstrap token for `bohux agent register` on a new node. The
+// token is a credential: it goes to stdout only, once.
+func (r *resource) nodeToken(ctx context.Context, args []string) error {
+	pos, err := r.positional(args, 1, "the new node's slug")
+	if err != nil {
+		return err
+	}
+	resp, err := r.nodesAPI.CreateBootstrapToken(ctx, call(r.token, &bohuxv1.CreateBootstrapTokenRequest{
+		NodeSlug: pos[0], IdempotencyKey: r.key()}))
+	if err != nil {
+		return fmt.Errorf("create bootstrap token: %w", err)
+	}
+	m := resp.Msg
+	return r.emit(m, []string{"TOKEN", "CA PIN", "EXPIRES"},
+		[][]string{{m.GetToken(), m.GetCaCertSha256(), m.GetExpiresAt().AsTime().UTC().Format(time.RFC3339)}})
+}
+
+// --- secret ----------------------------------------------------------------------
+
+func (r *resource) secretList(ctx context.Context, args []string) error {
+	if _, err := r.positional(args, 0, "no arguments"); err != nil {
+		return err
+	}
+	env, err := r.envID(ctx)
+	if err != nil {
+		return err
+	}
+	resp := &bohuxv1.ListSecretRefsResponse{}
+	token := ""
+	for {
+		page, err := r.secrets.ListSecretRefs(ctx, call(r.token, &bohuxv1.ListSecretRefsRequest{EnvironmentId: env, PageToken: token}))
+		if err != nil {
+			return fmt.Errorf("list secrets: %w", err)
+		}
+		resp.Secrets = append(resp.Secrets, page.Msg.GetSecrets()...)
+		if token = page.Msg.GetNextPageToken(); token == "" {
+			break
+		}
+	}
+	rows := make([][]string, 0, len(resp.GetSecrets()))
+	for _, s := range resp.GetSecrets() {
+		rows = append(rows, []string{s.GetKey(), s.GetHandle()})
+	}
+	return r.emit(resp, []string{"KEY", "HANDLE"}, rows)
+}
+
+// secretSet reads the value from stdin (ADR-0036 item 4), never from an argument, and
+// prints only the handle. With --app it also adds the secret to that App.
+func (r *resource) secretSet(ctx context.Context, args []string) error {
+	app := r.fs.String("app", "", "also give this app the secret as an environment variable")
+	pos, err := r.positional(args, 1, "the secret's key, e.g. DATABASE_URL")
+	if err != nil {
+		return err
+	}
+	if r.stdin == nil {
+		return fmt.Errorf("secret set: the value is read from stdin: %w", ErrUsage)
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.stdin, 1<<20))
+	if err != nil {
+		return fmt.Errorf("secret set: read the value from stdin: %w", err)
+	}
+	value := strings.TrimSuffix(string(raw), "\n")
+	if value == "" {
+		return errors.New("secret set: the value on stdin is empty")
+	}
+	env, err := r.envID(ctx)
+	if err != nil {
+		return err
+	}
+	resp, err := r.secrets.SetSecret(ctx, call(r.token, &bohuxv1.SetSecretRequest{EnvironmentId: env,
+		Key: pos[0], Value: value, IdempotencyKey: r.key()}))
+	if err != nil {
+		return fmt.Errorf("set secret: %w", err)
+	}
+	s := resp.Msg.GetSecret()
+	if *app != "" {
+		if err := r.attachSecret(ctx, *app, s); err != nil {
+			return err
+		}
+	}
+	return r.emit(resp.Msg, []string{"KEY", "HANDLE"}, [][]string{{s.GetKey(), s.GetHandle()}})
+}
+
+func (r *resource) attachSecret(ctx context.Context, slug string, s *bohuxv1.Secret) error {
+	return r.updateApp(ctx, slug, func(a *bohuxv1.App) bool {
+		for _, ref := range a.GetSecrets() {
+			if ref.GetKey() == s.GetKey() {
+				if ref.GetHandle() == s.GetHandle() {
+					return false
+				}
+				ref.Handle = s.GetHandle()
+				return true
+			}
+		}
+		a.Secrets = append(a.Secrets, &bohuxv1.SecretRef{Key: s.GetKey(), Handle: s.GetHandle()})
+		return true
+	})
+}
+
+// updateApp applies change to the App's current state and writes it back, unless
+// change reports nothing changed.
+func (r *resource) updateApp(ctx context.Context, slug string, change func(*bohuxv1.App) bool) error {
+	a, err := r.app(ctx, r.t, slug)
+	if err != nil {
+		return err
+	}
+	if !change(a) {
+		return nil
+	}
+	_, err = r.apps.UpdateApp(ctx, call(r.token, &bohuxv1.UpdateAppRequest{Id: a.GetMeta().GetId(),
+		Source: a.GetSource(), Runtime: a.GetRuntime(), Secrets: a.GetSecrets(),
+		ProviderOptions: a.GetProviderOptions(), Routes: a.GetRoutes(),
+		ExpectedRevisionId: a.GetMeta().GetRevisionId(), IdempotencyKey: r.key()}))
+	if err != nil {
+		return fmt.Errorf("update app %q: %w", slug, err)
+	}
+	return nil
+}
+
+// --- app -------------------------------------------------------------------------
+
+func appRow(a *bohuxv1.App) []string {
+	src := ""
+	switch k := a.GetSource().GetKind().(type) {
+	case *bohuxv1.Source_Image:
+		src = k.Image.GetRepository() + "@" + k.Image.GetDigest()
+	case *bohuxv1.Source_Git:
+		src = k.Git.GetRepoUrl()
+	}
+	var hosts []string
+	for _, rt := range a.GetRoutes() {
+		hosts = append(hosts, rt.GetHost())
+	}
+	return []string{a.GetSlug(), strconv.Itoa(int(a.GetRuntime().GetReplicas())), strings.Join(hosts, ","), src}
+}
+
+var appHeader = []string{"SLUG", "REPLICAS", "ROUTES", "SOURCE"}
+
+func (r *resource) appList(ctx context.Context, args []string) error {
+	if _, err := r.positional(args, 0, "no arguments"); err != nil {
+		return err
+	}
+	env, err := r.envID(ctx)
+	if err != nil {
+		return err
+	}
+	resp := &bohuxv1.ListAppsResponse{}
+	token := ""
+	for {
+		page, err := r.apps.ListApps(ctx, call(r.token, &bohuxv1.ListAppsRequest{EnvironmentId: env, PageToken: token}))
+		if err != nil {
+			return fmt.Errorf("list apps: %w", err)
+		}
+		resp.Apps = append(resp.Apps, page.Msg.GetApps()...)
+		if token = page.Msg.GetNextPageToken(); token == "" {
+			break
+		}
+	}
+	rows := make([][]string, 0, len(resp.GetApps()))
+	for _, a := range resp.GetApps() {
+		rows = append(rows, appRow(a))
+	}
+	return r.emit(resp, appHeader, rows)
+}
+
+func (r *resource) appShow(ctx context.Context, args []string) error {
+	pos, err := r.positional(args, 1, "an app slug")
+	if err != nil {
+		return err
+	}
+	a, err := r.app(ctx, r.t, pos[0])
+	if err != nil {
+		return err
+	}
+	return r.emit(&bohuxv1.GetAppResponse{App: a}, appHeader, [][]string{appRow(a)})
+}
+
+// repeated is a flag that may be given more than once.
+type repeated []string
+
+func (s *repeated) String() string     { return strings.Join(*s, ",") }
+func (s *repeated) Set(v string) error { *s = append(*s, v); return nil }
+
+func (r *resource) appCreate(ctx context.Context, args []string) error {
+	image := r.fs.String("image", "", "prebuilt image, repository@sha256:<digest>")
+	git := r.fs.String("git", "", "Git repository URL to build from (Dockerfile)")
+	ref := r.fs.String("ref", "", "default branch, tag, or commit to build")
+	replicas := r.fs.Int("replicas", 1, "replicas")
+	health := r.fs.String("health", "", "HTTP health check, PATH or PATH:PORT (default port: the first)")
+	var ports, routes repeated
+	r.fs.Var(&ports, "port", "container port, or CONTAINER:HOST to publish on the host; repeatable")
+	r.fs.Var(&routes, "route", "host the node's ingress serves, HOST or HOST:PORT; repeatable")
+	pos, err := r.positional(args, 1, "an app slug")
+	if err != nil {
+		return err
+	}
+	src := &bohuxv1.Source{}
+	switch {
+	case *image != "" && *git != "":
+		return fmt.Errorf("app create: --image and --git are exclusive: %w", ErrUsage)
+	case *image != "":
+		img, err := parseImage(*image)
+		if err != nil {
+			return err
+		}
+		src.Kind = &bohuxv1.Source_Image{Image: img}
+	case *git != "":
+		src.Kind = &bohuxv1.Source_Git{Git: &bohuxv1.GitSource{RepoUrl: *git, Ref: *ref}}
+	default:
+		return fmt.Errorf("app create: --image or --git is required: %w", ErrUsage)
+	}
+	rt, rs, err := runtimeFromFlags(*replicas, ports, *health, routes)
+	if err != nil {
+		return err
+	}
+	env, err := r.envID(ctx)
+	if err != nil {
+		return err
+	}
+	resp, err := r.apps.CreateApp(ctx, call(r.token, &bohuxv1.CreateAppRequest{EnvironmentId: env, Slug: pos[0],
+		Source: src, Runtime: rt, Routes: rs, IdempotencyKey: r.key()}))
+	if err != nil {
+		return fmt.Errorf("create app: %w", err)
+	}
+	return r.emit(resp.Msg, appHeader, [][]string{appRow(resp.Msg.GetApp())})
+}
+
+// runtimeFromFlags builds the Runtime and routes of `app create`.
+func runtimeFromFlags(replicas int, ports []string, health string, routes []string) (*bohuxv1.Runtime, []*bohuxv1.Route, error) {
+	rt := &bohuxv1.Runtime{Replicas: int32(replicas)}
+	for _, p := range ports {
+		c, h, _ := strings.Cut(p, ":")
+		cp, err := strconv.Atoi(c)
+		if err != nil {
+			return nil, nil, fmt.Errorf("--port %q: want CONTAINER or CONTAINER:HOST: %w", p, ErrUsage)
+		}
+		port := &bohuxv1.Port{ContainerPort: int32(cp)}
+		if h != "" {
+			hp, err := strconv.Atoi(h)
+			if err != nil {
+				return nil, nil, fmt.Errorf("--port %q: want CONTAINER or CONTAINER:HOST: %w", p, ErrUsage)
+			}
+			port.HostPort = int32(hp)
+		}
+		rt.Ports = append(rt.Ports, port)
+	}
+	first := int32(0)
+	if len(rt.GetPorts()) > 0 {
+		first = rt.GetPorts()[0].GetContainerPort()
+	}
+	if health != "" {
+		path, p, err := hostPort(health, first, "--health", "PATH or PATH:PORT")
+		if err != nil {
+			return nil, nil, err
+		}
+		rt.Health = &bohuxv1.HealthCheck{Path: path, Port: p}
+	}
+	var rs []*bohuxv1.Route
+	for _, s := range routes {
+		host, p, err := hostPort(s, first, "--route", "HOST or HOST:PORT")
+		if err != nil {
+			return nil, nil, err
+		}
+		rs = append(rs, &bohuxv1.Route{Host: host, Port: p})
+	}
+	return rt, rs, nil
+}
+
+// hostPort splits NAME[:PORT], defaulting the port to def.
+func hostPort(s string, def int32, flagName, want string) (string, int32, error) {
+	name, p, ok := strings.Cut(s, ":")
+	if !ok {
+		if def == 0 {
+			return "", 0, fmt.Errorf("%s %q: no --port to default to; want %s: %w", flagName, s, want, ErrUsage)
+		}
+		return name, def, nil
+	}
+	n, err := strconv.Atoi(p)
+	if err != nil || name == "" {
+		return "", 0, fmt.Errorf("%s %q: want %s: %w", flagName, s, want, ErrUsage)
+	}
+	return name, int32(n), nil
+}
+
+// --- route -----------------------------------------------------------------------
+
+func (r *resource) routeList(ctx context.Context, args []string) error {
+	pos, err := r.positional(args, 1, "an app slug")
+	if err != nil {
+		return err
+	}
+	a, err := r.app(ctx, r.t, pos[0])
+	if err != nil {
+		return err
+	}
+	rows := make([][]string, 0, len(a.GetRoutes()))
+	for _, rt := range a.GetRoutes() {
+		rows = append(rows, []string{rt.GetHost(), strconv.Itoa(int(rt.GetPort()))})
+	}
+	return r.emit(&bohuxv1.App{Routes: a.GetRoutes()}, []string{"HOST", "PORT"}, rows)
+}
+
+// routeChange adds HOST[:PORT] to the App's routes, or removes HOST. It takes effect
+// at once, without a deploy (ADR-0034).
+func (r *resource) routeChange(ctx context.Context, args []string, add bool) error {
+	pos, err := r.positional(args, 2, "an app slug and a host")
+	if err != nil {
+		return err
+	}
+	slug, spec := pos[0], pos[1]
+	var cerr error
+	uerr := r.updateApp(ctx, slug, func(a *bohuxv1.App) bool {
+		first := int32(0)
+		if ps := a.GetRuntime().GetPorts(); len(ps) > 0 {
+			first = ps[0].GetContainerPort()
+		}
+		host, port, perr := hostPort(spec, first, "route", "HOST or HOST:PORT")
+		if !add {
+			host, _, _ = strings.Cut(spec, ":")
+		}
+		kept := a.GetRoutes()[:0]
+		changed := false
+		for _, rt := range a.GetRoutes() {
+			if rt.GetHost() == host {
+				changed = true
+				continue
+			}
+			kept = append(kept, rt)
+		}
+		a.Routes = kept
+		if add {
+			if perr != nil {
+				cerr = perr
+				return false
+			}
+			a.Routes = append(a.Routes, &bohuxv1.Route{Host: host, Port: port})
+			return true
+		}
+		if !changed {
+			cerr = fmt.Errorf("route remove: %s has no route %q", slug, host)
+		}
+		return changed
+	})
+	if cerr != nil {
+		return cerr
+	}
+	return uerr
+}

@@ -1,6 +1,5 @@
-// Package cli is the bohux command-line client: deploy, rollback, scale, logs, exec.
-// It is a
-// client of the public API and nothing more (CLAUDE.md rule 8): every command is RPCs
+// Package cli is the bohux command-line client: deploy, rollback, scale, logs, exec,
+// and the resource commands (ADR-0036). It is a client of the public API and nothing more (CLAUDE.md rule 8): every command is RPCs
 // any other client could make.
 package cli
 
@@ -42,9 +41,12 @@ const Commands = `  deploy          build or import a release of an app and depl
   logs            print an app's log lines
   exec            run a command in one of an app's instances`
 
-// Run executes one CLI command.
-func Run(ctx context.Context, cmd string, args []string, stdout io.Writer, getenv func(string) string) error {
+// Run executes one CLI command. stdin is read only by `secret set`.
+func Run(ctx context.Context, cmd string, args []string, stdin io.Reader, stdout io.Writer, getenv func(string) string) error {
 	c := &command{out: stdout, getenv: getenv}
+	if IsResource(cmd) {
+		return c.runResource(ctx, cmd, args, stdin)
+	}
 	switch cmd {
 	case "deploy":
 		return c.deploy(ctx, args)
@@ -71,6 +73,8 @@ type command struct {
 	releases    bohuxv1connect.ReleaseServiceClient
 	deployments bohuxv1connect.DeploymentServiceClient
 	workloads   bohuxv1connect.WorkloadServiceClient
+	nodesAPI    bohuxv1connect.NodeServiceClient
+	secrets     bohuxv1connect.SecretServiceClient
 }
 
 // target is the flags every App command takes.
@@ -127,6 +131,8 @@ func (c *command) connect() error {
 	c.releases = bohuxv1connect.NewReleaseServiceClient(hc, base)
 	c.deployments = bohuxv1connect.NewDeploymentServiceClient(hc, base)
 	c.workloads = bohuxv1connect.NewWorkloadServiceClient(hc, base)
+	c.nodesAPI = bohuxv1connect.NewNodeServiceClient(hc, base)
+	c.secrets = bohuxv1connect.NewSecretServiceClient(hc, base)
 	return nil
 }
 
