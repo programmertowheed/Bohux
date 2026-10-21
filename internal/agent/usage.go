@@ -80,7 +80,8 @@ func (s *Sampler) Sample(ctx context.Context) {
 			continue
 		}
 		node.Disks = append(node.Disks, &bohuxv1.DiskUsage{Path: p,
-			TotalBytes: int64(st.Blocks) * st.Bsize, FreeBytes: int64(st.Bavail) * st.Bsize})
+			// Bsize is int64 on Linux, uint32 on macOS.
+			TotalBytes: int64(st.Blocks) * int64(st.Bsize), FreeBytes: int64(st.Bavail) * int64(st.Bsize)}) //nolint:unconvert
 	}
 	var workloads map[provider.ResourceRef]provider.Usage
 	if ur, ok := s.Provider.(provider.UsageReader); ok {
