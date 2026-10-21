@@ -83,6 +83,10 @@ func TestSlotSwitch(t *testing.T) {
 		if !ws.GetIngressLoaded() || serving() != "api-green:8080" || fake.isRunning(slot("blue")) {
 			t.Errorf("retried cut-over: %v, serving %q", ws, serving())
 		}
+		// Logs and exec reach the slot that serves.
+		if ref, ok := r.Ref("api"); !ok || ref != slot("green") {
+			t.Errorf("Ref = %+v, %v; want the green slot", ref, ok)
+		}
 	})
 	t.Run("a crashed live slot restarts in place", func(t *testing.T) {
 		fake.crash(slot("green"))

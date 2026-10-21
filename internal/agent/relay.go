@@ -28,8 +28,13 @@ func (r *Reconciler) Ref(appID string) (provider.ResourceRef, bool) {
 	a := r.Cache.Current()
 	for _, w := range a.GetWorkloads() {
 		if w.GetAppId() == appID {
-			return provider.ResourceRef{Environment: w.GetEnvironmentId(), App: w.GetAppId(),
-				EnvironmentSlug: w.GetEnvironmentSlug(), AppSlug: w.GetAppSlug()}, true
+			ref := provider.ResourceRef{Environment: w.GetEnvironmentId(), App: w.GetAppId(),
+				EnvironmentSlug: w.GetEnvironmentSlug(), AppSlug: w.GetAppSlug()}
+			// The slot that serves (ADR-0035); none for an App that never switched.
+			if slots, err := r.loadSlots(); err == nil {
+				ref.Slot = slots[slotKey(ref)].Slot
+			}
+			return ref, true
 		}
 	}
 	return provider.ResourceRef{}, false
