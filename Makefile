@@ -15,7 +15,7 @@ lint: ## Lint Go and proto
 test: ## Unit tests
 	go test ./... -race -count=1
 
-test-integration: ## Integration tests (needs docker)
+test-integration: ## Integration tests (needs BOHUX_TEST_POSTGRES_URL, see docs/reference/config.md)
 	go test ./... -race -count=1 -tags=integration
 
 conformance: ## Provider conformance — the gate for any new provider

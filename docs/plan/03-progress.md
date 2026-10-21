@@ -38,21 +38,25 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S3b — control plane mode (⏳, next to start)
-- **Exact next step:** add a `controlplane` command to `cmd/bohux` that opens the store,
-  runs `store.Migrate`, and serves ConnectRPC over h2c with a health endpoint.
+- **Slice:** S3c — authentication and RBAC (⏳, next to start)
+- **Exact next step:** migration `00012` for `idempotency_keys` (ADR-0022), then the
+  token parse/hash package in `internal/auth`.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S3b (control plane mode) on
-> branch `claude/relaxed-rubin-76m7dl`. Add `bohux controlplane` (opens the store, runs
-> store.Migrate, serves ConnectRPC over h2c with a health check, shuts down cleanly on
-> SIGTERM) and `bohux admin migrate`, in `internal/` packages with `cmd/` kept thin.
-> Keep configuration minimal (listen address and Postgres DSN), from flags with env
-> fallbacks, documented in one place; do not invent other keys. Test startup and
-> shutdown, and run build, vet, golangci-lint (also with the integration tag) and tests
-> (integration on the local Postgres, see the tracker). Tick the S3b box, update the
-> tracker and the next session prompt, commit, push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S3c (authentication and
+> RBAC) on branch `claude/relaxed-rubin-76m7dl`. Follow ADR-0022 (token format,
+> tenant-first lookup, SHA-256, idempotency records) and ADR-0011 (fixed roles).
+> Build: the idempotency_keys migration; `internal/auth` (token parse/issue/verify);
+> a ConnectRPC interceptor that authenticates, puts tenant and principal in ctx, and
+> checks a per-RPC permission table, with a test that every RPC in the generated
+> bohux.v1 descriptors has an entry; a tenant bootstrap CLI step that prints the first
+> owner token once; IdentityService and TenantService handlers mounted in the control
+> plane. CI's integration job needs a generate step once packages import gen/. Verify
+> with build, vet, golangci-lint (also with the integration tag), unit and integration
+> tests on the local Postgres. If the slice is too big, stop at a clean point and split
+> it in the tracker. Tick boxes, update the tracker and the next session prompt, commit,
+> push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -192,9 +196,12 @@ Split into sub-slices, one session each.
 #### S3a — access design ✅
 - [x] Proposed ADR-0022: token formats, pre-tenant lookup, hashing, idempotency storage
 
-#### S3b — control plane mode ⏳
-- [ ] `bohux controlplane` serves ConnectRPC (h2c) with health; runs `store.Migrate` at
+#### S3b — control plane mode ✅
+- [x] `bohux controlplane` serves ConnectRPC (h2c) with health; runs `store.Migrate` at
       start; `bohux admin migrate`. Config from flags/env, documented in one place
+      (`docs/reference/config.md`). Default listen `127.0.0.1:7400` (a choice; change
+      freely before v0.1). Binary smoke-tested: migrate, serve, `/healthz`, SIGTERM → 0,
+      superuser DSN refused
 
 #### S3c — authentication and RBAC ⏳
 - [ ] API tokens (hashed), roles `viewer`/`deployer`/`owner`, permission check on every
@@ -282,6 +289,9 @@ Split into sub-slices, one session each.
   rule for gates: write the ADR as *proposed*, build on it, list it under *Waiting on
   the owner* (O6 onward).
 - S2a done: ADR-0021 (goose on pgx).
+- S3b done: `internal/controlplane` (h2c server, `/healthz`, clean shutdown),
+  `bohux controlplane`, `bohux admin migrate`, `internal/store/storetest` helper,
+  config reference. CI integration job now covers `./internal/... ./cmd/...`.
 - S3a done: ADR-0022 proposed (O7).
 - S2c done: store write path (Open, InTenant, Create/Update/Delete with head CAS and
   audit event), integration tests green locally.

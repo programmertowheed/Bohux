@@ -4,84 +4,18 @@ package store
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"errors"
-	"net/url"
-	"os"
 	"strings"
 	"testing"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/bohumix/bohux/internal/store/storetest"
 )
 
-// BOHUX_TEST_POSTGRES_URL is a DSN for a role that can create roles and databases.
-// Each test gets its own database, owned by a fresh unprivileged role.
-const adminEnv = "BOHUX_TEST_POSTGRES_URL"
-
-func adminDSN(t *testing.T) string {
-	t.Helper()
-	dsn := os.Getenv(adminEnv)
-	if dsn == "" {
-		t.Fatalf("%s is not set; integration tests need a Postgres to create databases in", adminEnv)
-	}
-	return dsn
-}
-
-func open(t *testing.T, dsn string) *sql.DB {
-	t.Helper()
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	return db
-}
-
-// newAppDB creates a database owned by a new non-superuser role and returns a
-// connection as that role, as Bohux runs in production.
-func newAppDB(t *testing.T) *sql.DB {
-	t.Helper()
-	return open(t, newAppDSN(t))
-}
-
-// newAppDSN creates a database owned by a new non-superuser role and returns its DSN.
-func newAppDSN(t *testing.T) string {
-	t.Helper()
-	ctx := context.Background()
-	admin := open(t, adminDSN(t))
-	name := "bohux_test_" + randomHex(t, 6)
-	pass := randomHex(t, 12)
-	for _, q := range []string{
-		`CREATE ROLE ` + name + ` LOGIN PASSWORD '` + pass + `'`,
-		`CREATE DATABASE ` + name + ` OWNER ` + name,
-	} {
-		if _, err := admin.ExecContext(ctx, q); err != nil {
-			t.Fatalf("%s: %v", q, err)
-		}
-	}
-	t.Cleanup(func() {
-		_, _ = admin.ExecContext(ctx, `DROP DATABASE IF EXISTS `+name+` WITH (FORCE)`)
-		_, _ = admin.ExecContext(ctx, `DROP ROLE IF EXISTS `+name)
-	})
-	u, err := url.Parse(adminDSN(t))
-	if err != nil {
-		t.Fatalf("parse %s: %v", adminEnv, err)
-	}
-	u.User = url.UserPassword(name, pass)
-	u.Path = "/" + name
-	return u.String()
-}
-
-func randomHex(t *testing.T, n int) string {
-	t.Helper()
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		t.Fatalf("random: %v", err)
-	}
-	return hex.EncodeToString(b)
-}
+func adminDSN(t *testing.T) string          { return storetest.AdminDSN(t) }
+func open(t *testing.T, dsn string) *sql.DB { return storetest.Open(t, dsn) }
+func newAppDSN(t *testing.T) string         { return storetest.NewAppDSN(t) }
+func newAppDB(t *testing.T) *sql.DB         { return open(t, newAppDSN(t)) }
 
 func TestMigrateRefusesPrivilegedRole(t *testing.T) {
 	err := Migrate(context.Background(), open(t, adminDSN(t)))

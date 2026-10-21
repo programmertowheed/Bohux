@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log/slog"
 
+	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver for goose
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/lock"
 )
@@ -52,6 +53,20 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 			"version", r.Source.Version, "file", r.Source.Path, "duration", r.Duration)
 	}
 	return nil
+}
+
+// MigrateDSN opens a short-lived connection to dsn and runs Migrate on it.
+func MigrateDSN(ctx context.Context, dsn string) (err error) {
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return fmt.Errorf("open postgres: %w", err)
+	}
+	defer func() {
+		if cerr := db.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("close postgres: %w", cerr)
+		}
+	}()
+	return Migrate(ctx, db)
 }
 
 func newProvider(db *sql.DB) (*goose.Provider, error) {

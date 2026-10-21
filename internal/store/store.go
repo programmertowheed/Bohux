@@ -309,3 +309,11 @@ func mapError(err error) error {
 	}
 	return err
 }
+
+// Ping checks that Postgres answers.
+func (s *Store) Ping(ctx context.Context) error {
+	if err := s.pool.Ping(ctx); err != nil {
+		return fmt.Errorf("ping postgres: %w", err)
+	}
+	return nil
+}
