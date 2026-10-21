@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -63,7 +64,11 @@ func (s *Server) Assign(ctx context.Context, tenant, node uuid.UUID, workloads [
 // workloads are kept as they are. If the latest generation already carries w's
 // Deployment and Release for the App, or, for a removal, no workload for the App, it
 // writes nothing and returns that generation, so retries are idempotent.
-func (s *Server) AssignApp(ctx context.Context, tenant, node, app uuid.UUID, w *agentv1.Workload, actor store.Actor) (uint64, error) {
+//
+// With a non-zero fallbackAfter, a w that replaces another Release carries the
+// workload it replaces as its fallback, which the agent applies on its own if w is
+// never healthy by then (ADR-0031). Compensation passes zero.
+func (s *Server) AssignApp(ctx context.Context, tenant, node, app uuid.UUID, w *agentv1.Workload, fallbackAfter time.Time, actor store.Actor) (uint64, error) {
 	if w != nil {
 		if len(w.GetSealedSecrets()) > 0 {
 			return 0, errSealedInRequest
@@ -84,6 +89,11 @@ func (s *Server) AssignApp(ctx context.Context, tenant, node, app uuid.UUID, w *
 			found = true
 			if w != nil && c.GetDeploymentId() == w.GetDeploymentId() && c.GetReleaseId() == w.GetReleaseId() {
 				return nil, false, nil
+			}
+			if w != nil && !fallbackAfter.IsZero() && c.GetReleaseId() != w.GetReleaseId() {
+				fb := proto.Clone(c).(*agentv1.Workload)
+				fb.Fallback, fb.FallbackAfter, fb.SealedSecrets = nil, nil, nil
+				w.Fallback, w.FallbackAfter = fb, timestamppb.New(fallbackAfter)
 			}
 		}
 		if w == nil {
@@ -267,7 +277,7 @@ func (s *Server) RotateTx(ctx context.Context, tx *store.Tx, handle string, acto
 
 func references(workloads []*agentv1.Workload, handle string) bool {
 	for _, w := range workloads {
-		for _, ref := range w.GetSecrets() {
+		for _, ref := range append(w.GetSecrets(), w.GetFallback().GetSecrets()...) {
 			if ref.GetHandle() == handle {
 				return true
 			}
@@ -339,34 +349,14 @@ func (s *Server) signedLatest(ctx context.Context, tenant, node uuid.UUID, after
 	var recipient [32]byte
 	copy(recipient[:], sealingKey)
 	for _, w := range payload.GetWorkloads() {
-		if len(w.GetSecrets()) == 0 {
-			continue
-		}
-		if s.Secrets == nil {
-			return nil, 0, errNoResolver
-		}
-		handles := make([]string, len(w.GetSecrets()))
-		for i, ref := range w.GetSecrets() {
-			handles[i] = ref.GetHandle()
-		}
-		byHandle, err := s.Secrets.Resolve(ctx, tenant, handles)
-		if err != nil {
-			return nil, 0, fmt.Errorf("resolve secrets for app %s: %w", w.GetAppId(), err)
-		}
-		values := &agentv1.SecretValues{Values: map[string]string{}}
-		for _, ref := range w.GetSecrets() {
-			v, ok := byHandle[ref.GetHandle()]
-			if !ok {
-				return nil, 0, fmt.Errorf("secret %s for app %s did not resolve", ref.GetKey(), w.GetAppId())
+		// A fallback runs with its own secrets, so they travel sealed too (ADR-0031).
+		for _, sw := range []*agentv1.Workload{w, w.GetFallback()} {
+			if sw == nil {
+				continue
 			}
-			values.Values[ref.GetKey()] = v
-		}
-		plain, err := proto.Marshal(values)
-		if err != nil {
-			return nil, 0, fmt.Errorf("encode secret values: %w", err)
-		}
-		if w.SealedSecrets, err = box.SealAnonymous(nil, plain, &recipient, rand.Reader); err != nil {
-			return nil, 0, fmt.Errorf("seal secret values: %w", err)
+			if err := s.seal(ctx, tenant, sw, &recipient); err != nil {
+				return nil, 0, err
+			}
 		}
 	}
 	signed, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
@@ -375,6 +365,40 @@ func (s *Server) signedLatest(ctx context.Context, tenant, node uuid.UUID, after
 	}
 	sig, keyID := s.PKI.SignAssignment(signed)
 	return &agentv1.Assignment{Payload: signed, Signature: sig, KeyId: keyID}, uint64(gen), nil
+}
+
+// seal resolves w's secret handles and seals the values to the node's key.
+func (s *Server) seal(ctx context.Context, tenant uuid.UUID, w *agentv1.Workload, recipient *[32]byte) error {
+	if len(w.GetSecrets()) == 0 {
+		return nil
+	}
+	if s.Secrets == nil {
+		return errNoResolver
+	}
+	handles := make([]string, len(w.GetSecrets()))
+	for i, ref := range w.GetSecrets() {
+		handles[i] = ref.GetHandle()
+	}
+	byHandle, err := s.Secrets.Resolve(ctx, tenant, handles)
+	if err != nil {
+		return fmt.Errorf("resolve secrets for app %s: %w", w.GetAppId(), err)
+	}
+	values := &agentv1.SecretValues{Values: map[string]string{}}
+	for _, ref := range w.GetSecrets() {
+		v, ok := byHandle[ref.GetHandle()]
+		if !ok {
+			return fmt.Errorf("secret %s for app %s did not resolve", ref.GetKey(), w.GetAppId())
+		}
+		values.Values[ref.GetKey()] = v
+	}
+	plain, err := proto.Marshal(values)
+	if err != nil {
+		return fmt.Errorf("encode secret values: %w", err)
+	}
+	if w.SealedSecrets, err = box.SealAnonymous(nil, plain, recipient, rand.Reader); err != nil {
+		return fmt.Errorf("seal secret values: %w", err)
+	}
+	return nil
 }
 
 // recordAck stores the highest generation the agent acknowledged, ignoring any

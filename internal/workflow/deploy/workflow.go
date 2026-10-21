@@ -21,6 +21,9 @@ var (
 			MaximumInterval:    time.Minute,
 		},
 	}
+	// fallbackMargin is how long past the health gate the agent waits for this run's
+	// own compensation before it falls back on its own (ADR-0031).
+	fallbackMargin = 2 * time.Minute
 	// healthHeartbeat is how often WaitHealthy heartbeats; twice it is its timeout.
 	healthHeartbeat = 30 * time.Second
 )
@@ -81,8 +84,10 @@ func Workflow(ctx workflow.Context, in Input) (Result, error) {
 		return Result{}, err
 	}
 
-	// From here on something may be assigned, so every failure compensates.
-	assigned, err := d.assign(ctx, in.ReleaseID)
+	// From here on something may be assigned, so every failure compensates. The node
+	// also gets the workload being replaced, in case this run cannot compensate.
+	fallbackAfter := workflow.Now(ctx).Add(d.timeout + fallbackMargin)
+	assigned, err := d.assign(ctx, in.ReleaseID, fallbackAfter)
 	if err != nil {
 		return d.compensate(ctx, failureOf(err, ReasonAssignFailed), temporal.IsCanceledError(err))
 	}
@@ -124,7 +129,7 @@ func (d *run) compensate(ctx workflow.Context, f *Failure, cancelled bool) (Resu
 	if cancelled {
 		final = StateCancelled
 	}
-	assigned, err := d.assign(dctx, d.last)
+	assigned, err := d.assign(dctx, d.last, time.Time{})
 	if err == nil && d.last != "" {
 		err = d.wait(dctx, assigned, d.last)
 	}
@@ -165,14 +170,14 @@ func (d *run) set(ctx workflow.Context, s State, f *Failure) error {
 	}).Get(ctx, nil)
 }
 
-func (d *run) assign(ctx workflow.Context, release string) (Assigned, error) {
+func (d *run) assign(ctx workflow.Context, release string, fallbackAfter time.Time) (Assigned, error) {
 	var (
 		a   *Activities
 		out Assigned
 	)
 	err := workflow.ExecuteActivity(storeCtx(ctx), a.AssignRelease, AssignInput{
 		TenantID: d.in.TenantID, AppID: d.in.AppID, ReleaseID: release,
-		DeploymentID: d.in.DeploymentID, Actor: d.in.Actor,
+		DeploymentID: d.in.DeploymentID, Actor: d.in.Actor, FallbackAfter: fallbackAfter,
 	}).Get(ctx, &out)
 	return out, err
 }

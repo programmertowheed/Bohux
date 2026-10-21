@@ -28,6 +28,12 @@ const (
 	// appliedFile records every workload this agent has applied and not destroyed.
 	// Providers have no list verb (rule 4), so this is how removals are found.
 	appliedFile = "applied.json"
+	// fallbackFile records, per deployment, whether its workload turned healthy or the
+	// agent fell back to the workload it replaced (ADR-0031), so a restart keeps it.
+	fallbackFile = "fallback.json"
+
+	fallbackHealthy = "healthy"
+	fallbackApplied = "applied"
 )
 
 // Reconciler converges the node to the cached assignment, with or without the control
@@ -40,6 +46,8 @@ type Reconciler struct {
 	// Interval between passes; zero means 10 seconds. A new assignment triggers a
 	// pass at once.
 	Interval time.Duration
+	// Now is the clock for fallback deadlines; nil means time.Now.
+	Now func() time.Time
 
 	mu      sync.Mutex
 	latest  *agentv1.StatusReport
@@ -118,12 +126,20 @@ func (r *Reconciler) Once(ctx context.Context) *agentv1.StatusReport {
 		return nil
 	}
 
+	fallbacks, err := r.loadFallbacks()
+	if err != nil {
+		slog.ErrorContext(ctx, "read fallback state; skipping this pass", "err", err)
+		return nil
+	}
 	report := &agentv1.StatusReport{Generation: a.GetGeneration()}
 	desired := map[provider.ResourceRef]bool{}
+	seen := map[string]bool{}
 	for _, w := range a.GetWorkloads() {
 		ref := provider.ResourceRef{Environment: w.GetEnvironmentId(), App: w.GetAppId(),
 			EnvironmentSlug: w.GetEnvironmentSlug(), AppSlug: w.GetAppSlug()}
 		desired[ref] = true
+		seen[w.GetDeploymentId()] = true
+		w, fellBack := r.effective(ctx, w, fallbacks)
 		ws := &agentv1.WorkloadStatus{AppId: w.GetAppId(), ReleaseId: w.GetReleaseId()}
 		report.Workloads = append(report.Workloads, ws)
 		if w.GetProvider() != desc.Name {
@@ -143,7 +159,16 @@ func (r *Reconciler) Once(ctx context.Context) *agentv1.StatusReport {
 			}
 		}
 		r.converge(ctx, ref, w, ws)
+		if fellBack {
+			if ws.Failure == nil {
+				ws.Failure = &bohuxv1.ErrorDetail{Reason: "FALLBACK_APPLIED"}
+			}
+		} else if w.GetFallback() != nil && ws.GetState() == agentv1.WorkloadState_WORKLOAD_STATE_HEALTHY &&
+			fallbacks[w.GetDeploymentId()] == "" {
+			fallbacks[w.GetDeploymentId()] = fallbackHealthy
+		}
 	}
+	r.saveFallbacks(ctx, fallbacks, seen)
 
 	for ref := range applied {
 		if desired[ref] {
@@ -160,6 +185,68 @@ func (r *Reconciler) Once(ctx context.Context) *agentv1.StatusReport {
 		slog.InfoContext(ctx, "workload removed", "app", ref.App)
 	}
 	return report
+}
+
+// effective returns the workload to converge to: w, or the workload it replaced once
+// the agent has fallen back (ADR-0031). It falls back when w carries a fallback whose
+// deadline has passed and w was never seen healthy; a newer assignment (another
+// deployment) is a different key and starts clean.
+func (r *Reconciler) effective(ctx context.Context, w *agentv1.Workload, fallbacks map[string]string) (*agentv1.Workload, bool) {
+	fb := w.GetFallback()
+	if fb == nil || w.GetDeploymentId() == "" {
+		return w, false
+	}
+	switch fallbacks[w.GetDeploymentId()] {
+	case fallbackApplied:
+		return fb, true
+	case fallbackHealthy:
+		return w, false
+	}
+	if r.now().Before(w.GetFallbackAfter().AsTime()) {
+		return w, false
+	}
+	fallbacks[w.GetDeploymentId()] = fallbackApplied
+	slog.WarnContext(ctx, "release never turned healthy and no newer assignment came; falling back",
+		"app", w.GetAppId(), "release", w.GetReleaseId(), "fallback_release", fb.GetReleaseId())
+	return fb, true
+}
+
+func (r *Reconciler) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
+}
+
+func (r *Reconciler) loadFallbacks() (map[string]string, error) {
+	out := map[string]string{}
+	raw, err := os.ReadFile(filepath.Join(r.State.dir, fallbackFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", fallbackFile, err)
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", fallbackFile, err)
+	}
+	return out, nil
+}
+
+// saveFallbacks keeps the entries of deployments still assigned and writes them.
+func (r *Reconciler) saveFallbacks(ctx context.Context, fallbacks map[string]string, assigned map[string]bool) {
+	for id := range fallbacks {
+		if !assigned[id] {
+			delete(fallbacks, id)
+		}
+	}
+	b, err := json.Marshal(fallbacks)
+	if err == nil {
+		err = writeFile(r.State.dir, fallbackFile, b)
+	}
+	if err != nil {
+		slog.ErrorContext(ctx, "record fallback state", "err", err)
+	}
 }
 
 // converge applies w if the target does not match it or is not running, then fills
@@ -215,7 +302,7 @@ type workloadSecrets struct {
 func (s workloadSecrets) Open() (map[string]string, error) { return s.st.OpenSecrets(s.w) }
 
 // spec builds the provider Spec. Its hash covers the workload minus fields that do
-// not change what runs (the per-send seal, the deployment id) plus a keyed digest of
+// not change what runs (the per-send seal, the deployment id, the fallback) plus a keyed digest of
 // the secret values, so a rotated secret re-applies without the hash revealing it.
 func (r *Reconciler) spec(ref provider.ResourceRef, w *agentv1.Workload) (provider.Spec, error) {
 	values, err := r.State.OpenSecrets(w)
@@ -224,6 +311,8 @@ func (r *Reconciler) spec(ref provider.ResourceRef, w *agentv1.Workload) (provid
 	}
 	shape := proto.Clone(w).(*agentv1.Workload)
 	shape.SealedSecrets, shape.DeploymentId = nil, ""
+	// The fallback changes what may run later, not what runs now.
+	shape.Fallback, shape.FallbackAfter = nil, nil
 	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(shape)
 	if err != nil {
 		return provider.Spec{}, fmt.Errorf("encode workload: %w", err)

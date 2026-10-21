@@ -285,7 +285,7 @@ func TestAssignApp(t *testing.T) {
 	}
 	assign := func(app uuid.UUID, w *agentv1.Workload) uint64 {
 		t.Helper()
-		gen, err := h.srv.AssignApp(ctx, h.tenant, node, app, w, system)
+		gen, err := h.srv.AssignApp(ctx, h.tenant, node, app, w, time.Time{}, system)
 		if err != nil {
 			t.Fatalf("AssignApp: %v", err)
 		}
@@ -326,15 +326,41 @@ func TestAssignApp(t *testing.T) {
 		t.Errorf("repeat removal wrote generation %d, want 4", gen)
 	}
 
+	t.Run("a forward deploy carries the workload it replaces", func(t *testing.T) {
+		after := time.Now().Add(7 * time.Minute).UTC().Truncate(time.Second)
+		if _, err := h.srv.AssignApp(ctx, h.tenant, node, app2, deployed(app2, "w2", "d5"), after, system); err != nil {
+			t.Fatal(err)
+		}
+		var w *agentv1.Workload
+		for _, x := range latest() {
+			if x.GetAppId() == app2.String() {
+				w = x
+			}
+		}
+		fb := w.GetFallback()
+		if fb.GetReleaseId() != "w1" || fb.GetFallback() != nil || !w.GetFallbackAfter().AsTime().Equal(after) {
+			t.Errorf("workload = %v, want fallback w1 (not nested) after %v", w, after)
+		}
+		// Compensation back to w1 carries none.
+		if _, err := h.srv.AssignApp(ctx, h.tenant, node, app2, deployed(app2, "w1", "d6"), time.Time{}, system); err != nil {
+			t.Fatal(err)
+		}
+		for _, x := range latest() {
+			if x.GetAppId() == app2.String() && x.GetFallback() != nil {
+				t.Errorf("compensation carries a fallback: %v", x)
+			}
+		}
+	})
+
 	t.Run("refusals", func(t *testing.T) {
-		if _, err := h.srv.AssignApp(ctx, h.tenant, node, app1, deployed(app2, "x", "y"), system); !errors.Is(err, ErrUnknownApp) {
+		if _, err := h.srv.AssignApp(ctx, h.tenant, node, app1, deployed(app2, "x", "y"), time.Time{}, system); !errors.Is(err, ErrUnknownApp) {
 			t.Errorf("mismatched app = %v, want ErrUnknownApp", err)
 		}
 		ghost := uuid.Must(uuid.NewV7())
-		if _, err := h.srv.AssignApp(ctx, h.tenant, node, ghost, deployed(ghost, "x", "y"), system); !errors.Is(err, ErrUnknownApp) {
+		if _, err := h.srv.AssignApp(ctx, h.tenant, node, ghost, deployed(ghost, "x", "y"), time.Time{}, system); !errors.Is(err, ErrUnknownApp) {
 			t.Errorf("unknown app = %v, want ErrUnknownApp", err)
 		}
-		if _, err := h.srv.AssignApp(ctx, h.tenant, uuid.Must(uuid.NewV7()), app1, nil, system); !errors.Is(err, store.ErrNotFound) {
+		if _, err := h.srv.AssignApp(ctx, h.tenant, uuid.Must(uuid.NewV7()), app1, nil, time.Time{}, system); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("unknown node = %v, want ErrNotFound", err)
 		}
 	})

@@ -400,7 +400,7 @@ func TestScaleAppAssigns(t *testing.T) {
 	}
 	appID := uuid.MustParse(app.GetMeta().GetId())
 	if _, err := agents.AssignApp(ctx, h.tenant, node, appID, &agentv1.Workload{AppId: appID.String(),
-		ReleaseId: "r1", DeploymentId: "d1", Image: "img", Runtime: &bohuxv1.Runtime{Replicas: 2}},
+		ReleaseId: "r1", DeploymentId: "d1", Image: "img", Runtime: &bohuxv1.Runtime{Replicas: 2}}, time.Time{},
 		store.Actor{ID: store.SystemActorID, Kind: store.ActorSystem}); err != nil {
 		t.Fatal(err)
 	}

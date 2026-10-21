@@ -38,16 +38,19 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S9b — agent-side fallback (⏳, next to start)
-- **Exact next step:** add `Workload.fallback` and `fallback_after` to agent.proto, then
-  write the fallback's tests in `internal/agent` before the code (rule 5).
+- **Slice:** S9c — the control plane as an image (⏳, next to start)
+- **Exact next step:** Apps cannot mount host paths, and the control plane's data dir
+  (node CA) must survive its own redeploys. Decide in an ADR: provider-specific
+  `Runtime` passthrough (`Spec.Raw`, the provider spec's reserved escape hatch) for a
+  Docker bind mount, versus a first-class volume. Then the Dockerfile.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S9b (agent-side fallback)
-> on branch `claude/relaxed-rubin-76m7dl`, following ADR-0031, ADR-0026, and CLAUDE.md
-> rules 1, 5 and 9. Start Postgres, Docker, Temporal and OpenBao (tracker *Known
-> gaps*). Verify with build, vet, golangci-lint (also with the integration
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S9c (the control plane as
+> an image) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0030, the
+> provider-interface spec (`Spec.Raw`), and CLAUDE.md rules 2, 4 and 9. Start Postgres,
+> Docker, Temporal and OpenBao (tracker *Known gaps*). Write the ADR for how an App gets
+> a host path first. Verify with build, vet, golangci-lint (also with the integration
 > tag), unit and integration tests. Tick boxes, update the tracker and the next
 > session prompt, commit, push, and give me the next prompt.
 
@@ -661,13 +664,19 @@ Split into sub-slices, one session each. Includes S7d (OpenBao auto-unseal).
       workload and a deadline; the agent applies it only if the new one was never
       healthy, the deadline passed, and nothing newer arrived
 
-#### S9b — agent-side fallback ⏳
-- [ ] Proto first: `Workload.fallback`, `Workload.fallback_after`
-- [ ] Rollback test first (rule 5): a new workload never healthy, no control plane →
-      the agent applies the fallback after the deadline, keeps it across restarts, and
-      a newer assignment wins; a workload that was healthy keeps no fallback
-- [ ] The deploy workflow's `AssignRelease` sets the fallback to the workload it
-      replaces and the deadline to health timeout + 2 min
+#### S9b — agent-side fallback ✅
+- [x] Proto first: `Workload.fallback`, `Workload.fallback_after`
+- [x] Rollback test first (rule 5, `internal/agent/fallback_test.go`, no control
+      plane): never healthy past the deadline → fallback applied and reported
+      (`FALLBACK_APPLIED`); kept across a restart (`fallback.json`, per deployment);
+      a newer assignment wins with no churn when it is the same Release; a deploy that
+      was healthy keeps no fallback
+- [x] Reconciler: `effective` workload per pass, spec hash ignores the fallback fields
+- [x] `AssignApp(…, fallbackAfter, …)`: a forward deploy over another Release carries
+      the replaced workload (its own fallback stripped); compensation passes zero;
+      sending seals the fallback's secrets; rotation counts fallback references
+- [x] Workflow: forward assign sets health timeout + 2 min; compensation none. Tested
+      in the workflow suite, agentapi, and the e2e suite (all green)
 
 #### S9c — the control plane as an image ⏳
 - [ ] `Dockerfile` for the `bohux` binary (control plane mode), config by env, data dir
@@ -807,6 +816,8 @@ Split into sub-slices, one session each. Includes S7d (OpenBao auto-unseal).
 - **Next:** S9, split first.
 - S9 split into S9a–S9f. S9a done: ADR-0030 (O16) and ADR-0031 (O17) proposed.
 - **Next:** S9b.
+- S9b done: agent-side fallback (proto, reconciler, AssignApp, workflow), tested first.
+- **Next:** S9c.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by

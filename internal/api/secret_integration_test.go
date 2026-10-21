@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -227,7 +228,7 @@ func TestSecretRotationAssigns(t *testing.T) {
 	appID := fixtureApp(t, h, env)
 	if _, err := agents.AssignApp(ctx, h.tenant, node, appID, &agentv1.Workload{AppId: appID.String(),
 		ReleaseId: "r1", DeploymentId: "d1", Image: "img", Runtime: &bohuxv1.Runtime{Replicas: 1},
-		Secrets: []*bohuxv1.SecretRef{{Key: "TOKEN", Handle: sec.GetHandle()}}},
+		Secrets: []*bohuxv1.SecretRef{{Key: "TOKEN", Handle: sec.GetHandle()}}}, time.Time{},
 		store.Actor{ID: store.SystemActorID, Kind: store.ActorSystem}); err != nil {
 		t.Fatal(err)
 	}

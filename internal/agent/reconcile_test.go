@@ -19,7 +19,9 @@ import (
 
 // fakeProvider is an in-memory target.
 type fakeProvider struct {
-	mu        sync.Mutex
+	mu sync.Mutex
+	// broken Releases start but never pass their health check.
+	broken    map[string]bool
 	running   map[provider.ResourceRef]provider.Status
 	secrets   map[provider.ResourceRef]map[string]string
 	applies   int
@@ -51,7 +53,7 @@ func (f *fakeProvider) Apply(_ context.Context, req provider.ApplyRequest) (prov
 		f.secrets[req.Spec.Ref] = vals
 	}
 	f.running[req.Spec.Ref] = provider.Status{Exists: true, Hash: req.Spec.Hash, Running: true,
-		Healthy: true, ReadyReplicas: req.Spec.Runtime.GetReplicas()}
+		Healthy: !f.broken[req.Spec.Release], ReadyReplicas: req.Spec.Runtime.GetReplicas()}
 	return provider.ApplyResult{Changed: true}, nil
 }
 

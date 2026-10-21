@@ -290,6 +290,26 @@ func TestHealthDeadline(t *testing.T) {
 	if s.waits[0].Generation != 1 || s.waits[0].NodeID != "node-1" {
 		t.Errorf("wait = %+v, want the assigned node and generation", s.waits[0])
 	}
+	// The node gets a fallback deadline past the gate plus the margin (ADR-0031).
+	if got := s.assigns[0].FallbackAfter.Sub(start); got < 5*time.Minute || got > 5*time.Minute+time.Second {
+		t.Errorf("fallback deadline is %v after start, want 3m gate + 2m margin", got)
+	}
+}
+
+// TestCompensationCarriesNoFallback: compensation must never hand the agent the broken
+// Release as something to fall back to.
+func TestCompensationCarriesNoFallback(t *testing.T) {
+	var ts testsuite.WorkflowTestSuite
+	env := ts.NewTestWorkflowEnvironment()
+	s := script{last: goodRelease, waitErr: map[string]error{newRelease: nonRetryable(ErrTypeHealthTimeout)}}
+	s.register(env)
+	env.ExecuteWorkflow(Workflow, input())
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.assigns) != 2 || s.assigns[0].FallbackAfter.IsZero() || !s.assigns[1].FallbackAfter.IsZero() {
+		t.Errorf("assigns = %+v, want a fallback deadline on the deploy only", s.assigns)
+	}
 }
 
 // TestCancelBeforeAssign ends cancelled without compensating: nothing was assigned.

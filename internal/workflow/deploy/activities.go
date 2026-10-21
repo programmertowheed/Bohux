@@ -37,7 +37,7 @@ var (
 
 // Assigner changes one App's workload on a node; agentapi.Server implements it.
 type Assigner interface {
-	AssignApp(ctx context.Context, tenant, node, app uuid.UUID, w *agentv1.Workload, actor store.Actor) (uint64, error)
+	AssignApp(ctx context.Context, tenant, node, app uuid.UUID, w *agentv1.Workload, fallbackAfter time.Time, actor store.Actor) (uint64, error)
 }
 
 // Activities are the deploy workflow's I/O: Postgres and the agent API. Every method is
@@ -304,7 +304,7 @@ func (a *Activities) AssignRelease(ctx context.Context, in AssignInput) (Assigne
 	if err != nil {
 		return Assigned{}, fmt.Errorf("build workload for app %s: %w", in.AppID, err)
 	}
-	gen, err := a.Agents.AssignApp(ctx, tenant, node, app, w, actor)
+	gen, err := a.Agents.AssignApp(ctx, tenant, node, app, w, in.FallbackAfter, actor)
 	switch {
 	case errors.Is(err, agentapi.ErrRevokedNode), errors.Is(err, agentapi.ErrUnknownApp),
 		errors.Is(err, agentapi.ErrWrongEnv), errors.Is(err, store.ErrNotFound):

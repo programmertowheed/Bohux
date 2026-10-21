@@ -112,6 +112,10 @@ type AssignInput struct {
 	ReleaseID    string
 	DeploymentID string
 	Actor        Actor
+	// FallbackAfter, when set, makes the workload carry the one it replaces as a
+	// fallback the agent applies on its own after this time (ADR-0031). Forward
+	// deploys set it; compensation does not.
+	FallbackAfter time.Time
 }
 
 // Assigned names the node generation that carries the change.
