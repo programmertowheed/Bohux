@@ -30,6 +30,15 @@ func (l liveRestore) LiveRestoreEnabled(context.Context) (bool, error) { return 
 
 func (liveRestore) BuildxAvailable(context.Context) error { return nil }
 
+// wrongPin changes the pin's first byte, whatever it is: a fixed replacement would
+// match the real pin one run in 256.
+func wrongPin(pin string) string {
+	if strings.HasPrefix(pin, "00") {
+		return "ff" + pin[2:]
+	}
+	return "00" + pin[2:]
+}
+
 // noBuildx has live-restore but no buildx plugin.
 type noBuildx struct{ liveRestore }
 
@@ -200,7 +209,7 @@ func TestRegisterRefusals(t *testing.T) {
 	}{
 		{"wrong CA pin", func(dir string) RegisterOptions {
 			return RegisterOptions{StateDir: dir, ControlPlane: cp.addr, Token: cp.bootstrapToken("a"),
-				CACertSHA256: "00" + cp.pki.CACertSHA256()[2:], Docker: liveRestore(true)}
+				CACertSHA256: wrongPin(cp.pki.CACertSHA256()), Docker: liveRestore(true)}
 		}, nil},
 		{"live-restore off", func(dir string) RegisterOptions {
 			return RegisterOptions{StateDir: dir, ControlPlane: cp.addr, Token: cp.bootstrapToken("b"),
