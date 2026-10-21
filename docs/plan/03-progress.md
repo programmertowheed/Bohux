@@ -38,16 +38,18 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S1a — proto: common and tenancy (⏳, next to start)
-- **Exact next step:** write `proto/bohux/v1/common.proto` (`ResourceMeta`) per
-  `docs/specs/api-contract.md`.
+- **Slice:** S1b — proto: app, release, deployment (⏳, next to start)
+- **Exact next step:** write `proto/bohux/v1/app.proto` (App replaces the draft
+  `Service`) per `docs/specs/api-contract.md`, following the patterns in S1a's files.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S1a (proto: common and
-> tenancy) on branch `claude/relaxed-rubin-76m7dl`. Follow docs/specs/api-contract.md and
-> ADR-0014. Run buf lint and buf build, tick the S1a boxes, update the tracker and the
-> next session prompt, commit, push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S1b (proto: app, release,
+> deployment, workload) on branch `claude/relaxed-rubin-76m7dl`. Follow
+> docs/specs/api-contract.md and the patterns in the S1a proto files. Verify with buf lint,
+> buf build, buf generate and go build (see "How to verify protos locally" in the
+> tracker), tick the S1b boxes, update the tracker and the next session prompt, commit,
+> push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -77,11 +79,19 @@ Each slice ends green in CI and pushed. Order matters: later slices build on ear
 Plan: `docs/specs/api-contract.md` (all questions answered there). Split into four
 sub-slices, one session each.
 
-#### S1a — common and tenancy ⏳
-- [ ] Add `buf.build/googleapis/googleapis` dependency pinned in `buf.lock` (ADR-0014);
-      if the registry is unreachable, note it and let CI resolve it
-- [ ] `common.proto` (`ResourceMeta`, pagination, idempotency conventions)
-- [ ] `identity.proto`, `tenancy.proto`, `project.proto`, `environment.proto`
+#### S1a — common and tenancy ✅
+- [x] `buf.build/googleapis/googleapis` declared in `buf.yaml` (ADR-0014). `buf.lock` is
+      **not committed yet**: the registry is unreachable from the cloud container, so CI
+      runs `buf dep update` when the lock is missing. See *Known gaps*.
+- [x] `common.proto` (`ResourceMeta`, `ErrorDetail`). Pagination and idempotency are
+      plain request fields on each RPC, per the spec's conventions
+- [x] `identity.proto`, `tenancy.proto`, `project.proto`, `environment.proto`
+- Choices the spec left open, made in S1a (change before v0.1 ships if wrong):
+  - `ApiToken` "role scope" = exactly one `project_id` + one `Role`.
+  - `GetProject` / `GetEnvironment` look up by id **or** slug (CLI uses slugs).
+  - `Environment.config` is `map<string, string>` of non-secret values.
+  - `Update*` replaces the mutable fields as a whole; no field masks.
+  - Token secret uses `debug_redact = true`; the interceptor (S3) is still required.
 
 #### S1b — app, release, deployment ⏳
 - [ ] `app.proto` (App replaces Service), `release.proto`, `deployment.proto`
@@ -141,6 +151,15 @@ sub-slices, one session each.
 - [ ] Runbooks: backup key handling, OpenBao unseal key (`write-runbook`)
 
 ## Known gaps and notes
+- **`buf.lock` missing.** Whoever has registry access (CI, or a local machine) runs
+  `buf dep update`, commits `buf.lock`, and removes the "Resolve deps if buf.lock is
+  missing" steps in `.github/workflows/ci.yml`.
+- **How to verify protos locally in the cloud container** (registry blocked): copy
+  `proto/` and `buf.gen.yaml` into a scratch dir, fetch
+  `google/api/field_behavior.proto` from raw.githubusercontent.com/googleapis/googleapis
+  into `gapi/google/api/`, write a `buf.yaml` with modules `proto` and `gapi`, change the
+  managed-mode `disable` entry to `path: google/api`, then `buf lint`, `buf build`,
+  `buf generate proto`, copy `gen/` back, and `go build ./...`.
 - `gen/` is not committed. Run `make generate` (or `buf generate`) after cloning, before
   `go build ./...`. CI does this.
 - The Buf Schema Registry was unreachable from the cloud container on 2026-10-21; S1
@@ -149,6 +168,13 @@ sub-slices, one session each.
   tests cannot run there. Integration slices (S2+) need CI or a local machine.
 
 ## Session log (newest first)
+
+### 2026-10-21 (S1a) — branch `claude/relaxed-rubin-76m7dl`
+- S1a done: common, identity, tenancy, project, environment protos. buf lint, buf build,
+  generate, go build, vet, golangci-lint all pass locally (with the scratch workaround).
+- Added `google.golang.org/genproto/googleapis/api` (pinned for Go 1.23) for the
+  generated annotations import.
+- **Next:** S1b, starting with `app.proto`.
 
 ### 2026-10-21 (planning) — branch `claude/relaxed-rubin-76m7dl`
 - Owner set session rules: one task per session, split when large, always hand over the

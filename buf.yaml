@@ -1,13 +1,14 @@
 version: v2
 modules:
   - path: proto
-# The googleapis dependency (ADR-0014, field_behavior) is added with the proto rewrite
-# in slice S1, together with its pin in buf.lock.
+deps:
+  # google.api.field_behavior annotations (ADR-0014). Pinned in buf.lock.
+  - buf.build/googleapis/googleapis
 lint:
   use:
     - STANDARD
   # Pre-contract draft, replaced by the files listed in docs/specs/api-contract.md in
-  # slice S1. Remove this ignore in the same change.
+  # slice S1. Remove this ignore in S1d.
   ignore:
     - proto/bohux/v1/service.proto
 breaking:

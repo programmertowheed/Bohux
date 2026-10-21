@@ -1,0 +1,96 @@
+syntax = "proto3";
+
+package bohux.v1;
+
+import "bohux/v1/common.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
+
+// Fixed roles per project (ADR-0011). Custom roles are v1.x.
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_VIEWER = 1;
+  ROLE_DEPLOYER = 2;
+  ROLE_OWNER = 3;
+}
+
+enum PrincipalKind {
+  PRINCIPAL_KIND_UNSPECIFIED = 0;
+  PRINCIPAL_KIND_USER = 1;
+  PRINCIPAL_KIND_API_TOKEN = 2;
+}
+
+// Who is calling. Derived from authentication on every request.
+message Principal {
+  string id = 1;
+  PrincipalKind kind = 2;
+  string display_name = 3;
+}
+
+message ApiToken {
+  ResourceMeta meta = 1;
+  string name = 2 [(google.api.field_behavior) = REQUIRED];
+  // The token's role scope: one project, one role.
+  string project_id = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+  Role role = 4 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+  google.protobuf.Timestamp expires_at = 5 [(google.api.field_behavior) = IMMUTABLE];
+  google.protobuf.Timestamp last_used_at = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp revoked_at = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+service IdentityService {
+  rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
+  rpc CreateApiToken(CreateApiTokenRequest) returns (CreateApiTokenResponse);
+  rpc ListApiTokens(ListApiTokensRequest) returns (ListApiTokensResponse);
+  rpc RevokeApiToken(RevokeApiTokenRequest) returns (RevokeApiTokenResponse);
+}
+
+message WhoAmIRequest {}
+
+message WhoAmIResponse {
+  Principal principal = 1;
+  string tenant_id = 2;
+}
+
+message CreateApiTokenRequest {
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+  string project_id = 2 [(google.api.field_behavior) = REQUIRED];
+  Role role = 3 [(google.api.field_behavior) = REQUIRED];
+  google.protobuf.Timestamp expires_at = 4;
+  string idempotency_key = 5 [(google.api.field_behavior) = REQUIRED];
+}
+
+message CreateApiTokenResponse {
+  ApiToken api_token = 1;
+  // The token value. Returned once, stored only hashed, redacted from logs and traces
+  // (rule 3).
+  string secret = 2 [debug_redact = true];
+}
+
+message ListApiTokensRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListApiTokensResponse {
+  repeated ApiToken api_tokens = 1;
+  string next_page_token = 2;
+}
+
+message RevokeApiTokenRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+  string expected_revision_id = 2;
+  string idempotency_key = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+message RevokeApiTokenResponse {
+  ApiToken api_token = 1;
+}

@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+// Shared types for every bohux.v1 resource. See docs/specs/api-contract.md, "Conventions".
+package bohux.v1;
+
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
+
+// Every resource starts with `ResourceMeta meta = 1`. All fields are set by the server.
+message ResourceMeta {
+  // Server-generated UUIDv7.
+  string id = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // Taken from the authenticated principal, never from a request (rule 10).
+  string tenant_id = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // The revision that produced this state (ADR-0004, ADR-0017). Pass it back as
+  // `expected_revision_id` on update or delete.
+  string revision_id = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp created_at = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp updated_at = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // Principal IDs, taken from authentication.
+  string created_by = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string updated_by = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Attached to Connect errors as a detail. `message` text never contains secret values
+// (rule 3).
+message ErrorDetail {
+  // Machine-readable, UPPER_SNAKE_CASE, stable across releases.
+  string reason = 1;
+  // The request field the error is about, as a dotted path, if any.
+  string field = 2;
+}
