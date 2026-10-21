@@ -19,7 +19,8 @@ identity like the root password of every App.
 
 ## Decision tree
 - First time, or rotating the key → **Section K** (key custody).
-- Taking a backup → **Section B**.
+- Checking the nightly backup → **Section N**.
+- Taking a backup by hand → **Section B**.
 - Control plane state lost → **Section R** (restore).
 - Archive will not decrypt → check you have the identity that matches the recipient the
   backup was made for (Section K, step K3). Without it the archive is unreadable: there
@@ -36,7 +37,28 @@ identity like the root password of every App.
 3. Record the public key (`age1…`, from step 1 or `age-keygen -y bohux-backup.key`). Only
    the public key goes on the host.
 
-## B — Take a backup (on the Bohux host)
+## N — The nightly backup
+Installed with `BOHUX_BACKUP_RECIPIENT=age1…`, the control plane writes an archive
+every night at 03:17 UTC and keeps the last seven (ADR-0033).
+1. List the archives:
+   ```
+   sudo ls -l /var/lib/docker/volumes/bohux-backups/_data
+   ```
+   Expected: `bohux-YYYYMMDDTHHMMSSZ.backup` files, the newest from last night.
+2. If last night's is missing, see why in Temporal:
+   ```
+   sudo docker exec bohux-infra-temporal-1 temporal --address temporal:7233 workflow list --query 'WorkflowType="BackupWorkflow"' --limit 3
+   ```
+   then `workflow show --workflow-id <id>` on the failed one. A `BadRecipient` failure
+   means the configured key is not an age public key.
+3. Take one now:
+   ```
+   sudo docker exec bohux-infra-temporal-1 temporal --address temporal:7233 schedule trigger --schedule-id bohux-backup-nightly
+   ```
+   Expected: a new archive in step 1's list within a minute.
+4. Copy archives off the host: the volume is on the same disk as the data.
+
+## B — Take a backup by hand (on the Bohux host)
 1. Load the admin password:
    ```
    sudo bash -c 'source /etc/bohux/infra/.env; echo "postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:5432/bohux_app?sslmode=disable"' > /tmp/admin.url

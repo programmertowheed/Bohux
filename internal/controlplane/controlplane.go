@@ -1,6 +1,6 @@
 // Package controlplane runs the Bohux control plane: the public API (bohux.v1) over
 // ConnectRPC, the agent endpoint (ADR-0006, ADR-0007), and the deploy worker
-// (ADR-0026).
+// (ADR-0026), and the nightly backup schedule (ADR-0033).
 package controlplane
 
 import (
@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -26,6 +27,7 @@ import (
 	"github.com/bohumix/bohux/internal/pki"
 	"github.com/bohumix/bohux/internal/secrets/openbao"
 	"github.com/bohumix/bohux/internal/store"
+	backupwf "github.com/bohumix/bohux/internal/workflow/backup"
 	"github.com/bohumix/bohux/internal/workflow/deploy"
 )
 
@@ -60,6 +62,24 @@ type Config struct {
 	// DeployHealthTimeout is how long a deployed Release has to turn healthy before
 	// the deploy compensates. Zero means deploy.DefaultHealthTimeout.
 	DeployHealthTimeout time.Duration
+	// Backup configures the nightly backup schedule (ADR-0033). An empty Recipient
+	// disables it, and removes a schedule an earlier configuration created.
+	Backup BackupConfig
+}
+
+// BackupConfig is the nightly backup's configuration (ADR-0033).
+type BackupConfig struct {
+	// Recipient is the age public key archives are encrypted to.
+	Recipient string
+	// DatabaseURL is a read-only role that bypasses row-level security. Required
+	// with Recipient.
+	DatabaseURL string
+	// Dir is where archives are written.
+	Dir string
+	// Schedule is a cron expression in UTC; empty means 03:17 nightly.
+	Schedule string
+	// Keep is how many archives stay; zero means seven.
+	Keep int
 }
 
 // shutdownTimeout bounds how long in-flight requests get after the context ends.
@@ -76,6 +96,9 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	if cfg.TemporalAddress == "" || cfg.TemporalNamespace == "" {
 		return errors.New("controlplane: Temporal address and namespace are required")
+	}
+	if cfg.Backup.Recipient != "" && (cfg.Backup.DatabaseURL == "" || cfg.Backup.Dir == "") {
+		return errors.New("controlplane: a backup recipient needs a backup database URL and directory")
 	}
 	ln, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
@@ -118,21 +141,32 @@ func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 
 	agents := &agentapi.Server{Store: st, PKI: authority}
 	var secretBackend api.SecretBackend
+	var bao *openbao.Client
 	if cfg.OpenBaoAddress != "" {
-		bao, err := openBao(cfg)
+		bao, err = openBao(cfg)
 		if err != nil {
 			return err
 		}
 		secretBackend = bao
 		agents.Secrets = &openbao.Resolver{Store: st, Bao: bao}
 	}
+	var backups *backupwf.Activities
+	if b := cfg.Backup; b.Recipient != "" {
+		backups = &backupwf.Activities{Recipient: b.Recipient, DatabaseURL: b.DatabaseURL, Bao: bao,
+			DataDir: cfg.DataDir, Dir: b.Dir, Keep: b.Keep}
+	}
 	workerCtx, stopWorker := context.WithCancel(ctx)
-	workerDone := make(chan struct{})
+	var workers sync.WaitGroup
+	workers.Add(2)
 	go func() {
-		defer close(workerDone)
+		defer workers.Done()
 		deploy.RunWorker(workerCtx, temporal, "", &deploy.Activities{Store: st, Agents: agents, Builds: agents})
 	}()
-	defer func() { stopWorker(); <-workerDone }()
+	go func() {
+		defer workers.Done()
+		backupwf.Run(workerCtx, temporal, backupwf.Schedule{Cron: cfg.Backup.Schedule}, backups)
+	}()
+	defer func() { stopWorker(); workers.Wait() }()
 
 	// Streams (agents, watches, logs) never go idle, so Shutdown alone would wait for
 	// them until its timeout: every handler's context ends when shutdown begins.

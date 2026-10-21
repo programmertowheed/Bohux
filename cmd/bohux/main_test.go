@@ -9,10 +9,14 @@ import (
 
 	"github.com/bohumix/bohux/internal/agent"
 	"github.com/bohumix/bohux/internal/controlplane"
+	backupwf "github.com/bohumix/bohux/internal/workflow/backup"
 	"github.com/bohumix/bohux/internal/workflow/deploy"
 )
 
 var errCalled = errors.New("called")
+
+var defaultBackup = controlplane.BackupConfig{Dir: backupwf.DefaultDir, Schedule: backupwf.DefaultSchedule,
+	Keep: backupwf.DefaultKeep}
 
 func TestRun(t *testing.T) {
 	tests := []struct {
@@ -34,13 +38,13 @@ func TestRun(t *testing.T) {
 				"--temporal-address", "temporal:7233", "--temporal-namespace", "bohux"},
 			wantCfg: controlplane.Config{ListenAddr: ":1", AgentListenAddr: defaultAgentListenAddr, DatabaseURL: "postgres://f",
 				DataDir: defaultDataDir, TemporalAddress: "temporal:7233", TemporalNamespace: "bohux",
-				DeployHealthTimeout: deploy.DefaultHealthTimeout, OpenBaoMount: defaultOpenBaoMount}},
+				DeployHealthTimeout: deploy.DefaultHealthTimeout, OpenBaoMount: defaultOpenBaoMount, Backup: defaultBackup}},
 		{name: "controlplane from env with default listen", wantErr: errCalled,
 			args: []string{"controlplane"},
 			env:  map[string]string{envDatabaseURL: "postgres://e"},
 			wantCfg: controlplane.Config{ListenAddr: defaultListenAddr, AgentListenAddr: defaultAgentListenAddr, DatabaseURL: "postgres://e",
 				DataDir: defaultDataDir, TemporalAddress: defaultTemporalAddress, TemporalNamespace: defaultTemporalNS,
-				DeployHealthTimeout: deploy.DefaultHealthTimeout, OpenBaoMount: defaultOpenBaoMount}},
+				DeployHealthTimeout: deploy.DefaultHealthTimeout, OpenBaoMount: defaultOpenBaoMount, Backup: defaultBackup}},
 		{name: "flag beats env", wantErr: errCalled,
 			args: []string{"controlplane", "--database-url", "postgres://f"},
 			env: map[string]string{envDatabaseURL: "postgres://e", envListenAddr: ":2", envDataDir: "/d",
@@ -48,7 +52,21 @@ func TestRun(t *testing.T) {
 				envOpenBaoAddr: "http://bao:8200", envOpenBaoToken: "/run/bao-token", envOpenBaoMount: "kv"},
 			wantCfg: controlplane.Config{ListenAddr: ":2", AgentListenAddr: ":3", DatabaseURL: "postgres://f", DataDir: "/d",
 				TemporalAddress: "t:1", TemporalNamespace: "ns", DeployHealthTimeout: 90 * time.Second,
-				OpenBaoAddress: "http://bao:8200", OpenBaoTokenFile: "/run/bao-token", OpenBaoMount: "kv"}},
+				OpenBaoAddress: "http://bao:8200", OpenBaoTokenFile: "/run/bao-token", OpenBaoMount: "kv",
+				Backup: defaultBackup}},
+		{name: "backup from env", wantErr: errCalled,
+			args: []string{"controlplane", "--database-url", "postgres://f", "--backup-keep", "3"},
+			env: map[string]string{envBackupRecipient: "age1x", envBackupDBURL: "postgres://b", envBackupDir: "/b",
+				envBackupSchedule: "0 1 * * *", envBackupKeep: "9"},
+			wantCfg: controlplane.Config{ListenAddr: defaultListenAddr, AgentListenAddr: defaultAgentListenAddr,
+				DatabaseURL: "postgres://f", DataDir: defaultDataDir, TemporalAddress: defaultTemporalAddress,
+				TemporalNamespace: defaultTemporalNS, DeployHealthTimeout: deploy.DefaultHealthTimeout,
+				OpenBaoMount: defaultOpenBaoMount, Backup: controlplane.BackupConfig{Recipient: "age1x",
+					DatabaseURL: "postgres://b", Dir: "/b", Schedule: "0 1 * * *", Keep: 3}}},
+		{name: "backup recipient needs a database", args: []string{"controlplane", "--database-url", "postgres://f",
+			"--backup-recipient", "age1x"}, wantErr: errMissing},
+		{name: "backup keeps at least one", args: []string{"controlplane", "--database-url", "postgres://f",
+			"--backup-keep", "0"}, wantErr: errMissing},
 		{name: "openbao needs a token file", args: []string{"controlplane", "--database-url", "postgres://f",
 			"--openbao-address", "http://bao:8200"}, wantErr: errMissing},
 		{name: "bad health timeout", args: []string{"controlplane", "--database-url", "postgres://f"},

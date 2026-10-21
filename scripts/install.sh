@@ -16,6 +16,11 @@
 #   BOHUX_DEPLOY_HEALTH_TIMEOUT
 #                      the control plane's --deploy-health-timeout (default: its own,
 #                      5m); tests shorten it
+#   BOHUX_BACKUP_RECIPIENT
+#                      age public key (age1…) for nightly backups (ADR-0033); keep
+#                      its private key off this host (docs/runbooks/backup-and-restore.md).
+#                      Empty: no nightly backups. Archives land in the
+#                      bohux-backups volume (/var/lib/docker/volumes/bohux-backups/_data)
 #
 # It writes, all readable (rule 2): $BOHUX_ETC/infra/compose.yaml and friends, the
 # agent unit, and, through the agent, the control plane App's Compose file. Secrets go
@@ -64,6 +69,7 @@ if [[ ! -f "$env_file" ]]; then
     echo "BOHUX_UNSEAL_KEY=$etc/openbao-unseal.key"
   } >"$env_file"
 fi
+grep -q '^BOHUX_BACKUP_PASSWORD=' "$env_file" || echo "BOHUX_BACKUP_PASSWORD=$(openssl rand -hex 24)" >>"$env_file"
 # shellcheck disable=SC1090
 source "$env_file"
 if [[ ! -f "$etc/openbao-unseal.key" ]]; then
@@ -84,6 +90,19 @@ compose=(docker compose -p bohux-infra -f "$etc/infra/compose.yaml" --env-file "
 log "starting Postgres, Temporal, OpenBao"
 "${compose[@]}" up -d --wait postgres openbao
 "${compose[@]}" up -d temporal
+
+# pg_isready answers during the first start's init script too; wait for its database.
+until "${compose[@]}" exec -T postgres psql -q -U postgres -d bohux_app -c 'SELECT 1' >/dev/null 2>&1; do sleep 1; done
+# The nightly backup's role (ADR-0033): reads every table past RLS, writes nothing.
+# Default privileges cover the tables bohux_app's migrations create later.
+"${compose[@]}" exec -T postgres psql -q -v ON_ERROR_STOP=1 -U postgres -d bohux_app \
+  -v pass="$BOHUX_BACKUP_PASSWORD" >/dev/null <<'SQL'
+SELECT format('CREATE ROLE bohux_backup LOGIN BYPASSRLS PASSWORD %L', :'pass')
+  WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'bohux_backup') \gexec
+ALTER ROLE bohux_backup PASSWORD :'pass';
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO bohux_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE bohux_app IN SCHEMA public GRANT SELECT ON TABLES TO bohux_backup;
+SQL
 
 bao() { "${compose[@]}" exec -T -e BAO_ADDR=http://127.0.0.1:8200 ${BAO_TOKEN:+-e BAO_TOKEN="$BAO_TOKEN"} openbao bao "$@"; }
 until bao status -format=json >/dev/null 2>&1 || [[ $? -eq 2 ]]; do sleep 1; done
@@ -108,12 +127,15 @@ if [[ ! -x "$bin" ]] || [[ "$("$bin" version)" != "$(docker run --rm "$image" ve
   chmod 755 "$bin"
 fi
 docker volume create bohux-controlplane-data >/dev/null
+docker volume create bohux-backups >/dev/null
 
 db_url="postgres://bohux_app:${BOHUX_APP_PASSWORD}@postgres:5432/bohux_app?sslmode=disable"
 cp_env=(-e "BOHUX_DATABASE_URL=$db_url" -e BOHUX_TEMPORAL_ADDRESS=temporal:7233
   -e BOHUX_OPENBAO_ADDR=http://openbao:8200 -e "BOHUX_OPENBAO_TOKEN=$BAO_TOKEN")
 health_timeout="${BOHUX_DEPLOY_HEALTH_TIMEOUT:-}"
 [[ -z "$health_timeout" ]] || cp_env+=(-e "BOHUX_DEPLOY_HEALTH_TIMEOUT=$health_timeout")
+backup_recipient="${BOHUX_BACKUP_RECIPIENT:-}"
+backup_db_url="postgres://bohux_backup:${BOHUX_BACKUP_PASSWORD}@postgres:5432/bohux_app?sslmode=disable"
 
 if [[ -f "$etc/installed" ]] && curl -fsS "$api/healthz" >/dev/null 2>&1; then
   log "already installed; the control plane answers on $api"
@@ -193,7 +215,9 @@ refs="$(jq -s . <<<"$(secret BOHUX_DATABASE_URL "$db_url")
 $(secret BOHUX_TEMPORAL_ADDRESS temporal:7233)
 $(secret BOHUX_OPENBAO_ADDR http://openbao:8200)
 $(secret BOHUX_OPENBAO_TOKEN "$BAO_TOKEN")
-$([[ -z "$health_timeout" ]] || secret BOHUX_DEPLOY_HEALTH_TIMEOUT "$health_timeout")")"
+$([[ -z "$health_timeout" ]] || secret BOHUX_DEPLOY_HEALTH_TIMEOUT "$health_timeout")
+$([[ -z "$backup_recipient" ]] || secret BOHUX_BACKUP_RECIPIENT "$backup_recipient")
+$([[ -z "$backup_recipient" ]] || secret BOHUX_BACKUP_DATABASE_URL "$backup_db_url")")"
 
 app="$(call AppService/GetApp "{\"slug\": {\"environmentId\": \"$env_id\", \"slug\": \"controlplane\"}}" 2>/dev/null | jq -r .app.meta.id || true)"
 if [[ -z "$app" || "$app" == null ]]; then
@@ -204,7 +228,8 @@ if [[ -z "$app" || "$app" == null ]]; then
       ports: [{containerPort: 7400, hostPort: 7400}, {containerPort: 7443, hostPort: 7443}]},
     secrets: $s,
     providerOptions: {networks: ["bohux-infra"], publish_address: "127.0.0.1",
-      volumes: [{source: "bohux-controlplane-data", target: "/var/lib/bohux"}]}}')" | jq -r .app.meta.id)"
+      volumes: [{source: "bohux-controlplane-data", target: "/var/lib/bohux"},
+        {source: "bohux-backups", target: "/var/lib/bohux-backups"}]}}')" | jq -r .app.meta.id)"
 fi
 release="$(call ReleaseService/CreateRelease "{\"appId\": \"$app\", \"idempotencyKey\": \"install-release-$digest\"}" | jq -r .release.meta.id)"
 deployment="$(call DeploymentService/CreateDeployment "{\"releaseId\": \"$release\", \"environmentId\": \"$env_id\",

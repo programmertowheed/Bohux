@@ -23,6 +23,7 @@ import (
 	"github.com/bohumix/bohux/internal/provider"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/version"
+	backupwf "github.com/bohumix/bohux/internal/workflow/backup"
 	"github.com/bohumix/bohux/internal/workflow/deploy"
 	"github.com/bohumix/bohux/providers/docker"
 )
@@ -55,6 +56,11 @@ const (
 	envOpenBaoToken    = "BOHUX_OPENBAO_TOKEN_FILE"
 	envOpenBaoMount    = "BOHUX_OPENBAO_KV_MOUNT"
 	envOpenBaoTokenVal = "BOHUX_OPENBAO_TOKEN"
+	envBackupRecipient = "BOHUX_BACKUP_RECIPIENT"
+	envBackupDBURL     = "BOHUX_BACKUP_DATABASE_URL"
+	envBackupDir       = "BOHUX_BACKUP_DIR"
+	envBackupSchedule  = "BOHUX_BACKUP_SCHEDULE"
+	envBackupKeep      = "BOHUX_BACKUP_KEEP"
 
 	defaultListenAddr      = "127.0.0.1:7400"
 	defaultAgentListenAddr = "127.0.0.1:7443"
@@ -234,11 +240,32 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 				return fmt.Errorf("controlplane: %s: %w", envHealthTimeout, err)
 			}
 		}
+		backupRecipient := fs.String("backup-recipient", getenv(envBackupRecipient),
+			"age public key nightly backups are encrypted to; empty disables them (env "+envBackupRecipient+")")
+		backupDB := fs.String("backup-database-url", getenv(envBackupDBURL),
+			"Postgres DSN of the read-only BYPASSRLS backup role (env "+envBackupDBURL+")")
+		backupDir := fs.String("backup-dir", envOr(getenv, envBackupDir, backupwf.DefaultDir),
+			"directory nightly backups are written to (env "+envBackupDir+")")
+		backupSchedule := fs.String("backup-schedule", envOr(getenv, envBackupSchedule, backupwf.DefaultSchedule),
+			"cron expression, UTC, for nightly backups (env "+envBackupSchedule+")")
+		backupKeep := fs.Int("backup-keep", backupwf.DefaultKeep,
+			"how many nightly backups to keep (env "+envBackupKeep+")")
+		if v := getenv(envBackupKeep); v != "" {
+			if err := fs.Set("backup-keep", v); err != nil {
+				return fmt.Errorf("controlplane: %s: %w", envBackupKeep, err)
+			}
+		}
 		if err := fs.Parse(args[1:]); err != nil {
 			return fmt.Errorf("controlplane: %w", err)
 		}
 		if *dbURL == "" {
 			return fmt.Errorf("controlplane: --database-url or %s is required", envDatabaseURL)
+		}
+		if *backupRecipient != "" && *backupDB == "" {
+			return fmt.Errorf("controlplane: --backup-database-url or %s is required with --backup-recipient", envBackupDBURL)
+		}
+		if *backupKeep < 1 {
+			return fmt.Errorf("controlplane: --backup-keep must be at least 1")
 		}
 		if *baoAddr != "" && *baoToken == "" && getenv(envOpenBaoTokenVal) == "" {
 			return fmt.Errorf("controlplane: --openbao-token-file, %s, or %s is required with --openbao-address",
@@ -247,7 +274,9 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 		cfg := controlplane.Config{ListenAddr: *listen, AgentListenAddr: *agentListen,
 			DatabaseURL: *dbURL, DataDir: *dataDir, TemporalAddress: *temporalAddr, TemporalNamespace: *temporalNS,
 			DeployHealthTimeout: *healthTimeout, OpenBaoAddress: *baoAddr, OpenBaoTokenFile: *baoToken,
-			OpenBaoMount: *baoMount, OpenBaoToken: getenv(envOpenBaoTokenVal)}
+			OpenBaoMount: *baoMount, OpenBaoToken: getenv(envOpenBaoTokenVal),
+			Backup: controlplane.BackupConfig{Recipient: *backupRecipient, DatabaseURL: *backupDB,
+				Dir: *backupDir, Schedule: *backupSchedule, Keep: *backupKeep}}
 		if err := d.runControlPlane(ctx, cfg); err != nil {
 			return fmt.Errorf("controlplane: %w", err)
 		}

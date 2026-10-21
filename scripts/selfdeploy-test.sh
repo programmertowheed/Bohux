@@ -44,7 +44,10 @@ broken="$(push broken "$work/broken")"
 
 # --- Install -------------------------------------------------------------------------
 log "installing $v1"
-BOHUX_IMAGE="$v1" BOHUX_DEPLOY_HEALTH_TIMEOUT="${BOHUX_DEPLOY_HEALTH_TIMEOUT:-60s}" "$here/install.sh"
+# Nightly backups to a throwaway key: this test checks an archive is written, the
+# restore drill (TestRestoreDrill) checks archives restore.
+BOHUX_IMAGE="$v1" BOHUX_DEPLOY_HEALTH_TIMEOUT="${BOHUX_DEPLOY_HEALTH_TIMEOUT:-60s}" \
+  BOHUX_BACKUP_RECIPIENT=age1y5p7wtgkha9u87lrqynxv0mkpfqgvr86d8gyyumpqazqg8y9hedq8mrjq7 "$here/install.sh"
 etc="${BOHUX_ETC:-/etc/bohux}"
 bin="${BOHUX_BIN:-/usr/local/bin/bohux}"
 export BOHUX_TOKEN="$(cat "$etc/owner.token")" BOHUX_API_URL=http://127.0.0.1:7400 BOHUX_PROJECT=bohux
@@ -69,4 +72,17 @@ fi
 [[ "$(running)" == "$v1" ]] || die "after the broken deploy the control plane runs $(running)"
 log "recovered in $(( $(date +%s) - start ))s"
 
-log "PASS: Bohux deployed itself, rolled itself back, and recovered from a broken version of itself"
+# --- The nightly backup, run now ------------------------------------------------------
+log "triggering the nightly backup schedule"
+archives() { docker run --rm -v bohux-backups:/b busybox:1.36 ls /b | grep -c '^bohux-.*\.backup$' || true; }
+before="$(archives)"
+temporal() { docker exec bohux-infra-temporal-1 temporal --address temporal:7233 "$@"; }
+until temporal schedule describe --schedule-id bohux-backup-nightly >/dev/null 2>&1; do sleep 2; done
+temporal schedule trigger --schedule-id bohux-backup-nightly >/dev/null
+for _ in $(seq 60); do
+  [[ "$(archives)" -gt "$before" ]] && break
+  sleep 2
+done
+[[ "$(archives)" -gt "$before" ]] || die "the triggered backup wrote no archive"
+
+log "PASS: Bohux deployed itself, rolled itself back, recovered from a broken version of itself, and backed itself up"

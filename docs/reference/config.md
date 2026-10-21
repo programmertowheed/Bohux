@@ -18,10 +18,17 @@ Adding a setting means adding it here in the same commit.
 | (none) | `BOHUX_OPENBAO_TOKEN` | none | The OpenBao token itself, used when no token file is given. For the control plane running as an App, which receives it as a secret (ADR-0032). |
 | `--openbao-kv-mount` | `BOHUX_OPENBAO_KV_MOUNT` | `secret` | KV **v2** mount for values. Each secret is one path, `bohux/<tenant>/<secret id>`; Postgres records which version is current, and only that version is ever sent to a node. |
 | `--deploy-health-timeout` | `BOHUX_DEPLOY_HEALTH_TIMEOUT` | `5m` | How long a deployed Release has to report healthy before the deploy rolls back to the last healthy Release (ADR-0026). Go duration syntax. |
+| `--backup-recipient` | `BOHUX_BACKUP_RECIPIENT` | empty | age public key (`age1…`) nightly backups are encrypted to (ADR-0029, ADR-0033). Empty disables them and removes a schedule an earlier start created. Keep the private key off the host. |
+| `--backup-database-url` | `BOHUX_BACKUP_DATABASE_URL` | none, required with a recipient | DSN of a role with `BYPASSRLS` and `SELECT` only (the installer's `bohux_backup`). Never a superuser. |
+| `--backup-dir` | `BOHUX_BACKUP_DIR` | `/var/lib/bohux-backups` | Where archives go, as `bohux-<UTC time>.backup`, mode 0600. Its own volume in the install. |
+| `--backup-schedule` | `BOHUX_BACKUP_SCHEDULE` | `17 3 * * *` | When, as a 5-field cron expression in UTC. |
+| `--backup-keep` | `BOHUX_BACKUP_KEEP` | `7` | How many archives stay; older ones are deleted after each successful backup, never after a failed one. |
 
 On start it applies pending migrations, then serves. Temporal does not have to be up: the
 API serves without it, deploys are refused with `UNAVAILABLE` until it is reachable, and
-the worker keeps retrying every 5 seconds. `SIGINT`/`SIGTERM` stop it, giving
+the worker keeps retrying every 5 seconds. With a backup recipient, the control plane
+also creates or updates the Temporal schedule `bohux-backup-nightly` and serves it on
+task queue `bohux-backup`. `SIGINT`/`SIGTERM` stop it, giving
 in-flight requests up to 10 seconds.
 
 `GET /healthz` returns `200 ok` when Postgres answers, `503` otherwise.
