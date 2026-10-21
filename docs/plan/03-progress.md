@@ -41,8 +41,8 @@ work is in right now*.
 - **Slice:** S15 — web UI (🔄, read-only first cut done)
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** UI log tail (`StreamLogs`, xterm.js), then deploy and rollback
-  from the UI.
+- **Exact next step:** deploy and rollback from the UI (a confirm step; same RPCs as
+  the CLI), then release detail.
 
 ## Next session prompt
 
@@ -82,6 +82,7 @@ work is in right now*.
 | O24 | Open a PR for this branch (or allow CI on it) so the CI matrix runs at least once; nothing has run on GitHub yet | Confidence in every slice since S6 |
 | O25 | Accept or reject ADR-0038 (deploy notifications: project channels, URL in OpenBao, sent by activities after the terminal state; no email yet). Adds `notification.proto` | S13 |
 | O26 | Accept or reject ADR-0039 (web UI sign-in with an API token in `sessionStorage`, strict CSP, no cookie sessions until user accounts exist) | S15 |
+| O27 | Logs in the UI: keep the plain `<pre>` (no ANSI colors) or allow xterm.js, which needs `style-src 'unsafe-inline'` or nonces in the CSP (ADR-0013 vs ADR-0039) | S15 log view |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -937,8 +938,11 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       connect-web), reconnecting with backoff like the CLI; linked from the
       environment's deployments. Checked in Chromium against the live install while a
       real deploy ran (health gate → succeeded, no errors)
-- [ ] Next: release detail, the log tail (xterm.js, ADR-0013), then mutations
-      (deploy, rollback) mirroring the CLI
+- [x] Log tail: follows `StreamLogs` like `bohux logs -f` (pause, clear, last 2000
+      lines, stderr marked), checked live against the control plane App. **Deviation
+      from ADR-0013:** a plain `<pre>` with ANSI stripped instead of xterm.js, which
+      injects `<style>` elements the CSP refuses (ADR-0039); owner to decide (O27)
+- [ ] Next: release detail, then mutations (deploy, rollback) mirroring the CLI
 
 ## Known gaps and notes
 - **CI has not run on this branch.** `ci.yml` triggers on pushes to `main` and on

@@ -33,7 +33,7 @@ export function Environment() {
       <div>
         <h2 className="mb-2 font-semibold">Apps</h2>
         <Table
-          head={["App", "Replicas", "Routes", "Source"]}
+          head={["App", "Replicas", "Routes", "Source", ""]}
           empty="No apps yet. Create one with: bohux app create <slug> -e <env> --image …"
           rows={apps.data.apps.map((a) => [
             a.slug,
@@ -42,6 +42,9 @@ export function Environment() {
             a.source?.kind.case === "image"
               ? `${a.source.kind.value.repository}@${a.source.kind.value.digest.slice(0, 19)}…`
               : a.source?.kind.case === "git" ? a.source.kind.value.repoUrl : "",
+            <Link to="/p/$project/e/$env/a/$app/logs" params={{ project, env, app: a.slug }} className="text-accent">
+              logs
+            </Link>,
           ])}
         />
       </div>
