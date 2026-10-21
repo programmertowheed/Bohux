@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
@@ -21,6 +22,7 @@ import (
 	"github.com/bohumix/bohux/internal/provider"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/version"
+	"github.com/bohumix/bohux/providers/docker"
 )
 
 var errUsage = errors.New(`usage: bohux <command>
@@ -71,14 +73,26 @@ var defaultDeps = deps{
 	agentRegister: agent.Register, agentRun: runAgent,
 }
 
-// nodeProvider is the provider this agent runs (ADR-0007: one agent, one target).
-// The Docker provider arrives in S5; until then the agent connects and caches
-// assignments but does not reconcile.
-var nodeProvider provider.Provider
+// nodeProvider is the provider this agent runs: one agent, one target (ADR-0007). v0.1
+// is Docker only (ADR-0011); its target is the local daemon, or DOCKER_HOST if set.
+const nodeProvider = docker.Name
 
-// runAgent loads the agent's state, then runs the reconcile loop and the control-
-// plane stream side by side until ctx ends. They share only the cache: the stream
-// fills it, the reconciler acts on it, and either works without the other (rule 1).
+// agentProviders registers the providers compiled into this binary. Each keeps its
+// artifacts under root, <state dir>/workloads (rule 2).
+func agentProviders(root string) (*provider.Registry, error) {
+	r := provider.NewRegistry()
+	if err := r.Add(docker.Name, func(target string) (provider.Provider, error) {
+		return docker.New(root, target)
+	}); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// runAgent loads the agent's state, then runs the reconcile loop, the control-plane
+// stream, the disk-pressure monitor, and image retention side by side until ctx ends.
+// The loop and the stream share only the cache: the stream fills it, the reconciler
+// acts on it, and either works without the other (rule 1).
 func runAgent(ctx context.Context, stateDir string) error {
 	st, err := agent.Load(stateDir)
 	if err != nil {
@@ -88,22 +102,50 @@ func runAgent(ctx context.Context, stateDir string) error {
 	if err != nil {
 		return err
 	}
-	opts := agent.RunOptions{State: st, Cache: cache}
-	if nodeProvider == nil {
-		slog.WarnContext(ctx, "no provider in this build yet (S5); assignments are cached but not applied")
-		return agent.Run(ctx, opts)
+	reg, err := agentProviders(filepath.Join(stateDir, "workloads"))
+	if err != nil {
+		return err
 	}
-	desc, err := nodeProvider.Describe(ctx)
+	p, err := reg.New(nodeProvider, "")
+	if err != nil {
+		return err
+	}
+	desc, err := p.Describe(ctx)
 	if err != nil {
 		return fmt.Errorf("describe provider: %w", err)
 	}
-	opts.Providers = []*bohuxv1.ProviderDescriptor{descriptorProto(desc)}
-	rec := &agent.Reconciler{State: st, Cache: cache, Provider: nodeProvider}
-	opts.Reports = rec
-	errc := make(chan error, 2)
-	go func() { errc <- rec.Run(ctx) }()
-	go func() { errc <- agent.Run(ctx, opts) }()
-	return errors.Join(<-errc, <-errc)
+
+	disk := &agent.DiskMonitor{Paths: []string{stateDir}}
+	if d, ok := p.(interface {
+		DataRoot(context.Context) (string, error)
+	}); ok {
+		root, err := d.DataRoot(ctx)
+		if err != nil {
+			return fmt.Errorf("find provider data root: %w", err)
+		}
+		disk.Paths = append(disk.Paths, root)
+	}
+	rec := &agent.Reconciler{State: st, Cache: cache, Provider: p}
+	opts := agent.RunOptions{State: st, Cache: cache, Reports: rec, Disk: disk,
+		Providers: []*bohuxv1.ProviderDescriptor{descriptorProto(desc)}}
+
+	tasks := []func(context.Context) error{
+		rec.Run,
+		func(ctx context.Context) error { return agent.Run(ctx, opts) },
+		disk.Run,
+	}
+	if images, ok := p.(provider.ImageStore); ok {
+		tasks = append(tasks, (&agent.Retention{Images: images, Cache: cache}).Run)
+	}
+	errc := make(chan error, len(tasks))
+	for _, task := range tasks {
+		go func() { errc <- task(ctx) }()
+	}
+	errs := make([]error, len(tasks))
+	for i := range tasks {
+		errs[i] = <-errc
+	}
+	return errors.Join(errs...)
 }
 
 func descriptorProto(d provider.Descriptor) *bohuxv1.ProviderDescriptor {

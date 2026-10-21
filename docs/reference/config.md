@@ -60,6 +60,19 @@ Connects to the control plane recorded at registration over mTLS and keeps the
 stream open, reconnecting with backoff (1 s doubling to 1 min; 5 min after a
 `VersionRejected`). It never exits because the control plane is away (rule 1).
 
+Beside the stream it runs, with no further configuration:
+
+- **The reconcile loop** with the Docker provider (v0.1 has no other), on the local
+  daemon or `DOCKER_HOST` if set. Artifacts go to `<state dir>/workloads/`.
+- **The disk-pressure monitor:** below 10% free on the state dir's or Docker's data
+  root's filesystem, every StatusReport says the node is degraded and new builds are
+  refused (ADR-0020 item 4). Running workloads are untouched.
+- **Image retention,** hourly: per App, images of the current Release and the 5 newest
+  others are kept; older ones go unless a container uses them (ADR-0020 item 3).
+
+It refuses to start if the Docker provider's `Describe` fails (daemon down, Engine
+older than 25, Compose older than 2.24).
+
 ## The database role
 
 The DSN's role must own the Bohux schema and must be neither a superuser nor

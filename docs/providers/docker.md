@@ -15,7 +15,7 @@ writes for each workload (ADR-0025). Source: `providers/docker/`.
 
 ## What it writes
 
-One directory per workload under the agent's `workloads/` root, named after the
+One directory per workload under `<agent state dir>/workloads/`, named after the
 Compose project: `bohux-<app slug>-<environment slug>-<8 hex>`.
 
 | File | Mode | Contents |
@@ -45,6 +45,22 @@ All seven verbs: `plan`, `apply`, `status`, `logs`, `exec`, `scale`, `destroy`.
 | Logs | `docker compose logs --timestamps [--follow]`. |
 | Exec | `docker compose exec -T`. |
 | Scale | Rewrite `replicas` in `compose.yaml` and run `up` again, so the file stays the truth. |
+
+## Duties beside the verbs (ADR-0020)
+
+These run in the agent, not in `Apply` (ADR-0025).
+
+- **Image retention.** Images carrying `io.bohux.app` and `io.bohux.release` labels
+  are grouped per App. The current Release (from the cached assignment) and the 5
+  newest other Releases are kept; Release IDs are UUIDv7, so ID order is creation
+  order. Older images are removed with `docker image rm` (no force) unless any
+  container, running or stopped, uses them. Nothing is removed while no assignment is
+  cached. Images without the labels are never touched: Bohux labels the images it
+  builds (S7), so images pulled by digest are not pruned yet.
+- **Disk pressure.** The agent checks free space on its state dir and on Docker's data
+  root (`docker info` `DockerRootDir`) every 30 s. Below 10% free the node reports
+  `degraded` with reason `DISK_PRESSURE` in every StatusReport and new builds are
+  refused. Running workloads are never stopped because of it.
 
 ## Known gaps (v0.1)
 
