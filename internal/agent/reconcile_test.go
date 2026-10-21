@@ -58,7 +58,11 @@ func (f *fakeProvider) Apply(_ context.Context, req provider.ApplyRequest) (prov
 	if req.Spec.Ingress {
 		st.Endpoints = map[int32]string{}
 		for _, p := range req.Spec.Runtime.GetPorts() {
-			st.Endpoints[p.GetContainerPort()] = fmt.Sprintf("%s:%d", req.Spec.Ref.App, p.GetContainerPort())
+			host := req.Spec.Ref.App
+			if req.Spec.Ref.Slot != "" {
+				host += "-" + req.Spec.Ref.Slot
+			}
+			st.Endpoints[p.GetContainerPort()] = fmt.Sprintf("%s:%d", host, p.GetContainerPort())
 		}
 	}
 	f.running[req.Spec.Ref] = st

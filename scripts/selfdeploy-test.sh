@@ -45,6 +45,9 @@ mkdir -p "$work/hello"
 printf 'FROM busybox:1.36\nRUN mkdir -p /www && echo "hello from bohux" > /www/index.html\nCMD ["httpd", "-f", "-p", "8080", "-h", "/www"]\n' \
   >"$work/hello/Dockerfile"
 hello="$(push hello "$work/hello")"
+mkdir -p "$work/hello2"
+sed 's/hello from bohux/hello again/' "$work/hello/Dockerfile" >"$work/hello2/Dockerfile"
+hello2="$(push hello2 "$work/hello2")"
 
 # --- Install -------------------------------------------------------------------------
 log "installing $v1"
@@ -112,4 +115,23 @@ body="$(curl -fsSk --resolve "hello.localhost:$https_port:127.0.0.1" "https://he
   die "the ingress did not serve hello.localhost"
 [[ "$body" == "hello from bohux" ]] || die "hello.localhost served \"$body\""
 
-log "PASS: Bohux deployed itself, rolled itself back, recovered from a broken version of itself, backed itself up, and served an App on a route"
+# --- A second deploy of it, with a client polling throughout (ADR-0035) --------------
+log "deploying hello again while a client polls it: no request may fail"
+poll="$work/poll.log"
+( while :; do
+    curl -fsSk --max-time 2 --resolve "hello.localhost:$https_port:127.0.0.1" "https://hello.localhost:$https_port/" >>"$poll" 2>&1 ||
+      echo "FAILED" >>"$poll"
+    sleep 0.1
+  done ) &
+poller=$!
+BOHUX_PROJECT=demo "$bin" deploy hello -e prod --image "$hello2" --reason selfdeploy || die "redeploying hello"
+sleep 2
+kill "$poller"
+wait "$poller" 2>/dev/null || true
+failed="$(grep -c FAILED "$poll" || true)"
+served="$(grep -c '^hello' "$poll" || true)"
+grep -q '^hello again$' "$poll" || die "the new release was never served"
+[[ "$failed" == 0 ]] || die "$failed of $((failed + served)) requests failed during the deploy"
+log "zero downtime: $served requests, none failed"
+
+log "PASS: Bohux deployed itself, rolled itself back, recovered from a broken version of itself, backed itself up, and served an App on a route through a deploy without downtime"

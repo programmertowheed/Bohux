@@ -87,6 +87,10 @@ type ResourceRef struct {
 
 	EnvironmentSlug string `json:",omitempty"`
 	AppSlug         string `json:",omitempty"`
+	// Slot tells apart two copies of one App that run side by side during a
+	// zero-downtime deploy ("blue", "green"; ADR-0035). Each slot is an independent
+	// workload with its own names; empty is the App's only copy.
+	Slot string `json:",omitempty"`
 }
 
 // SecretSource yields a workload's secret values when the provider writes its

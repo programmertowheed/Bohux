@@ -116,6 +116,11 @@ func TestProjectName(t *testing.T) {
 	if p := project(provider.ResourceRef{Environment: "e", App: "a", AppSlug: "../Evil App!"}); strings.ContainsAny(p, "./ !") {
 		t.Errorf("unsafe characters in %q", p)
 	}
+	green := ref
+	green.Slot = "green"
+	if project(green) != got+"-green" {
+		t.Errorf("slot green = %q, want %q (an empty slot keeps today's name)", project(green), got+"-green")
+	}
 }
 
 func TestParseLogLine(t *testing.T) {

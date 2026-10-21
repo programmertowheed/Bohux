@@ -144,11 +144,11 @@ func TestRouteChangeDoesNotReapply(t *testing.T) {
 	}
 	fake := newFake()
 	r := &Reconciler{State: st, Cache: c, Provider: fake, Ingress: &fakeIngress{}}
-	cacheWorkloads(t, signer, st, c, 1, deployed("r1", "d1"))
+	cacheWorkloads(t, signer, st, c, 1, withRoutes("r1"))
 	r.Once(ctx)
 	routed := func(gen uint64, hosts ...string) {
 		t.Helper()
-		w := deployed("r1", "d1")
+		w := withRoutes("r1")
 		for _, h := range hosts {
 			w.Routes = append(w.Routes, &bohuxv1.Route{Host: h, Port: 8080})
 		}
@@ -157,7 +157,8 @@ func TestRouteChangeDoesNotReapply(t *testing.T) {
 			t.Fatalf("gen %d: %v", gen, ws)
 		}
 	}
-	// The first route joins the workload to the ingress: one apply.
+	// The first route joins the workload to the ingress: one apply (into the other
+	// slot, cut over in the same pass, ADR-0035).
 	before, _ := fake.counts()
 	routed(2, "api.example.com")
 	if a, _ := fake.counts(); a != before+1 {

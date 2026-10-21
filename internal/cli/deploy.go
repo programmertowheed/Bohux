@@ -189,12 +189,13 @@ func terminal(s bohuxv1.DeploymentState) bool {
 }
 
 // warnDowntime says so up front when a deploy stops the old container before the new
-// one can bind its host port (ADR-0020 item 5).
+// one can bind its host port (ADR-0020 item 5). Apps served only on routes switch
+// without downtime (ADR-0035).
 func warnDowntime(c *command, app *bohuxv1.App) {
 	for _, p := range app.GetRuntime().GetPorts() {
 		if p.GetHostPort() != 0 {
 			c.printf("note: %s publishes host port %d; the old container stops before the new one starts, "+
-				"so the port is briefly unavailable (measured 0.4-1.5 s). Zero-downtime deploys need ingress (v0.2).\n",
+				"so the port is briefly unavailable (measured 0.4-1.5 s). Apps served only on routes deploy without downtime.\n",
 				app.GetSlug(), p.GetHostPort())
 			return
 		}

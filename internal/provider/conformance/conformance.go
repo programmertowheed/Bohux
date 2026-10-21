@@ -485,6 +485,45 @@ func Cases() []Case {
 			}
 			return nil
 		}},
+		{"slots of one app are independent workloads", func(ctx context.Context, h *Harness) error {
+			// A zero-downtime deploy runs a second copy of the App beside the first
+			// (ADR-0035): applying and destroying it must not touch the first.
+			other := h.Ref
+			other.Slot = "green"
+			sp := h.spec(h.release + 1)
+			sp.Ref = other
+			if _, err := h.S.Provider.Apply(ctx, provider.ApplyRequest{Spec: sp}); err != nil {
+				return fmt.Errorf("apply slot green: %w", err)
+			}
+			deadline := time.Now().Add(h.S.Timeout)
+			for {
+				st, err := h.S.Provider.Status(ctx, other)
+				if err != nil {
+					return fmt.Errorf("status of slot green: %w", err)
+				}
+				if st.Running && st.Healthy && st.Hash == sp.Hash {
+					break
+				}
+				if time.Now().After(deadline) {
+					return fmt.Errorf("slot green not converged: %+v", st)
+				}
+				time.Sleep(200 * time.Millisecond)
+			}
+			if err := h.converged(ctx, h.spec(h.release).Hash); err != nil {
+				return fmt.Errorf("the first copy after applying slot green: %w", err)
+			}
+			if err := h.S.Provider.Destroy(ctx, other); err != nil {
+				return fmt.Errorf("destroy slot green: %w", err)
+			}
+			left, err := h.S.Inspector.Leftovers(ctx, other)
+			if err != nil {
+				return err
+			}
+			if len(left) != 0 {
+				return fmt.Errorf("slot green left %v", left)
+			}
+			return h.converged(ctx, h.spec(h.release).Hash)
+		}},
 		{"logs stream and end cleanly", func(ctx context.Context, h *Harness) error {
 			out, err := h.logs(ctx)
 			if err != nil {

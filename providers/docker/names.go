@@ -30,12 +30,16 @@ const (
 var unsafeName = regexp.MustCompile(`[^a-z0-9-]+`)
 
 // project is the Compose project name, also the workload's directory name:
-// bohux-<app slug>-<environment slug>-<8 hex of the IDs> (ADR-0025). The hash keeps it
-// unique on the node; the slugs keep it readable.
+// bohux-<app slug>-<environment slug>-<8 hex of the IDs>[-<slot>] (ADR-0025, ADR-0035).
+// The hash keeps it unique on the node; the slugs keep it readable.
 func project(ref provider.ResourceRef) string {
 	sum := sha256.Sum256([]byte(ref.Environment + "/" + ref.App))
-	return "bohux-" + slug(ref.AppSlug, "app") + "-" + slug(ref.EnvironmentSlug, "env") + "-" +
+	name := "bohux-" + slug(ref.AppSlug, "app") + "-" + slug(ref.EnvironmentSlug, "env") + "-" +
 		hex.EncodeToString(sum[:])[:8]
+	if ref.Slot != "" {
+		name += "-" + slug(ref.Slot, "slot")
+	}
+	return name
 }
 
 func slug(s, fallback string) string {

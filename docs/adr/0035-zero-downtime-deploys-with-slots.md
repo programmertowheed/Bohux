@@ -41,7 +41,11 @@ once nodes run it:
 5. **Status during a switch** reports the pending slot's Release as `APPLYING` (or its
    failure) until the cut-over, so the gate waits; `ingress_loaded` is true only after
    the cut-over.
-6. **Replicas** (Scale) apply to the live slot in place; scaling does not switch.
+6. **Any change to what runs switches**, replicas and rotated secrets included: the
+   switch compares spec hashes and nothing else, and it costs only time. A change to
+   the routes alone is not one (ADR-0034): it reloads the ingress in place. A crashed
+   live slot restarts in place: the agent records the live slot's hash, since a
+   provider reports none for a workload that is not running.
 
 ## Alternatives considered
 - **The workflow orchestrates** (assign the new slot, wait, switch, remove the old).

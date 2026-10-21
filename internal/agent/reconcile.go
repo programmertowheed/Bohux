@@ -144,37 +144,57 @@ func (r *Reconciler) Once(ctx context.Context) *agentv1.StatusReport {
 		slog.ErrorContext(ctx, "read fallback state; skipping this pass", "err", err)
 		return nil
 	}
+	slots, err := r.loadSlots()
+	if err != nil {
+		slog.ErrorContext(ctx, "read slot state; skipping this pass", "err", err)
+		return nil
+	}
 	report := &agentv1.StatusReport{Generation: a.GetGeneration()}
 	desired := map[provider.ResourceRef]bool{}
 	seen := map[string]bool{}
 	var routed []routedWorkload
+	inAssignment := map[string]bool{}
 	for _, w := range a.GetWorkloads() {
 		ref := provider.ResourceRef{Environment: w.GetEnvironmentId(), App: w.GetAppId(),
 			EnvironmentSlug: w.GetEnvironmentSlug(), AppSlug: w.GetAppSlug()}
-		desired[ref] = true
+		inAssignment[slotKey(ref)] = true
 		seen[w.GetDeploymentId()] = true
 		w, fellBack := r.effective(ctx, w, fallbacks)
 		ws := &agentv1.WorkloadStatus{AppId: w.GetAppId(), ReleaseId: w.GetReleaseId()}
 		report.Workloads = append(report.Workloads, ws)
 		if w.GetProvider() != desc.Name {
+			desired[ref] = true
 			fail(ws, "PROVIDER_MISSING")
 			slog.ErrorContext(ctx, "workload needs a provider this node does not run",
 				"app", w.GetAppId(), "wants", w.GetProvider(), "have", desc.Name)
 			continue
 		}
-		if !applied[ref] {
-			// Recorded before Apply, so a crash mid-apply still leaves a trace to
-			// clean up if the workload is later removed.
-			applied[ref] = true
-			if err := r.saveApplied(applied); err != nil {
+		var (
+			st      provider.Status
+			current = true
+			cut     *cutover
+		)
+		if r.switches(w) {
+			var keep []provider.ResourceRef
+			st, current, cut, keep = r.convergeSlots(ctx, ref, w, ws, slots, applied)
+			for _, k := range keep {
+				desired[k] = true
+			}
+		} else {
+			// A workload that does not switch stays in the slot it lives in.
+			ref.Slot = slots[slotKey(ref)].Slot
+			desired[ref] = true
+			if err := r.record(applied, ref); err != nil {
+				// Recorded before Apply, so a crash mid-apply still leaves a trace to
+				// clean up if the workload is later removed.
 				fail(ws, "STATE_WRITE_FAILED")
 				slog.ErrorContext(ctx, "record applied workload", "app", w.GetAppId(), "err", err)
 				continue
 			}
+			st = r.converge(ctx, ref, w, ws)
 		}
-		st := r.converge(ctx, ref, w, ws)
 		if len(w.GetRoutes()) > 0 {
-			routed = append(routed, routedWorkload{w: w, ws: ws, endpoints: st.Endpoints})
+			routed = append(routed, routedWorkload{w: w, ws: ws, endpoints: st.Endpoints, current: current, cut: cut})
 		}
 		if fellBack {
 			if ws.Failure == nil {
@@ -186,21 +206,20 @@ func (r *Reconciler) Once(ctx context.Context) *agentv1.StatusReport {
 		}
 	}
 	r.saveFallbacks(ctx, fallbacks, seen)
-	r.serve(ctx, routed)
+	r.serve(ctx, routed, slots, applied)
+	for key := range slots {
+		if !inAssignment[key] {
+			delete(slots, key)
+		}
+	}
+	if err := r.saveSlots(slots); err != nil {
+		slog.ErrorContext(ctx, "record slot state", "err", err)
+	}
 
 	for ref := range applied {
-		if desired[ref] {
-			continue
+		if !desired[ref] {
+			r.destroy(ctx, ref, applied)
 		}
-		if err := r.Provider.Destroy(ctx, ref); err != nil {
-			slog.ErrorContext(ctx, "destroy removed workload; will retry", "app", ref.App, "err", err)
-			continue
-		}
-		delete(applied, ref)
-		if err := r.saveApplied(applied); err != nil {
-			slog.ErrorContext(ctx, "record destroyed workload", "app", ref.App, "err", err)
-		}
-		slog.InfoContext(ctx, "workload removed", "app", ref.App)
 	}
 	return report
 }
@@ -209,13 +228,17 @@ type routedWorkload struct {
 	w         *agentv1.Workload
 	ws        *agentv1.WorkloadStatus
 	endpoints map[int32]string
+	// current is false while the endpoints serve an older spec than w (a switch in
+	// progress, ADR-0035); cut is the switch to finish once the ingress serves w.
+	current bool
+	cut     *cutover
 }
 
 // serve loads the node's ingress with every routed workload's hosts (ADR-0034). A
 // workload is marked ingress_loaded once the loaded config serves all its routes; a
 // refused or impossible load marks the routed workloads INGRESS_FAILED, retried next
 // pass, while the ingress keeps serving what it had.
-func (r *Reconciler) serve(ctx context.Context, routed []routedWorkload) {
+func (r *Reconciler) serve(ctx context.Context, routed []routedWorkload, slots map[string]slotEntry, applied map[provider.ResourceRef]bool) {
 	if r.Ingress == nil {
 		for _, rw := range routed {
 			failIfOK(rw.ws, "INGRESS_FAILED")
@@ -253,7 +276,10 @@ func (r *Reconciler) serve(ctx context.Context, routed []routedWorkload) {
 		return
 	}
 	for i, rw := range routed {
-		rw.ws.IngressLoaded = complete[i]
+		rw.ws.IngressLoaded = complete[i] && rw.current
+		if rw.cut != nil {
+			r.finish(ctx, rw.cut, slots, applied)
+		}
 	}
 }
 
@@ -463,7 +489,10 @@ func (r *Reconciler) saveApplied(applied map[provider.ResourceRef]bool) error {
 		if refs[i].Environment != refs[j].Environment {
 			return refs[i].Environment < refs[j].Environment
 		}
-		return refs[i].App < refs[j].App
+		if refs[i].App != refs[j].App {
+			return refs[i].App < refs[j].App
+		}
+		return refs[i].Slot < refs[j].Slot
 	})
 	b, err := json.Marshal(refs)
 	if err != nil {
