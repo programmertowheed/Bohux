@@ -38,13 +38,13 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S3e2 — EnvironmentService (⏳, next to start)
-- **Exact next step:** EnvironmentService in `internal/api`, following `project.go`.
+- **Slice:** S3e3 — AppService (⏳, next to start)
+- **Exact next step:** AppService in `internal/api`, following `environment.go`, with
+  the validation listed under S3e3.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slices S3e2 (EnvironmentService)
-> and S3e3 (AppService) on branch `claude/relaxed-rubin-76m7dl`, in internal/api,
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S3e3 (AppService) on branch `claude/relaxed-rubin-76m7dl`, in internal/api,
 > replacing their Unimplemented stubs and following internal/api/project.go: store write
 > path with audit events, ADR-0022 idempotency, `expected_revision_id`, ADR-0023
 > two-step authorization (authorizeProject in every handler, resolving the project
@@ -253,9 +253,9 @@ Split into sub-slices, one session each.
       principals, which arrive with user accounts (v1.0); tokens carry their role
       (ADR-0023). Stored bindings would have no effect
 
-#### S3e2 — EnvironmentService ⏳
-- [ ] CRUD per api-contract.md; `node_id` must name a live node in the tenant;
-      delete refuses live apps
+#### S3e2 — EnvironmentService ✅
+- [x] CRUD per api-contract.md; `node_id` must name a live node in the tenant;
+      delete refuses live apps; config stored as a JSON object
 
 #### S3e3 — AppService ⏳
 - [ ] CRUD + ScaleApp. Validation to write: source is git (repo_url) or image
@@ -336,7 +336,7 @@ Split into sub-slices, one session each.
   rule for gates: write the ADR as *proposed*, build on it, list it under *Waiting on
   the owner* (O6 onward).
 - S2a done: ADR-0021 (goose on pgx).
-- S3e split into S3e1–S3e3. S3e1 done: ProjectService.
+- S3e split into S3e1–S3e3. S3e1 done: ProjectService. S3e2 done: EnvironmentService.
 - S3d done: `internal/secrets` redaction, access-log interceptor, rule 3 test.
 - S3c3 done: bootstrap command, Identity/Tenant handlers, idempotency records, all
   tested over real ConnectRPC; end-to-end binary smoke test passed.
