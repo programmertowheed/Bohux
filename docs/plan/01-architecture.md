@@ -42,7 +42,8 @@ features added later. See `docs/specs/data-model.md` and ADR-0004 and ADR-0017.
 A deploy is a long-running saga: build, scan, sign, push, provision dependencies, run
 migrations, shift traffic, gate on health, finalize or compensate. Durable workflow
 execution survives control plane restarts mid-deploy and gives retries and compensation
-for free. See ADR-0002.
+for free. See ADR-0002. The worker runs in the control plane; one deploy runs per App at a
+time; compensation reassigns the last healthy Release (ADR-0026).
 
 ### Eventing: none (agent streams + Postgres)
 No message bus. Agents hold one outbound gRPC stream each: assignments go down, status and
