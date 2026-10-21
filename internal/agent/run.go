@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	agentv1 "github.com/bohumix/bohux/gen/bohux/agent/v1"
 	"github.com/bohumix/bohux/gen/bohux/agent/v1/agentv1connect"
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
@@ -43,6 +45,9 @@ type RunOptions struct {
 	// Without it the agent still sends an empty report each interval as a heartbeat.
 	Reports        ReportSource
 	ReportInterval time.Duration
+	// Disk, if set, marks every report degraded while the node is under disk pressure
+	// (ADR-0020 item 4), and a change is sent at once.
+	Disk *DiskMonitor
 	// MinBackoff and MaxBackoff bound reconnect delays; zero means 1s and 1m.
 	MinBackoff, MaxBackoff time.Duration
 }
@@ -50,12 +55,17 @@ type RunOptions struct {
 // report is what to send now: the reconciler's latest, or a heartbeat that carries
 // only the cached generation.
 func (o RunOptions) report() *agentv1.StatusReport {
+	rep := &agentv1.StatusReport{Generation: o.Cache.Generation()}
 	if o.Reports != nil {
 		if r := o.Reports.Latest(); r != nil {
-			return r
+			// A copy: the reconciler's report is shared.
+			rep = proto.Clone(r).(*agentv1.StatusReport)
 		}
 	}
-	return &agentv1.StatusReport{Generation: o.Cache.Generation()}
+	if o.Disk != nil {
+		rep.Degraded, rep.DegradedDetail = o.Disk.Degraded()
+	}
+	return rep
 }
 
 // Run keeps a stream to the control plane open until ctx ends, reconnecting with
@@ -153,9 +163,12 @@ func session(ctx context.Context, client agentv1connect.AgentServiceClient, o Ru
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	var updated <-chan struct{}
+	var updated, diskChanged <-chan struct{}
 	if o.Reports != nil {
 		updated = o.Reports.Updated()
+	}
+	if o.Disk != nil {
+		diskChanged = o.Disk.Changed()
 	}
 	sendReport := func() error {
 		if err := stream.Send(&agentv1.ConnectRequest{Msg: &agentv1.ConnectRequest_StatusReport{
@@ -175,6 +188,10 @@ func session(ctx context.Context, client agentv1connect.AgentServiceClient, o Ru
 				return err
 			}
 		case <-updated:
+			if err := sendReport(); err != nil {
+				return err
+			}
+		case <-diskChanged:
 			if err := sendReport(); err != nil {
 				return err
 			}
