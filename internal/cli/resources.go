@@ -22,9 +22,9 @@ import (
 // ResourceCommands lists the resource commands for the binary's usage text.
 const ResourceCommands = `  project list|create      projects
   env list|create          environments of a project (-p)
-  app list|show|create|pull-secret
-                           apps of an environment (-p, -e); pull-secret names the
-                           secret with a registry credential (next deploy on)
+  app list|show|create|pull-secret|deploy-key
+                           apps of an environment (-p, -e); pull-secret and deploy-key
+                           name the secret with a registry credential or an SSH key
   route list|add|remove    an app's hosts on the node's ingress
   secret list|set          an environment's secrets; set reads the value from stdin
   node list|token          nodes, and bootstrap tokens to register one
@@ -136,6 +136,8 @@ func (c *command) runResource(ctx context.Context, noun string, args []string, s
 		return r.appCreate(ctx, rest)
 	case "app pull-secret":
 		return r.appPullSecret(ctx, rest)
+	case "app deploy-key":
+		return r.appDeployKey(ctx, rest)
 	case "route list":
 		return r.routeList(ctx, rest)
 	case "route add":
@@ -543,6 +545,37 @@ func (r *resource) appShow(ctx context.Context, args []string) error {
 		[][]string{append(appRow(a), cpu, mem, pull)})
 }
 
+// appDeployKey sets or clears the secret a Git App's source is fetched with
+// (ADR-0041). The next build uses it.
+func (r *resource) appDeployKey(ctx context.Context, args []string) error {
+	key := r.fs.String("secret", "", "environment secret holding a private SSH key")
+	none := r.fs.Bool("clear", false, "fetch without a key")
+	pos, err := r.positional(args, 1, "an app slug")
+	if err != nil {
+		return err
+	}
+	if (*key == "") == !*none {
+		return fmt.Errorf("app deploy-key: give --secret KEY or --clear: %w", ErrUsage)
+	}
+	var cerr error
+	uerr := r.updateApp(ctx, pos[0], func(a *bohuxv1.App) bool {
+		git := a.GetSource().GetGit()
+		if git == nil {
+			cerr = fmt.Errorf("app deploy-key: %s is not built from Git: %w", pos[0], ErrUsage)
+			return false
+		}
+		if git.GetSshKeySecret() == *key {
+			return false
+		}
+		git.SshKeySecret = *key
+		return true
+	})
+	if cerr != nil {
+		return cerr
+	}
+	return uerr
+}
+
 // appPullSecret sets or clears the secret the App's image is pulled with (ADR-0041).
 // It is part of the App's spec: the next deploy uses it.
 func (r *resource) appPullSecret(ctx context.Context, args []string) error {
@@ -574,6 +607,7 @@ func (r *resource) appCreate(ctx context.Context, args []string) error {
 	image := r.fs.String("image", "", "prebuilt image, repository@sha256:<digest>")
 	git := r.fs.String("git", "", "Git repository URL to build from (Dockerfile)")
 	ref := r.fs.String("ref", "", "default branch, tag, or commit to build")
+	deployKey := r.fs.String("ssh-key-secret", "", "environment secret holding an SSH deploy key for --git")
 	replicas := r.fs.Int("replicas", 1, "replicas")
 	health := r.fs.String("health", "", "HTTP health check, PATH or PATH:PORT (default port: the first)")
 	pull := r.fs.String("image-pull-secret", "", "environment secret holding a Docker config.json for a private registry")
@@ -588,6 +622,8 @@ func (r *resource) appCreate(ctx context.Context, args []string) error {
 	switch {
 	case *image != "" && *git != "":
 		return fmt.Errorf("app create: --image and --git are exclusive: %w", ErrUsage)
+	case *image != "" && *deployKey != "":
+		return fmt.Errorf("app create: --ssh-key-secret needs --git: %w", ErrUsage)
 	case *image != "":
 		img, err := parseImage(*image)
 		if err != nil {
@@ -595,7 +631,7 @@ func (r *resource) appCreate(ctx context.Context, args []string) error {
 		}
 		src.Kind = &bohuxv1.Source_Image{Image: img}
 	case *git != "":
-		src.Kind = &bohuxv1.Source_Git{Git: &bohuxv1.GitSource{RepoUrl: *git, Ref: *ref}}
+		src.Kind = &bohuxv1.Source_Git{Git: &bohuxv1.GitSource{RepoUrl: *git, Ref: *ref, SshKeySecret: *deployKey}}
 	default:
 		return fmt.Errorf("app create: --image or --git is required: %w", ErrUsage)
 	}

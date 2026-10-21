@@ -29,7 +29,7 @@ import (
 // slowBuilder plays the agent's builder: it takes a moment, then succeeds.
 type slowBuilder struct{}
 
-func (slowBuilder) Build(ctx context.Context, _ uuid.UUID, req *agentv1.BuildRequest) (*agentv1.BuildResult, error) {
+func (slowBuilder) Build(ctx context.Context, _, _ uuid.UUID, req *agentv1.BuildRequest) (*agentv1.BuildResult, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()

@@ -177,7 +177,7 @@ func runAgent(ctx context.Context, cfg agentConfig) error {
 	}
 	opts := agent.RunOptions{State: st, Cache: cache, Reports: rec, Disk: disk,
 		Providers: []*bohuxv1.ProviderDescriptor{descriptorProto(desc)},
-		Builder:   &agent.Builder{Disk: disk, WorkDir: filepath.Join(stateDir, "builds")},
+		Builder:   &agent.Builder{Disk: disk, WorkDir: filepath.Join(stateDir, "builds"), Secrets: st},
 		Workloads: rec}
 
 	tasks := []func(context.Context) error{

@@ -424,7 +424,7 @@ type fakeDispatcher struct {
 	fail string
 }
 
-func (f *fakeDispatcher) Build(_ context.Context, _ uuid.UUID, req *agentv1.BuildRequest) (*agentv1.BuildResult, error) {
+func (f *fakeDispatcher) Build(_ context.Context, _, _ uuid.UUID, req *agentv1.BuildRequest) (*agentv1.BuildResult, error) {
 	f.got = append(f.got, req)
 	if f.fail != "" {
 		return &agentv1.BuildResult{ReleaseId: req.GetReleaseId(), Failure: &bohuxv1.ErrorDetail{Reason: f.fail}}, nil
@@ -532,6 +532,54 @@ func TestBuildActivities(t *testing.T) {
 	if err == nil || isType(err, ErrTypeInvalid) {
 		t.Errorf("RunBuild before its row exists = %v, want a retryable error", err)
 	}
+
+	t.Run("a deploy key travels by handle (ADR-0041)", func(t *testing.T) {
+		ctx := context.Background()
+		var secret, secretRev uuid.UUID
+		audit := store.Audit{Actor: store.Actor{ID: store.SystemActorID, Kind: store.ActorSystem}, Action: "test",
+			ResourceType: "bohux.v1.Secret"}
+		if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+			var env, rev uuid.UUID
+			var rt, secs []byte
+			if err := tx.QueryRow(ctx, `SELECT a.environment_id, a.revision_id, r.runtime, r.secrets FROM apps_heads a
+				JOIN apps_revisions r ON r.id = a.revision_id WHERE a.id = $1`, app).Scan(&env, &rev, &rt, &secs); err != nil {
+				return err
+			}
+			var err error
+			if secret, secretRev, err = tx.Create(ctx, "secret_refs", []store.Col{{Name: "environment_id", Value: env},
+				{Name: "key", Value: "DEPLOY_KEY"}, {Name: "handle", Value: "openbao:deploy-key"}},
+				[]store.Col{{Name: "value_version", Value: 1}}, audit); err != nil {
+				return err
+			}
+			_, err = tx.Update(ctx, "apps", app, rev, []store.Col{
+				{Name: "source", Value: `{"git": {"repo_url": "git@example.com:acme/web.git", "ssh_key_secret": "DEPLOY_KEY"}}`},
+				{Name: "runtime", Value: rt}, {Name: "secrets", Value: secs}},
+				store.Audit{Actor: audit.Actor, Action: "test", ResourceType: "bohux.v1.App"})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		disp.fail = ""
+		keyed := fixture.Release(t, h.st, h.tenant, app, "building", false)
+		if _, err := run(keyed, ""); err != nil {
+			t.Fatal(err)
+		}
+		got := disp.got[len(disp.got)-1]
+		if k := got.GetSshKey(); k.GetKey() != "DEPLOY_KEY" || k.GetHandle() != "openbao:deploy-key" || len(got.GetSealedSecrets()) != 0 {
+			t.Errorf("dispatched key %v, sealed %d bytes; want the handle only", k, len(got.GetSealedSecrets()))
+		}
+
+		if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+			_, err := tx.Delete(ctx, "secret_refs", secret, secretRev, audit)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		gone := fixture.Release(t, h.st, h.tenant, app, "building", false)
+		if _, err := run(gone, ""); !isType(err, ErrTypeInvalid) || !strings.Contains(err.Error(), "DEPLOY_KEY") {
+			t.Errorf("RunBuild with the key deleted = %v, want invalid naming DEPLOY_KEY", err)
+		}
+	})
 }
 
 // TestProviderOptionsTravel: a Release's App revision's provider options reach the

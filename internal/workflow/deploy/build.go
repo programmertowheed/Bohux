@@ -51,7 +51,7 @@ type ReleaseRef struct {
 
 // Dispatcher sends a build to a node and waits for it; agentapi.Server implements it.
 type Dispatcher interface {
-	Build(ctx context.Context, node uuid.UUID, req *agentv1.BuildRequest) (*agentv1.BuildResult, error)
+	Build(ctx context.Context, tenant, node uuid.UUID, req *agentv1.BuildRequest) (*agentv1.BuildResult, error)
 }
 
 // BuildWorkflow builds a Release on its App's node and records the outcome on the
@@ -101,12 +101,18 @@ func (a *Activities) RunBuild(ctx context.Context, in BuildInput) (BuildOutcome,
 	}
 	var (
 		app, node uuid.UUID
-		src       []byte
+		git       *bohuxv1.GitSource
+		sshKey    *bohuxv1.SecretRef
 	)
 	err = a.Store.InTenant(ctx, ids[0], func(tx *store.Tx) error {
-		err := tx.QueryRow(ctx, `SELECT h.app_id, ar.source FROM releases_heads h
+		var (
+			env uuid.UUID
+			src []byte
+		)
+		err := tx.QueryRow(ctx, `SELECT h.app_id, ap.environment_id, ar.source FROM releases_heads h
 			JOIN apps_revisions ar ON ar.id = h.config_revision_id
-			WHERE h.id = $1 AND NOT h.deleted`, ids[1]).Scan(&app, &src)
+			JOIN apps_heads ap ON ap.id = h.app_id
+			WHERE h.id = $1 AND NOT h.deleted`, ids[1]).Scan(&app, &env, &src)
 		if errors.Is(err, pgx.ErrNoRows) {
 			// The API starts this run before it writes the Release (ADR-0026 item 3);
 			// retry until the row exists or the build times out.
@@ -114,6 +120,26 @@ func (a *Activities) RunBuild(ctx context.Context, in BuildInput) (BuildOutcome,
 		}
 		if err != nil {
 			return fmt.Errorf("read release: %w", err)
+		}
+		source := &bohuxv1.Source{}
+		if err := loadJSON.Unmarshal(src, source); err != nil {
+			return fmt.Errorf("decode app source: %w", err)
+		}
+		if git = source.GetGit(); git == nil {
+			return invalid("the release's app has no git source")
+		}
+		if key := git.GetSshKeySecret(); key != "" {
+			// The key travels by handle; the relay seals its value for the node (ADR-0041).
+			var handle string
+			err := tx.QueryRow(ctx, `SELECT handle FROM secret_refs_heads
+				WHERE environment_id = $1 AND key = $2 AND NOT deleted`, env, key).Scan(&handle)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return invalid("the app's deploy key secret " + key + " no longer exists")
+			}
+			if err != nil {
+				return fmt.Errorf("read deploy key secret: %w", err)
+			}
+			sshKey = &bohuxv1.SecretRef{Key: key, Handle: handle}
 		}
 		node, err = appNode(ctx, tx, app)
 		return err
@@ -123,14 +149,6 @@ func (a *Activities) RunBuild(ctx context.Context, in BuildInput) (BuildOutcome,
 	}
 	if err != nil {
 		return BuildOutcome{}, err
-	}
-	source := &bohuxv1.Source{}
-	if err := loadJSON.Unmarshal(src, source); err != nil {
-		return BuildOutcome{}, fmt.Errorf("decode app source: %w", err)
-	}
-	git := source.GetGit()
-	if git == nil {
-		return BuildOutcome{}, invalid("the release's app has no git source")
 	}
 	ref := in.Ref
 	if ref == "" {
@@ -151,8 +169,9 @@ func (a *Activities) RunBuild(ctx context.Context, in BuildInput) (BuildOutcome,
 			}
 		}
 	}()
-	res, err := a.Builds.Build(ctx, node, &agentv1.BuildRequest{
+	res, err := a.Builds.Build(ctx, ids[0], node, &agentv1.BuildRequest{
 		ReleaseId: in.ReleaseID, AppId: app.String(), RepoUrl: git.GetRepoUrl(), Ref: ref, Subpath: git.GetSubpath(),
+		SshKey: sshKey,
 	})
 	if err != nil {
 		// Including agentapi.ErrNodeOffline: Temporal retries until the node is back.

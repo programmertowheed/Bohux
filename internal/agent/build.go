@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -56,6 +57,13 @@ type Builder struct {
 	WorkDir string
 	// Env is added to the environment of git and docker; DOCKER_HOST selects the daemon.
 	Env []string
+	// Secrets opens a deploy key sealed to this node (ADR-0041); nil refuses builds
+	// that carry one.
+	Secrets interface {
+		OpenSealed(sealed []byte) (*agentv1.SecretValues, error)
+	}
+	// SSH is the ssh client git fetches with; empty means "ssh" on PATH.
+	SSH string
 
 	mu      sync.Mutex
 	results map[string]*agentv1.BuildResult
@@ -108,7 +116,32 @@ func (b *Builder) build(ctx context.Context, req *agentv1.BuildRequest) *agentv1
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 
-	commit, err := b.fetch(ctx, dir, req.GetRepoUrl(), req.GetRef())
+	key, err := b.deployKey(req)
+	if err != nil {
+		slog.WarnContext(ctx, "open deploy key", "release", req.GetReleaseId(), "err", err)
+		return fail(BuildInvalid)
+	}
+	var keyFile string
+	if key != "" {
+		// The key exists on disk only for this build, in a 0700 directory removed with
+		// the checkout (ADR-0041).
+		keyDir, err := os.MkdirTemp(b.WorkDir, "key-")
+		if err != nil {
+			slog.ErrorContext(ctx, "deploy key dir", "err", err)
+			return fail(BuildFailed)
+		}
+		defer func() { _ = os.RemoveAll(keyDir) }()
+		if !strings.HasSuffix(key, "\n") {
+			key += "\n" // ssh refuses a key without its final newline
+		}
+		keyFile = filepath.Join(keyDir, "id")
+		if err := os.WriteFile(keyFile, []byte(key), 0o600); err != nil {
+			slog.ErrorContext(ctx, "write deploy key", "err", err)
+			return fail(BuildFailed)
+		}
+	}
+
+	commit, err := b.fetch(ctx, dir, req.GetRepoUrl(), req.GetRef(), keyFile)
 	if err != nil {
 		slog.WarnContext(ctx, "fetch build source", "release", req.GetReleaseId(), "err", err)
 		return fail(BuildFetchFailed)
@@ -117,9 +150,13 @@ func (b *Builder) build(ctx context.Context, req *agentv1.BuildRequest) *agentv1
 		slog.ErrorContext(ctx, "buildx builder", "err", err)
 		return fail(BuildNoBuilder)
 	}
-	out, err := b.run(ctx, "docker", "buildx", "build", "--builder", BuilderName, "--load", "-q",
-		"--label", "io.bohux.app="+req.GetAppId(), "--label", "io.bohux.release="+req.GetReleaseId(),
-		filepath.Join(dir, sub))
+	args := []string{"buildx", "build", "--builder", BuilderName, "--load", "-q",
+		"--label", "io.bohux.app=" + req.GetAppId(), "--label", "io.bohux.release=" + req.GetReleaseId()}
+	if keyFile != "" {
+		// For RUN --mount=type=ssh steps that fetch private dependencies.
+		args = append(args, "--ssh", "default="+keyFile)
+	}
+	out, err := b.run(ctx, nil, "docker", append(args, filepath.Join(dir, sub))...)
 	if err != nil {
 		slog.WarnContext(ctx, "docker buildx build", "release", req.GetReleaseId(), "err", err)
 		return fail(BuildFailed)
@@ -132,11 +169,41 @@ func (b *Builder) build(ctx context.Context, req *agentv1.BuildRequest) *agentv1
 	return &agentv1.BuildResult{ReleaseId: req.GetReleaseId(), ImageId: id, Commit: commit}
 }
 
+// deployKey opens the build's sealed deploy key, empty when it has none.
+func (b *Builder) deployKey(req *agentv1.BuildRequest) (string, error) {
+	if req.GetSshKey() == nil && len(req.GetSealedSecrets()) == 0 {
+		return "", nil
+	}
+	if b.Secrets == nil || len(req.GetSealedSecrets()) == 0 {
+		return "", errors.New("the build names a deploy key this node cannot open")
+	}
+	vals, err := b.Secrets.OpenSealed(req.GetSealedSecrets())
+	if err != nil {
+		return "", err
+	}
+	if vals.GetSshKey() == "" {
+		return "", errors.New("the sealed values hold no deploy key")
+	}
+	return vals.GetSshKey(), nil
+}
+
 // fetch checks out ref (branch, tag, or commit) of repo into dir and returns the
-// commit it resolved to. A shallow fetch of the one ref is all a build needs.
-func (b *Builder) fetch(ctx context.Context, dir, repo, ref string) (string, error) {
+// commit it resolved to. A shallow fetch of the one ref is all a build needs. With a
+// key file, git connects with that key only; a host's key is trusted on first use and
+// pinned in the work dir's known_hosts from then on.
+func (b *Builder) fetch(ctx context.Context, dir, repo, ref, keyFile string) (string, error) {
 	if ref == "" {
 		ref = "HEAD"
+	}
+	var env []string
+	if keyFile != "" {
+		ssh := b.SSH
+		if ssh == "" {
+			ssh = "ssh"
+		}
+		env = []string{"GIT_SSH_COMMAND=" + strings.Join([]string{shellQuote(ssh), "-i", shellQuote(keyFile),
+			"-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
+			"-o", "UserKnownHostsFile=" + shellQuote(filepath.Join(b.WorkDir, "known_hosts"))}, " ")}
 	}
 	steps := [][]string{
 		{"git", "init", "-q", dir},
@@ -144,11 +211,11 @@ func (b *Builder) fetch(ctx context.Context, dir, repo, ref string) (string, err
 		{"git", "-C", dir, "checkout", "-q", "FETCH_HEAD"},
 	}
 	for _, s := range steps {
-		if _, err := b.run(ctx, s[0], s[1:]...); err != nil {
+		if _, err := b.run(ctx, env, s[0], s[1:]...); err != nil {
 			return "", err
 		}
 	}
-	out, err := b.run(ctx, "git", "-C", dir, "rev-parse", "HEAD")
+	out, err := b.run(ctx, nil, "git", "-C", dir, "rev-parse", "HEAD")
 	if err != nil {
 		return "", err
 	}
@@ -158,7 +225,7 @@ func (b *Builder) fetch(ctx context.Context, dir, repo, ref string) (string, err
 // ensureBuilder creates the bohux builder with limits and a capped cache unless it
 // already exists.
 func (b *Builder) ensureBuilder(ctx context.Context) error {
-	if _, err := b.run(ctx, "docker", "buildx", "inspect", BuilderName); err == nil {
+	if _, err := b.run(ctx, nil, "docker", "buildx", "inspect", BuilderName); err == nil {
 		return nil
 	}
 	cfg := filepath.Join(b.WorkDir, "buildkitd.toml")
@@ -166,23 +233,29 @@ func (b *Builder) ensureBuilder(ctx context.Context) error {
 	if err := os.WriteFile(cfg, []byte(conf), 0o600); err != nil {
 		return fmt.Errorf("write buildkitd config: %w", err)
 	}
-	_, err := b.run(ctx, "docker", "buildx", "create", "--name", BuilderName,
+	_, err := b.run(ctx, nil, "docker", "buildx", "create", "--name", BuilderName,
 		"--driver", "docker-container", "--driver-opt", "memory="+defaultBuildMemory,
 		"--driver-opt", "cpu-quota="+defaultBuildCPUQuota, "--buildkitd-config", cfg)
 	return err
 }
 
-// run executes a command and returns its stdout. Its error carries the exit status
-// and the last lines of stderr; builds take no secret inputs in v0.1 (ADR-0028).
-func (b *Builder) run(ctx context.Context, name string, args ...string) ([]byte, error) {
+// run executes a command with extra environment variables and returns its stdout. Its
+// error carries the exit status and the last lines of stderr, which name the key's
+// file at most, never its contents (ADR-0041).
+func (b *Builder) run(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0"), b.Env...)
+	cmd.Env = append(append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0"), b.Env...), env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("%s %s: %w: %s", name, args[0], err, tail(stderr.String(), 5))
 	}
 	return stdout.Bytes(), nil
+}
+
+// shellQuote quotes s for the shell that runs GIT_SSH_COMMAND.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func tail(s string, n int) string {

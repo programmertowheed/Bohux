@@ -67,7 +67,10 @@ func appSpec(ctx context.Context, tx *store.Tx, env uuid.UUID, st appState) ([]s
 	if err := validRoutes(st.routes, st.runtime); err != nil {
 		return nil, err
 	}
-	if err := validPullSecret(ctx, tx, env, st.pullSecret); err != nil {
+	if err := validSecretKey(ctx, tx, env, "image_pull_secret", st.pullSecret); err != nil {
+		return nil, err
+	}
+	if err := validSecretKey(ctx, tx, env, "source.git.ssh_key_secret", st.source.GetGit().GetSshKeySecret()); err != nil {
 		return nil, err
 	}
 	srcJSON, err := storeJSON.Marshal(st.source)
@@ -128,6 +131,15 @@ func normalize(s *structpb.Struct) *structpb.Struct {
 	return s
 }
 
+// sshURL reports whether git fetches repo over SSH: ssh:// or scp-like user@host:path.
+func sshURL(repo string) bool {
+	if strings.HasPrefix(repo, "ssh://") {
+		return true
+	}
+	at, colon := strings.Index(repo, "@"), strings.Index(repo, ":")
+	return !strings.Contains(repo, "://") && at > 0 && colon > at+1 && colon < len(repo)-1
+}
+
 func validSource(src *bohuxv1.Source) error {
 	switch k := src.GetKind().(type) {
 	case *bohuxv1.Source_Git:
@@ -136,6 +148,10 @@ func validSource(src *bohuxv1.Source) error {
 		}
 		if strings.Contains(k.Git.GetSubpath(), "..") {
 			return invalidArgument("source.git.subpath", "INVALID", "subpath must stay inside the repository")
+		}
+		if k.Git.GetSshKeySecret() != "" && !sshURL(k.Git.GetRepoUrl()) {
+			return invalidArgument("source.git.ssh_key_secret", "INVALID",
+				"a deploy key needs an ssh:// or user@host:path repository URL")
 		}
 	case *bohuxv1.Source_Image:
 		if k.Image.GetRepository() == "" {
@@ -218,22 +234,22 @@ func validSecretRefs(ctx context.Context, tx *store.Tx, env uuid.UUID, refs []*b
 	return nil
 }
 
-// validPullSecret checks the key names a live secret of the environment. Only the key
-// is stored; the value is resolved and sealed for the node (ADR-0041).
-func validPullSecret(ctx context.Context, tx *store.Tx, env uuid.UUID, key string) error {
+// validSecretKey checks a credential's key names a live secret of the environment.
+// Only the key is stored; the value is resolved and sealed for the node (ADR-0041).
+func validSecretKey(ctx context.Context, tx *store.Tx, env uuid.UUID, field, key string) error {
 	if key == "" {
 		return nil
 	}
 	if !envVarName.MatchString(key) {
-		return invalidArgument("image_pull_secret", "INVALID", "image_pull_secret must be a secret key")
+		return invalidArgument(field, "INVALID", field+" must be a secret key")
 	}
 	var ok bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM secret_refs_heads
 		WHERE environment_id = $1 AND key = $2 AND NOT deleted)`, env, key).Scan(&ok); err != nil {
-		return fmt.Errorf("check image pull secret: %w", err)
+		return fmt.Errorf("check %s: %w", field, err)
 	}
 	if !ok {
-		return invalidArgument("image_pull_secret", "UNKNOWN_SECRET", fmt.Sprintf("no secret %q in this environment", key))
+		return invalidArgument(field, "UNKNOWN_SECRET", fmt.Sprintf("no secret %q in this environment", key))
 	}
 	return nil
 }

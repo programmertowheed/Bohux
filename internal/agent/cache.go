@@ -156,13 +156,18 @@ func (s *State) OpenPullConfig(w *agentv1.Workload) (string, error) {
 }
 
 func (s *State) openSealed(w *agentv1.Workload) (*agentv1.SecretValues, error) {
-	if len(w.GetSealedSecrets()) == 0 {
+	return s.OpenSealed(w.GetSealedSecrets())
+}
+
+// OpenSealed opens SecretValues sealed to this node's key; nothing sealed opens empty.
+func (s *State) OpenSealed(sealed []byte) (*agentv1.SecretValues, error) {
+	if len(sealed) == 0 {
 		return &agentv1.SecretValues{Values: map[string]string{}}, nil
 	}
 	var pub, priv [32]byte
 	copy(pub[:], s.sealingKey.PublicKey().Bytes())
 	copy(priv[:], s.sealingKey.Bytes())
-	plain, ok := box.OpenAnonymous(nil, w.GetSealedSecrets(), &pub, &priv)
+	plain, ok := box.OpenAnonymous(nil, sealed, &pub, &priv)
 	if !ok {
 		return nil, errors.New("sealed secrets do not open with this node's key")
 	}

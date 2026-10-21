@@ -75,6 +75,24 @@ a registry mirror, a CA, or other limits, create the builder yourself first, e.g
 builder as it is. Builds are refused while the node reports disk pressure.
 `bohux agent register` refuses a node without the buildx plugin.
 
+**Private repositories (ADR-0041).** A Git source may name an environment secret
+holding a private SSH deploy key, with an `ssh://` or `user@host:path` URL:
+
+```sh
+bohux secret set DEPLOY_KEY -e prod < deploy_key        # the private key file
+bohux app create site -e prod --git git@github.com:acme/site.git --ssh-key-secret DEPLOY_KEY
+bohux app deploy-key site -e prod --secret DEPLOY_KEY   # or --clear
+```
+
+The key reaches the node sealed to its key, inside the build request; it is never
+stored in the control plane's database. For the build only, the agent writes it to a
+`0700` directory under its work dir, fetches with `GIT_SSH_COMMAND` (that key only,
+`BatchMode`), passes it to `buildx --ssh default=…` for `RUN --mount=type=ssh` steps,
+and removes it when the build ends. The node needs an `ssh` client. A Git host's key
+is trusted on first use and pinned in `<state dir>/builds/known_hosts`; to pin it
+beforehand, write that file yourself (`ssh-keyscan github.com >> …`, checked against
+the host's published fingerprints).
+
 ## Private images (ADR-0041)
 
 An App names an environment secret that holds a Docker `config.json` (the
@@ -109,7 +127,7 @@ refreshed on the node yet.
   pseudo-terminal on the agent, planned later.
 - **Logs do not separate stdout from stderr** (`LogLine.Stderr` is always false).
 - Secret values cannot contain newlines (env-file format).
-- Builds fetch public repositories only; build logs stay in the agent's log.
+- Build logs stay in the agent's log.
 
 ## `Spec.Raw`
 

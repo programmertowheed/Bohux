@@ -119,8 +119,8 @@ export function NewApp({ environmentId }: { environmentId: string }) {
 }
 
 // AppSettings scales the App and edits its routes, both without a deploy (ADR-0027,
-// ADR-0034), and names the secret its image is pulled with, for the next deploy
-// (ADR-0041).
+// ADR-0034), and names the secrets its image is pulled and its Git source fetched
+// with, for the next deploy or build (ADR-0041).
 export function AppSettings({ app }: { app: App }) {
   const scale = useMutation(AppService.method.scaleApp);
   const update = useMutation(AppService.method.updateApp);
@@ -128,6 +128,8 @@ export function AppSettings({ app }: { app: App }) {
   const [replicas, setReplicas] = useState(String(app.runtime?.replicas ?? 1));
   const [host, setHost] = useState("");
   const [pull, setPull] = useState(app.imagePullSecret);
+  const git = app.source?.kind.case === "git" ? app.source.kind.value : undefined;
+  const [deployKey, setDeployKey] = useState(git?.sshKeySecret ?? "");
   const [error, setError] = useState<string>();
   const port = app.runtime?.ports[0]?.containerPort ?? 0;
   const run = async (f: () => Promise<unknown>) => {
@@ -139,7 +141,7 @@ export function AppSettings({ app }: { app: App }) {
       setError((err as Error).message);
     }
   };
-  const save = (change: Partial<Pick<App, "routes" | "imagePullSecret">>) => run(() => update.mutateAsync({
+  const save = (change: Partial<Pick<App, "routes" | "imagePullSecret" | "source">>) => run(() => update.mutateAsync({
     id: app.meta?.id, source: app.source, runtime: app.runtime, secrets: app.secrets,
     providerOptions: app.providerOptions, routes: app.routes, imagePullSecret: app.imagePullSecret,
     ...change, expectedRevisionId: app.meta?.revisionId, idempotencyKey: key(),
@@ -187,6 +189,17 @@ export function AppSettings({ app }: { app: App }) {
             </Field>
             <button type="submit" className="text-accent" disabled={pull.trim() === app.imagePullSecret || update.isPending}>Save</button>
           </form>
+          {git && (
+            <form className="flex items-end gap-2" onSubmit={(e) => {
+              e.preventDefault();
+              void save({ source: { ...app.source!, kind: { case: "git", value: { ...git, sshKeySecret: deployKey.trim() } } } });
+            }}>
+              <Field id={`key-${app.slug}`} label="Deploy key secret (empty: public repository)">
+                <input id={`key-${app.slug}`} className={input} value={deployKey} onChange={(e) => setDeployKey(e.target.value)} />
+              </Field>
+              <button type="submit" className="text-accent" disabled={deployKey.trim() === git.sshKeySecret || update.isPending}>Save</button>
+            </form>
+          )}
           {error && <p className="text-danger" role="alert">{error}</p>}
           <button className="text-muted" onClick={close}>Close</button>
         </div>

@@ -161,6 +161,27 @@ func TestResourceCommands(t *testing.T) {
 	}
 
 	must("app", "create", "site", "-e", "prod", "--git", "https://example.com/acme/site.git", "--port", "8080")
+
+	// A Git deploy key, also an environment secret (ADR-0041).
+	if _, err := bohux("-----BEGIN OPENSSH PRIVATE KEY-----\nc2VrcmV0LWtleQ==\n-----END OPENSSH PRIVATE KEY-----\n",
+		"secret", "set", "DEPLOY_KEY", "-e", "prod"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bohux("", "app", "deploy-key", "site", "--secret", "DEPLOY_KEY", "-e", "prod"); err == nil {
+		t.Error("a deploy key was accepted for an https:// repository")
+	}
+	if _, err := bohux("", "app", "deploy-key", "api", "--secret", "DEPLOY_KEY", "-e", "prod"); err == nil {
+		t.Error("a deploy key was accepted for an image app")
+	}
+	must("app", "create", "private", "-e", "prod", "--git", "git@example.com:acme/private.git", "--ssh-key-secret", "DEPLOY_KEY")
+	if out := must("app", "show", "private", "-e", "prod", "-o", "json"); !strings.Contains(out, "DEPLOY_KEY") ||
+		strings.Contains(out, "c2VrcmV0LWtleQ") {
+		t.Errorf("app show of a keyed git app:\n%s", out)
+	}
+	must("app", "deploy-key", "private", "--clear", "-e", "prod")
+	if out := must("app", "show", "private", "-e", "prod", "-o", "json"); strings.Contains(out, "DEPLOY_KEY") {
+		t.Errorf("app show after deploy-key --clear:\n%s", out)
+	}
 	out = must("webhook", "create", "site", "-e", "prod", "--branch", "main", "-o", "json")
 	var created struct {
 		Webhook struct {

@@ -2,11 +2,17 @@ package agentapi
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/nacl/box"
+	"google.golang.org/protobuf/proto"
 
 	agentv1 "github.com/bohumix/bohux/gen/bohux/agent/v1"
+	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
+	"github.com/bohumix/bohux/internal/store"
 )
 
 // ErrNodeOffline means the node has no open stream, or it closed while waiting.
@@ -14,11 +20,19 @@ var ErrNodeOffline = errors.New("node is not connected")
 
 // Build asks the node to build a Release over its open stream and waits for the
 // result (ADR-0028). It fails with ErrNodeOffline if the node is not connected or
-// disconnects first; the caller (a Temporal activity) retries.
-func (s *Server) Build(ctx context.Context, node uuid.UUID, req *agentv1.BuildRequest) (*agentv1.BuildResult, error) {
+// disconnects first; the caller (a Temporal activity) retries. A deploy key named by
+// handle is resolved and sealed to the node here, and sent only sealed (ADR-0041).
+func (s *Server) Build(ctx context.Context, tenant, node uuid.UUID, req *agentv1.BuildRequest) (*agentv1.BuildResult, error) {
 	v, ok := s.sessions.Load(node)
 	if !ok {
 		return nil, ErrNodeOffline
+	}
+	req = proto.Clone(req).(*agentv1.BuildRequest)
+	req.SealedSecrets = nil
+	if ref := req.GetSshKey(); ref != nil {
+		if err := s.sealBuild(ctx, tenant, node, req, ref); err != nil {
+			return nil, err
+		}
 	}
 	sess := v.(*session)
 	ch := sess.await(req.GetReleaseId())
@@ -38,6 +52,40 @@ func (s *Server) Build(ctx context.Context, node uuid.UUID, req *agentv1.BuildRe
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+func (s *Server) sealBuild(ctx context.Context, tenant, node uuid.UUID, req *agentv1.BuildRequest, ref *bohuxv1.SecretRef) error {
+	if s.Secrets == nil {
+		return errNoResolver
+	}
+	var key []byte
+	if err := s.Store.InTenant(ctx, tenant, func(tx *store.Tx) error {
+		return tx.QueryRow(ctx, `SELECT sealing_public_key FROM nodes_heads WHERE id = $1 AND NOT deleted`,
+			node).Scan(&key)
+	}); err != nil {
+		return fmt.Errorf("read node %s sealing key: %w", node, err)
+	}
+	if len(key) != 32 {
+		return fmt.Errorf("node %s has no sealing key", node)
+	}
+	byHandle, err := s.Secrets.Resolve(ctx, tenant, []string{ref.GetHandle()})
+	if err != nil {
+		return fmt.Errorf("resolve deploy key for release %s: %w", req.GetReleaseId(), err)
+	}
+	v, ok := byHandle[ref.GetHandle()]
+	if !ok {
+		return fmt.Errorf("deploy key %s for release %s did not resolve", ref.GetKey(), req.GetReleaseId())
+	}
+	plain, err := proto.Marshal(&agentv1.SecretValues{SshKey: v})
+	if err != nil {
+		return fmt.Errorf("encode deploy key: %w", err)
+	}
+	var recipient [32]byte
+	copy(recipient[:], key)
+	if req.SealedSecrets, err = box.SealAnonymous(nil, plain, &recipient, rand.Reader); err != nil {
+		return fmt.Errorf("seal deploy key: %w", err)
+	}
+	return nil
 }
 
 // await registers a waiter for a Release's build result.

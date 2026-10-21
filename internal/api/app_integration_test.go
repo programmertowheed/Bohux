@@ -4,6 +4,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -82,10 +83,39 @@ func TestApps(t *testing.T) {
 		return resp.Msg.GetApp(), nil
 	}
 
+	gitWithKey := func(repo, key string) *bohuxv1.Source {
+		return &bohuxv1.Source{Kind: &bohuxv1.Source_Git{Git: &bohuxv1.GitSource{RepoUrl: repo, SshKeySecret: key}}}
+	}
+
 	app, err := create(deployer1, "api", source, runtime(), []*bohuxv1.SecretRef{dbURL}, "a1")
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	t.Run("a git source names its deploy key by secret key (ADR-0041)", func(t *testing.T) {
+		// Its own environment, so the apps here do not count in the tests below.
+		keysEnv, err := envs.CreateEnvironment(ctx, req(owner1, &bohuxv1.CreateEnvironmentRequest{
+			ProjectId: p1.String(), Slug: "keys", ProviderBinding: dockerOn(node), IdempotencyKey: "e-keys"}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		keysID := keysEnv.Msg.GetEnvironment().GetMeta().GetId()
+		h.secretRef(mustUUID(t, keysID), "DEPLOY_KEY")
+		for i, repo := range []string{"git@example.com:acme/private.git", "ssh://git@example.com:2222/acme/private.git"} {
+			src := gitWithKey(repo, "DEPLOY_KEY")
+			resp, err := apps.CreateApp(ctx, req(deployer1, &bohuxv1.CreateAppRequest{EnvironmentId: keysID,
+				Slug: fmt.Sprintf("private-%d", i), Source: src, Runtime: runtime(), IdempotencyKey: fmt.Sprintf("k%d", i)}))
+			if err != nil {
+				t.Fatalf("%s: %v", repo, err)
+			}
+			if !proto.Equal(resp.Msg.GetApp().GetSource(), src) {
+				t.Errorf("stored source %v, want %v", resp.Msg.GetApp().GetSource(), src)
+			}
+		}
+		// The key is a secret of the app's own environment, not of a sibling.
+		_, err = create(deployer1, "borrowed", gitWithKey("git@example.com:acme/private.git", "DEPLOY_KEY"), runtime(), nil, "k-borrowed")
+		wantCode(t, err, connect.CodeInvalidArgument)
+	})
 
 	t.Run("create round-trips source, runtime, and secret refs", func(t *testing.T) {
 		got, err := apps.GetApp(ctx, req(viewer1, &bohuxv1.GetAppRequest{Lookup: &bohuxv1.GetAppRequest_Slug{
@@ -126,6 +156,9 @@ func TestApps(t *testing.T) {
 			{"bad secret key", source, runtime(), []*bohuxv1.SecretRef{{Key: "lower", Handle: dbURL.GetHandle()}}},
 			{"unknown handle", source, runtime(), []*bohuxv1.SecretRef{{Key: "DATABASE_URL", Handle: "nope"}}},
 			{"duplicate key", source, runtime(), []*bohuxv1.SecretRef{dbURL, dbURL}},
+			{"deploy key not a secret", gitWithKey("git@example.com:acme/api.git", "NO_SUCH"), runtime(), nil},
+			{"deploy key over https", gitWithKey("https://example.com/acme/api.git", "DATABASE_URL"), runtime(), nil},
+			{"deploy key bad name", gitWithKey("ssh://git@example.com/acme/api.git", "lower"), runtime(), nil},
 		}
 		for i, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {

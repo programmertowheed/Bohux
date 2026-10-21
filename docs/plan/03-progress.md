@@ -38,19 +38,18 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S17 — private images and Git credentials (ADR-0041): 🔄 registry half
-  done; S15 web UI 🔄 (webhooks, channels, tokens, terminal not in the UI); S16 done
+- **Slice:** S17 — private images and Git credentials (ADR-0041) done; S15 web UI 🔄
+  (webhooks, channels, tokens, terminal not in the UI); S16 done
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** S17's Git half: `GitSource.ssh_key_secret`, sealed as
-  `SecretValues.ssh_key`, the agent's build fetches with it and passes it to
-  `buildx --ssh`. Then the next v0.2 item. Team invites need user accounts: ask the
-  owner first (identity model).
+- **Exact next step:** the UI's missing screens (webhooks, notification channels) so it
+  matches the CLI, then the next v0.2 item. Buildpacks/Nixpacks needs an owner choice
+  (O32); team invites need user accounts (identity model): ask the owner first.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then continue slice S17 (private images
-> and Git credentials, ADR-0041: the Git SSH key half) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
+> Read CLAUDE.md and docs/plan/03-progress.md, then continue slice S15 (web UI: webhooks
+> and notification channels screens, ADR-0039) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
 > and ADR-0034. Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*).
 > Verify with build, vet, golangci-lint (also with the integration tag), unit and
 > integration tests. Tick boxes, update the tracker and the next session prompt,
@@ -89,6 +88,8 @@ work is in right now*.
 | O28 | Accept or reject ADR-0040 (resource view: agents sample node and workloads every 30 s, carried in status reports, no history) | S16 |
 | O29 | Web terminal (v0.2): `Exec` is bidirectional; browsers cannot stream both ways over Connect on HTTP/1.1. Options: a WebSocket bridge on the control plane (a UI-only path, rule 8), or HTTP/2 end to end via the ingress | S15 |
 | O30 | Accept or reject ADR-0041 (registry credentials and Git deploy keys are environment secrets the App names; sealed apart from its env vars; on the node only for the one command). Adds `App.image_pull_secret`, migration 00021 | S17 |
+| O31 | Git host keys for deploy-key fetches: trusted on first use per node and pinned in `<state>/builds/known_hosts` (now). Alternative: a known_hosts secret per environment, refusing unknown hosts | S17 |
+| O32 | Buildpacks or Nixpacks (v0.2 "auto-detect builds"): which builder, and is the extra builder image on the node acceptable (ADR-0011 item 7 lists Dockerfile only) | next v0.2 item |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -989,7 +990,7 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       (self-deploy, rollback, fallback, backup, route, 128 polled requests without a
       failure, samples)
 
-### S17 — Private images and Git credentials (ADR-0041) 🔄
+### S17 — Private images and Git credentials (ADR-0041) ✅
 - [x] Proposed ADR-0041 (O30): a credential is an environment secret the App names by
       key; it is sealed to the node in its own `SecretValues` field, never among the
       environment variables; it exists on the node only for the command that uses it
@@ -1008,8 +1009,18 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 - [x] CLI `app create --image-pull-secret`, `app pull-secret --secret|--clear`,
       `app show` column; UI fields in New app and app settings; docs in
       `docs/providers/docker.md`
-- [ ] Git: `GitSource.ssh_key_secret`, `SecretValues.ssh_key`, the agent's fetch and
-      `buildx --ssh` with a throwaway key file
+- [x] Git: proto `GitSource.ssh_key_secret`, `BuildRequest.ssh_key` (handle) and
+      `sealed_secrets`, `SecretValues.ssh_key`; the API checks the key and that the URL
+      is SSH; the build activity resolves the handle (a deleted secret fails the build
+      with a clear reason); the relay seals it to the node (callers cannot pass sealed
+      bytes); the agent fetches with a throwaway key file and forwards it to
+      `buildx --ssh`; CLI `--ssh-key-secret`, `app deploy-key`; UI field for Git apps
+      (type-checked and built, not clicked through in a browser); docs
+- [x] Tests: API validation (unknown key, https URL, bad name, sibling environment),
+      the build activity (handle only, deleted key), relay sealing, and the agent
+      against a real buildx with a stand-in `ssh` that accepts only the right key file
+      (the sandbox has no ssh client): fetch, `RUN --mount=type=ssh`, key removed,
+      wrong key → `SOURCE_FETCH_FAILED`, unopenable key → `BUILD_REQUEST_INVALID`
 
 ## Known gaps and notes
 - **CI has not run on this branch.** `ci.yml` triggers on pushes to `main` and on
@@ -1098,7 +1109,9 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 - S15 forms and App page done (checked in Chromium).
 - S17 started: ADR-0041 proposed (O30). Private registry images work end to end
   against a real authenticated registry; CLI, UI, docs. Full integration suite green.
-- **Next:** S17 Git deploy keys.
+- S17 done: Git deploy keys (sealed in the build request, throwaway key file, buildx
+  `--ssh`). Host key policy raised as O31; Buildpacks/Nixpacks choice as O32.
+- **Next:** UI screens for webhooks and notification channels.
 
 ### 2026-10-21 (auto run, S9e–S9f) — branch `claude/relaxed-rubin-76m7dl`
 - S9e done: `scripts/selfdeploy-test.sh` and the CI `selfdeploy` job; passed here. The

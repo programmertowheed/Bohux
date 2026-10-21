@@ -160,6 +160,8 @@ message SecretValues {
   map<string, string> values = 1 [debug_redact = true];
   // The Docker config.json to pull the image with (ADR-0041); used only for the pull.
   string image_pull_config = 2 [debug_redact = true];
+  // The private SSH key to fetch a Git source with (ADR-0041); used only by the build.
+  string ssh_key = 3 [debug_redact = true];
 }
 
 message StatusReport {
@@ -273,6 +275,11 @@ message BuildRequest {
   string ref = 4;
   // Build context within the repository. Empty means the repository root.
   string subpath = 5;
+  // The deploy key's secret, by handle, set by the control plane's caller; the relay
+  // resolves it and sends only sealed_secrets (ADR-0041).
+  bohux.v1.SecretRef ssh_key = 6;
+  // SecretValues with ssh_key, sealed to the node's key; set by the relay alone.
+  bytes sealed_secrets = 7;
 }
 
 // Agent → control plane: how a build ended.

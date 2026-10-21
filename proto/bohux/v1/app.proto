@@ -64,6 +64,9 @@ message GitSource {
   // Build context within the repository. Empty means the repository root.
   string subpath = 3;
   BuildStrategy strategy = 4;
+  // Key of an environment secret holding a private SSH deploy key, for ssh:// or
+  // user@host:path repository URLs (ADR-0041). Empty: a public repository.
+  string ssh_key_secret = 5;
 }
 
 // A prebuilt image, pinned by digest, never by tag.
