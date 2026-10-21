@@ -120,6 +120,12 @@ func (p *Provider) Status(ctx context.Context, ref provider.ResourceRef) (provid
 		out.Message = fmt.Sprintf("%d of %d replicas running", len(running), want)
 		return out, nil
 	}
+	if len(st.IngressPorts) > 0 {
+		out.Endpoints = map[int32]string{}
+		for _, port := range st.IngressPorts {
+			out.Endpoints[port] = net.JoinHostPort(project(ref), strconv.Itoa(int(port)))
+		}
+	}
 	if st.Health == nil {
 		out.Healthy = true
 		return out, nil

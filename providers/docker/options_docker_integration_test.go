@@ -105,7 +105,7 @@ func TestRestartAfterFailedStartKeepsNetworks(t *testing.T) {
 	ref := provider.ResourceRef{Environment: "env-" + suffix, App: "app-" + suffix, AppSlug: "rst", EnvironmentSlug: "test"}
 	spec := provider.Spec{Ref: ref, Release: "r1", Image: sleeper(t, suffix), Hash: "h1",
 		Runtime: &bohuxv1.Runtime{Replicas: 1, Ports: []*bohuxv1.Port{{ContainerPort: 80, HostPort: port}}},
-		Raw: []byte(fmt.Sprintf(`{"networks": [%q], "publish_address": "127.0.0.1"}`, network))}
+		Raw:     []byte(fmt.Sprintf(`{"networks": [%q], "publish_address": "127.0.0.1"}`, network))}
 	t.Cleanup(func() { _ = p.Destroy(ctx, ref) })
 	if _, err := p.Apply(ctx, provider.ApplyRequest{Spec: spec}); err == nil {
 		t.Fatal("Apply succeeded while the port was held")

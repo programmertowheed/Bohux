@@ -25,6 +25,11 @@ func (p *Provider) Apply(ctx context.Context, req provider.ApplyRequest) (provid
 	if err != nil {
 		return provider.ApplyResult{}, err
 	}
+	if spec.Ingress {
+		if err := p.ensureIngressNetwork(ctx); err != nil {
+			return provider.ApplyResult{}, err
+		}
+	}
 	dir := p.dir(spec.Ref)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return provider.ApplyResult{}, fmt.Errorf("create %s: %w", dir, err)
@@ -56,6 +61,21 @@ func (p *Provider) Apply(ctx context.Context, req provider.ApplyRequest) (provid
 		return provider.ApplyResult{}, err
 	}
 	return provider.ApplyResult{Changed: true}, nil
+}
+
+// ensureIngressNetwork creates the shared ingress network if it is missing. The
+// install bundle creates it with the ingress; this covers a workload applied first.
+func (p *Provider) ensureIngressNetwork(ctx context.Context) error {
+	if _, err := p.run(ctx, "", "network", "inspect", IngressNetwork); err == nil {
+		return nil
+	}
+	if _, err := p.run(ctx, "", "network", "create", IngressNetwork); err != nil {
+		// Another apply may have created it meanwhile.
+		if _, ierr := p.run(ctx, "", "network", "inspect", IngressNetwork); ierr != nil {
+			return fmt.Errorf("create network %s: %w", IngressNetwork, err)
+		}
+	}
+	return nil
 }
 
 func writeAtomic(path string, data []byte, mode os.FileMode) error {

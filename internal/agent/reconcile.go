@@ -314,7 +314,9 @@ func (r *Reconciler) spec(ref provider.ResourceRef, w *agentv1.Workload) (provid
 	shape.SealedSecrets, shape.DeploymentId = nil, ""
 	// The fallback changes what may run later, not what runs now.
 	shape.Fallback, shape.FallbackAfter = nil, nil
-	// Routes reload the ingress, never the containers (ADR-0034).
+	// Routes reload the ingress, never the containers (ADR-0034); only whether there
+	// are any changes what runs (the provider joins the workload to the ingress).
+	ingress := len(shape.GetRoutes()) > 0
 	shape.Routes = nil
 	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(shape)
 	if err != nil {
@@ -322,10 +324,13 @@ func (r *Reconciler) spec(ref provider.ResourceRef, w *agentv1.Workload) (provid
 	}
 	h := sha256.New()
 	h.Write(b)
+	if ingress {
+		h.Write([]byte("\x00ingress"))
+	}
 	h.Write(r.secretDigest(values))
 	spec := provider.Spec{
 		Ref: ref, Release: w.GetReleaseId(), Image: w.GetImage(), Runtime: w.GetRuntime(),
-		Raw: w.GetProviderOptions(), Hash: hex.EncodeToString(h.Sum(nil)),
+		Raw: w.GetProviderOptions(), Hash: hex.EncodeToString(h.Sum(nil)), Ingress: ingress,
 	}
 	if len(w.GetSealedSecrets()) > 0 {
 		spec.Secrets = workloadSecrets{st: r.State, w: w}

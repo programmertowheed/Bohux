@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -168,7 +169,7 @@ func TestRenderOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := doc.Services[service]
-	if strings.Join(svc.Networks, ",") != "default,bohux-infra" || !doc.Networks["bohux-infra"].External {
+	if fmt.Sprint(svc.Networks) != "[default bohux-infra]" || !doc.Networks["bohux-infra"].External {
 		t.Errorf("networks = %v / %v", svc.Networks, doc.Networks)
 	}
 	if strings.Join(svc.Volumes, ",") != "bohux-controlplane-data:/var/lib/bohux" || !doc.Volumes["bohux-controlplane-data"].External {
@@ -203,5 +204,37 @@ func TestRenderRejectsOptions(t *testing.T) {
 		if _, _, _, err := render(s); err == nil {
 			t.Errorf("render accepted options %s", raw)
 		}
+	}
+}
+
+func TestRenderIngress(t *testing.T) {
+	s := spec()
+	s.Ingress = true
+	s.Raw = []byte(`{"networks": ["bohux-infra"]}`)
+	composeYAML, _, stateJSON, err := render(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Services map[string]struct {
+			Networks map[string]composeAttach `yaml:"networks"`
+		} `yaml:"services"`
+		Networks map[string]composeExternal `yaml:"networks"`
+	}
+	if err := yaml.Unmarshal(composeYAML, &doc); err != nil {
+		t.Fatal(err)
+	}
+	nets := doc.Services[service].Networks
+	if _, ok := nets["default"]; !ok || len(nets) != 3 {
+		t.Errorf("networks = %v, want default, bohux-infra and the ingress", nets)
+	}
+	if a := nets[IngressNetwork].Aliases; len(a) != 1 || a[0] != project(s.Ref) {
+		t.Errorf("ingress aliases = %v, want the project name", a)
+	}
+	if !doc.Networks[IngressNetwork].External || !doc.Networks["bohux-infra"].External {
+		t.Errorf("top-level networks = %v", doc.Networks)
+	}
+	if !strings.Contains(string(stateJSON), `"ingress_ports":[8080,9090]`) {
+		t.Errorf("state = %s", stateJSON)
 	}
 }

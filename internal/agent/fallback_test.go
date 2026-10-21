@@ -146,14 +146,27 @@ func TestRouteChangeDoesNotReapply(t *testing.T) {
 	r := &Reconciler{State: st, Cache: c, Provider: fake}
 	cacheWorkloads(t, signer, st, c, 1, deployed("r1", "d1"))
 	r.Once(ctx)
-	applies, _ := fake.counts()
-	routed := deployed("r1", "d1")
-	routed.Routes = []*bohuxv1.Route{{Host: "api.example.com", Port: 8080}}
-	cacheWorkloads(t, signer, st, c, 2, routed)
-	if ws := only(t, r.Once(ctx)); ws.GetState() != agentv1.WorkloadState_WORKLOAD_STATE_HEALTHY {
-		t.Fatalf("after a route change: %v", ws)
+	routed := func(gen uint64, hosts ...string) {
+		t.Helper()
+		w := deployed("r1", "d1")
+		for _, h := range hosts {
+			w.Routes = append(w.Routes, &bohuxv1.Route{Host: h, Port: 8080})
+		}
+		cacheWorkloads(t, signer, st, c, gen, w)
+		if ws := only(t, r.Once(ctx)); ws.GetState() != agentv1.WorkloadState_WORKLOAD_STATE_HEALTHY {
+			t.Fatalf("gen %d: %v", gen, ws)
+		}
 	}
-	if a, _ := fake.counts(); a != applies {
-		t.Errorf("a route change re-applied (%d applies, was %d)", a, applies)
+	// The first route joins the workload to the ingress: one apply.
+	before, _ := fake.counts()
+	routed(2, "api.example.com")
+	if a, _ := fake.counts(); a != before+1 {
+		t.Errorf("joining the ingress: %d applies, want %d", a, before+1)
+	}
+	// Changing which hosts leaves the containers alone.
+	before, _ = fake.counts()
+	routed(3, "www.example.com", "api.example.com")
+	if a, _ := fake.counts(); a != before {
+		t.Errorf("a route change re-applied (%d applies, was %d)", a, before)
 	}
 }

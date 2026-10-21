@@ -111,6 +111,10 @@ type Spec struct {
 	Hash string
 	// Raw is the target-specific passthrough (provider-interface.md rule 5).
 	Raw []byte
+	// Ingress is true when the node's ingress serves this workload (it has routes,
+	// ADR-0034): the provider makes every container port reachable from the ingress
+	// and reports how in Status.Endpoints.
+	Ingress bool
 }
 
 // PlanRequest asks for the changes Apply would make.
@@ -154,6 +158,10 @@ type Status struct {
 	ReadyReplicas int32
 	// Message explains a non-running or unhealthy state, without secret values.
 	Message string
+	// Endpoints maps each container port to an address the node's ingress dials to
+	// reach the workload's replicas ("host:port"). Set only for a running workload
+	// applied with Spec.Ingress (ADR-0034).
+	Endpoints map[int32]string
 }
 
 // LogRequest selects log lines.

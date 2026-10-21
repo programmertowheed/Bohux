@@ -185,8 +185,15 @@ func (p *Provider) Status(_ context.Context, ref provider.ResourceRef) (provider
 	}
 	n := replicas(w.spec)
 	running := allRunning(w, n)
-	return provider.Status{Exists: true, Hash: w.hash, Running: running, Healthy: running,
-		ReadyReplicas: ready}, nil
+	st := provider.Status{Exists: true, Hash: w.hash, Running: running, Healthy: running,
+		ReadyReplicas: ready}
+	if running && w.spec.Ingress {
+		st.Endpoints = map[int32]string{}
+		for _, port := range w.spec.Runtime.GetPorts() {
+			st.Endpoints[port.GetContainerPort()] = endpoint(ref, port.GetContainerPort())
+		}
+	}
+	return st, nil
 }
 
 // Logs yields the instances' lines; with Follow it waits for ctx to end.
@@ -330,6 +337,28 @@ func (p *Provider) Leftovers(_ context.Context, ref provider.ResourceRef) ([]str
 		out = append(out, "instance/"+in.name)
 	}
 	return out, nil
+}
+
+// endpoint is the in-memory address of a workload's port.
+func endpoint(ref provider.ResourceRef, port int32) string {
+	return fmt.Sprintf("%s.%s:%d", ref.App, ref.Environment, port)
+}
+
+// Reach succeeds when endpoint belongs to a running workload applied with ingress.
+func (p *Provider) Reach(_ context.Context, ep string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for ref, w := range p.workloads {
+		if !w.spec.Ingress || !allRunning(w, replicas(w.spec)) {
+			continue
+		}
+		for _, port := range w.spec.Runtime.GetPorts() {
+			if endpoint(ref, port.GetContainerPort()) == ep {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("nothing listens on %s", ep)
 }
 
 // Instances counts running instances.

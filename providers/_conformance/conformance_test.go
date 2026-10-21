@@ -35,7 +35,8 @@ var subjects = map[string]func(target string) (conformance.Subject, error){
 			Provider: p, Inspector: p,
 			Fixture: func(ref provider.ResourceRef, release int, replicas int32) provider.Spec {
 				return provider.Spec{Ref: ref, Release: fmt.Sprintf("r%d", release),
-					Image: fmt.Sprintf("mem:%d", release), Runtime: &bohuxv1.Runtime{Replicas: replicas}}
+					Image: fmt.Sprintf("mem:%d", release), Runtime: &bohuxv1.Runtime{Replicas: replicas,
+						Ports: []*bohuxv1.Port{{ContainerPort: 8080}}}}
 			},
 			LogMarker: func(release int) string { return fmt.Sprintf("started r%d", release) },
 		}, nil

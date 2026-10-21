@@ -17,7 +17,8 @@ func memorySubject(p provider.Provider, insp conformance.Inspector) conformance.
 		Provider: p, Inspector: insp, Timeout: 2 * time.Second,
 		Fixture: func(ref provider.ResourceRef, release int, replicas int32) provider.Spec {
 			return provider.Spec{Ref: ref, Release: fmt.Sprintf("r%d", release),
-				Image: fmt.Sprintf("mem:%d", release), Runtime: &bohuxv1.Runtime{Replicas: replicas}}
+				Image: fmt.Sprintf("mem:%d", release), Runtime: &bohuxv1.Runtime{Replicas: replicas,
+					Ports: []*bohuxv1.Port{{ContainerPort: 8080}}}}
 		},
 		LogMarker: func(release int) string { return fmt.Sprintf("started r%d", release) },
 	}
@@ -92,6 +93,15 @@ func (l leakyArtifacts) Artifacts(ctx context.Context, ref provider.ResourceRef)
 	return a, nil
 }
 
+// noEndpoints never tells the ingress where the workload is.
+type noEndpoints struct{ *memory.Provider }
+
+func (n noEndpoints) Status(ctx context.Context, ref provider.ResourceRef) (provider.Status, error) {
+	st, err := n.Provider.Status(ctx, ref)
+	st.Endpoints = nil
+	return st, err
+}
+
 func TestBrokenProvidersFail(t *testing.T) {
 	tests := []struct {
 		name string
@@ -110,6 +120,9 @@ func TestBrokenProvidersFail(t *testing.T) {
 		{"secret in the artifact", func(m *memory.Provider) (provider.Provider, conformance.Inspector) {
 			return m, leakyArtifacts{m}
 		}, "secrets only in the secret file"},
+		{"no endpoints for the ingress", func(m *memory.Provider) (provider.Provider, conformance.Inspector) {
+			return noEndpoints{m}, m
+		}, "ingress endpoints are reported and reachable"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

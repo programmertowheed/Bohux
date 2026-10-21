@@ -35,15 +35,21 @@ type composeExternal struct {
 }
 
 type composeService struct {
-	Image    string            `yaml:"image"`
-	Restart  string            `yaml:"restart"`
-	EnvFile  []string          `yaml:"env_file,omitempty"`
-	Ports    []string          `yaml:"ports,omitempty"`
-	Networks []string          `yaml:"networks,omitempty"`
+	Image   string   `yaml:"image"`
+	Restart string   `yaml:"restart"`
+	EnvFile []string `yaml:"env_file,omitempty"`
+	Ports   []string `yaml:"ports,omitempty"`
+	// Networks is a list of names, or, with the ingress, names to attachments (the
+	// long form is the only one that sets an alias).
+	Networks any               `yaml:"networks,omitempty"`
 	Volumes  []string          `yaml:"volumes,omitempty"`
 	Labels   map[string]string `yaml:"labels"`
 	Logging  composeLogging    `yaml:"logging"`
 	Deploy   composeDeploy     `yaml:"deploy"`
+}
+
+type composeAttach struct {
+	Aliases []string `yaml:"aliases,omitempty"`
 }
 
 type composeLogging struct {
@@ -70,6 +76,8 @@ type composeLimits struct {
 type state struct {
 	Replicas int32       `json:"replicas"`
 	Health   *healthJSON `json:"health,omitempty"`
+	// Ports the ingress reaches, when the workload has one (ADR-0034).
+	IngressPorts []int32 `json:"ingress_ports,omitempty"`
 }
 
 type healthJSON struct {
@@ -155,7 +163,17 @@ func render(spec provider.Spec) (composeYAML, secretsEnv, stateJSON []byte, err 
 	svc.EnvFile = []string{secretsFile}
 
 	doc := composeDoc{Name: name, Services: map[string]composeService{service: svc}}
-	if len(opts.Networks) > 0 {
+	switch {
+	case spec.Ingress:
+		// The ingress dials the project name; Docker's DNS answers with every replica.
+		attach := map[string]composeAttach{"default": {}, IngressNetwork: {Aliases: []string{name}}}
+		doc.Networks = map[string]composeExternal{IngressNetwork: {External: true}}
+		for _, n := range opts.Networks {
+			attach[n] = composeAttach{}
+			doc.Networks[n] = composeExternal{External: true}
+		}
+		svc.Networks = attach
+	case len(opts.Networks) > 0:
 		// Listing networks replaces the default one, so it is listed too.
 		svc.Networks = append([]string{"default"}, opts.Networks...)
 		doc.Networks = map[string]composeExternal{}
@@ -176,6 +194,11 @@ func render(spec provider.Spec) (composeYAML, secretsEnv, stateJSON []byte, err 
 		return nil, nil, nil, fmt.Errorf("render compose file: %w", err)
 	}
 	st := state{Replicas: rt.GetReplicas()}
+	if spec.Ingress {
+		for _, port := range rt.GetPorts() {
+			st.IngressPorts = append(st.IngressPorts, port.GetContainerPort())
+		}
+	}
 	if h := rt.GetHealth(); h != nil {
 		st.Health = &healthJSON{Path: h.GetPath(), Port: h.GetPort(), TimeoutSeconds: h.GetTimeoutSeconds()}
 	}

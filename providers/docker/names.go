@@ -21,6 +21,10 @@ const (
 	labelRelease     = "io.bohux.release"
 	labelSpecHash    = "io.bohux.spec-hash"
 	labelProject     = "com.docker.compose.project"
+
+	// IngressNetwork is the network the node's ingress shares with every workload it
+	// serves (ADR-0034). Shared by all workloads, so Destroy never removes it.
+	IngressNetwork = "bohux-ingress"
 )
 
 var unsafeName = regexp.MustCompile(`[^a-z0-9-]+`)

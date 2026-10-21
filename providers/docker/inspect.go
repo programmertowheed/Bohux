@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,6 +44,20 @@ func (p *Provider) Leftovers(ctx context.Context, ref provider.ResourceRef) ([]s
 		out = append(out, "file/"+e.Name())
 	}
 	return out, nil
+}
+
+// Reach connects to endpoint from a throwaway container on the ingress network, where
+// the node's ingress runs.
+func (p *Provider) Reach(ctx context.Context, endpoint string) error {
+	host, port, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		return fmt.Errorf("endpoint %q: %w", endpoint, err)
+	}
+	if _, err := p.run(ctx, "", "run", "--rm", "--network", IngressNetwork, "busybox:1.36",
+		"nc", "-z", "-w", "5", host, port); err != nil {
+		return fmt.Errorf("reach %s: %w", endpoint, err)
+	}
+	return nil
 }
 
 // Instances counts the workload's running containers.

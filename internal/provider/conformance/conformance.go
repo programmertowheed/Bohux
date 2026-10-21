@@ -34,6 +34,9 @@ type Inspector interface {
 	Artifacts(ctx context.Context, ref provider.ResourceRef) (map[string][]byte, error)
 	// SecretFiles returns the target's declared secret files for ref, by path.
 	SecretFiles(ctx context.Context, ref provider.ResourceRef) (map[string][]byte, error)
+	// Reach connects to endpoint from where the node's ingress runs, and fails if
+	// nothing accepts the connection.
+	Reach(ctx context.Context, endpoint string) error
 }
 
 // Subject is a provider under test.
@@ -69,6 +72,7 @@ type Harness struct {
 	replicas    int32
 	baseline    int // leftover count once the workload first converged
 	secretsSeen []string
+	ingress     bool
 }
 
 // NewHarness picks a fresh workload name, so runs do not collide.
@@ -95,7 +99,8 @@ func (s secrets) Open() (map[string]string, error) { return s, nil }
 func (h *Harness) spec(release int) provider.Spec {
 	sp := h.S.Fixture(h.Ref, release, h.replicas)
 	sp.Secrets = secrets{SecretKey: h.secret}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%d|%s", sp.Image, release, h.replicas, h.secret)))
+	sp.Ingress = h.ingress
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%d|%s|%t", sp.Image, release, h.replicas, h.secret, h.ingress)))
 	sp.Hash = hex.EncodeToString(sum[:])
 	return sp
 }
@@ -437,6 +442,48 @@ func Cases() []Case {
 				return err
 			}
 			return h.converged(ctx, sp.Hash)
+		}},
+		{"ingress endpoints are reported and reachable", func(ctx context.Context, h *Harness) error {
+			h.ingress = true
+			sp, _, err := h.apply(ctx, h.release)
+			if err != nil {
+				return err
+			}
+			if err := h.converged(ctx, sp.Hash); err != nil {
+				return err
+			}
+			st, err := h.S.Provider.Status(ctx, h.Ref)
+			if err != nil {
+				return fmt.Errorf("status: %w", err)
+			}
+			ports := sp.Runtime.GetPorts()
+			if len(ports) == 0 {
+				return errors.New("the fixture has no container port to route to")
+			}
+			for _, p := range ports {
+				ep := st.Endpoints[p.GetContainerPort()]
+				if ep == "" {
+					return fmt.Errorf("no endpoint for port %d: %v", p.GetContainerPort(), st.Endpoints)
+				}
+				if err := h.S.Inspector.Reach(ctx, ep); err != nil {
+					return fmt.Errorf("endpoint %s for port %d: %w", ep, p.GetContainerPort(), err)
+				}
+			}
+			// Leaving the ingress drops the endpoints.
+			h.ingress = false
+			if sp, _, err = h.apply(ctx, h.release); err != nil {
+				return err
+			}
+			if err := h.converged(ctx, sp.Hash); err != nil {
+				return err
+			}
+			if st, err = h.S.Provider.Status(ctx, h.Ref); err != nil {
+				return fmt.Errorf("status: %w", err)
+			}
+			if len(st.Endpoints) != 0 {
+				return fmt.Errorf("endpoints without ingress: %v", st.Endpoints)
+			}
+			return nil
 		}},
 		{"logs stream and end cleanly", func(ctx context.Context, h *Harness) error {
 			out, err := h.logs(ctx)

@@ -38,15 +38,16 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S10c — provider endpoints (⏳, next to start)
+- **Slice:** S10d — the agent's ingress (⏳, next to start)
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** `provider.Status.Endpoints` and a `Spec` marker that the
-  workload has routes (the Docker provider joins it to `bohux-ingress`); conformance.
+- **Exact next step:** `internal/agent/ingress`: render the node's Caddy JSON from
+  every workload's routes and endpoints, write `ingress/caddy.json`, `POST /load` over
+  the admin Unix socket when it changed; then status and the health gate.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S10c (provider endpoints) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S10d (the agent's ingress) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
 > and ADR-0034. Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*).
 > Verify with build, vet, golangci-lint (also with the integration tag), unit and
 > integration tests. Tick boxes, update the tracker and the next session prompt,
@@ -797,9 +798,15 @@ Shape: ADR-0034 (O20). Split into sub-slices, one session each.
       (the rollback case) first. The agent's spec hash excludes routes (a route change
       never re-applies containers; unit test)
 
-#### S10c — provider endpoints ⏳
-- [ ] `provider.Status.Endpoints`; Docker joins Apps with routes to `bohux-ingress`
-      under the project alias; conformance checks endpoints
+#### S10c — provider endpoints ✅
+- [x] `provider.Spec.Ingress`, `provider.Status.Endpoints`; the agent sets `Ingress`
+      when a workload has routes (in the spec hash; the hosts are not)
+- [x] Docker joins such workloads to `bohux-ingress` (created if missing, never
+      destroyed) under the project alias, reports `<project>:<port>`; the memory
+      provider reports its own
+- [x] Conformance case "ingress endpoints are reported and reachable" (Inspector
+      `Reach`: Docker dials from a container on the ingress network) and a broken
+      provider it catches; Docker conformance green on a real daemon
 
 #### S10d — the agent's ingress ⏳
 - [ ] Render the node's Caddy JSON from every workload's routes; write
@@ -903,7 +910,8 @@ Shape: ADR-0034 (O20). Split into sub-slices, one session each.
 - S10 split into S10a–S10f. S10a done: ADR-0034 proposed (O20), proto for routes.
 - S10b done: routes in the store and API, hosts unique across tenants, routes follow
   the running workload and survive rollbacks.
-- **Next:** S10c.
+- S10c done: provider endpoints, Docker on `bohux-ingress`, conformance case.
+- **Next:** S10d.
 
 ### 2026-10-21 (auto run 2, S6a) — branch `claude/relaxed-rubin-76m7dl`
 - Owner asked again for an automatic run, slice after slice, until the session ends.

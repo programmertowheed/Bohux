@@ -61,6 +61,11 @@ them as O10). The choices the contract above left open:
   that leave the assignment. An agent with no assignment yet changes nothing.
 - **`Status`** reports `Exists`, `Hash`, `Running`, `Healthy`, `ReadyReplicas`, and a
   `Message` without secret values.
+- **Ingress (ADR-0034).** `Spec.Ingress` is set when the node's ingress serves the
+  workload (it has routes). The provider then makes every container port reachable from
+  where the ingress runs and reports `Status.Endpoints` (container port → `host:port`)
+  while it runs; without it, no endpoints. The routes themselves never reach the
+  provider. Docker: the shared `bohux-ingress` network, alias = the Compose project.
 - **`Logs`** yields `LogLine{Time, Instance, Stderr, Message}`; **`Exec`** returns a
   `Session` (stdin, stdout, stderr unless TTY, resize, wait for the exit code).
 
