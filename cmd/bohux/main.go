@@ -47,6 +47,9 @@ const (
 	envTemporalAddress = "BOHUX_TEMPORAL_ADDRESS"
 	envTemporalNS      = "BOHUX_TEMPORAL_NAMESPACE"
 	envHealthTimeout   = "BOHUX_DEPLOY_HEALTH_TIMEOUT"
+	envOpenBaoAddr     = "BOHUX_OPENBAO_ADDR"
+	envOpenBaoToken    = "BOHUX_OPENBAO_TOKEN_FILE"
+	envOpenBaoMount    = "BOHUX_OPENBAO_KV_MOUNT"
 
 	defaultListenAddr      = "127.0.0.1:7400"
 	defaultAgentListenAddr = "127.0.0.1:7443"
@@ -54,6 +57,7 @@ const (
 	defaultAgentStateDir   = "/var/lib/bohux-agent"
 	defaultTemporalAddress = "127.0.0.1:7233"
 	defaultTemporalNS      = "default"
+	defaultOpenBaoMount    = "secret"
 )
 
 func main() {
@@ -204,6 +208,12 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 			"Temporal frontend host:port for deploys (env "+envTemporalAddress+")")
 		temporalNS := fs.String("temporal-namespace", envOr(getenv, envTemporalNS, defaultTemporalNS),
 			"Temporal namespace (env "+envTemporalNS+")")
+		baoAddr := fs.String("openbao-address", getenv(envOpenBaoAddr),
+			"OpenBao URL for secret values; empty disables secrets (env "+envOpenBaoAddr+")")
+		baoToken := fs.String("openbao-token-file", getenv(envOpenBaoToken),
+			"file holding the OpenBao token (env "+envOpenBaoToken+")")
+		baoMount := fs.String("openbao-kv-mount", envOr(getenv, envOpenBaoMount, defaultOpenBaoMount),
+			"OpenBao KV v2 mount for secret values (env "+envOpenBaoMount+")")
 		healthTimeout := fs.Duration("deploy-health-timeout", deploy.DefaultHealthTimeout,
 			"how long a deployed release has to turn healthy before it is rolled back (env "+envHealthTimeout+")")
 		if v := getenv(envHealthTimeout); v != "" {
@@ -217,9 +227,13 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 		if *dbURL == "" {
 			return fmt.Errorf("controlplane: --database-url or %s is required", envDatabaseURL)
 		}
+		if *baoAddr != "" && *baoToken == "" {
+			return fmt.Errorf("controlplane: --openbao-token-file or %s is required with --openbao-address", envOpenBaoToken)
+		}
 		cfg := controlplane.Config{ListenAddr: *listen, AgentListenAddr: *agentListen,
 			DatabaseURL: *dbURL, DataDir: *dataDir, TemporalAddress: *temporalAddr, TemporalNamespace: *temporalNS,
-			DeployHealthTimeout: *healthTimeout}
+			DeployHealthTimeout: *healthTimeout, OpenBaoAddress: *baoAddr, OpenBaoTokenFile: *baoToken,
+			OpenBaoMount: *baoMount}
 		if err := d.runControlPlane(ctx, cfg); err != nil {
 			return fmt.Errorf("controlplane: %w", err)
 		}

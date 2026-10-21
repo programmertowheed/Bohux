@@ -24,6 +24,9 @@ type Server struct {
 	PKI *pki.Authority
 	// Deploys starts and cancels deploy workflows (ADR-0026). Nil refuses deploys.
 	Deploys Deployer
+	// Secrets stores secret values (OpenBao, ADR-0008). Nil makes SetSecret
+	// unavailable.
+	Secrets SecretBackend
 	// Agents writes node assignments outside a deploy (ScaleApp, ADR-0027). Nil means
 	// ScaleApp changes only the App, and the next deploy carries the new replicas.
 	Agents Scaler
@@ -62,11 +65,11 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.Handle(bohuxv1connect.NewNodeServiceHandler(&nodeService{s}, opts))
 	mux.Handle(bohuxv1connect.NewReleaseServiceHandler(&releaseService{s}, opts))
 	mux.Handle(bohuxv1connect.NewDeploymentServiceHandler(&deploymentService{s}, opts))
+	mux.Handle(bohuxv1connect.NewSecretServiceHandler(&secretService{s}, opts))
 
 	// Not written yet: mounted so every RPC is authenticated, logged, and answers
 	// Unimplemented rather than 404. Each is replaced as its slice lands.
 	mux.Handle(bohuxv1connect.NewWorkloadServiceHandler(bohuxv1connect.UnimplementedWorkloadServiceHandler{}, opts))
-	mux.Handle(bohuxv1connect.NewSecretServiceHandler(bohuxv1connect.UnimplementedSecretServiceHandler{}, opts))
 	mux.Handle(bohuxv1connect.NewAuditServiceHandler(bohuxv1connect.UnimplementedAuditServiceHandler{}, opts))
 }
 

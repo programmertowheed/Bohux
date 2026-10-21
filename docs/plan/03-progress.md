@@ -38,17 +38,16 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S7 — build and secrets (⏳, next to start; split it first)
-- **Exact next step:** split S7 into sub-slices (SecretService + OpenBao resolver;
-  BuildKit build workflow), starting with the secret path, which deploys already need
-  (`SecretResolver` is still unset in the control plane).
+- **Slice:** S7b — secret rotation reaches nodes (⏳, next to start)
+- **Exact next step:** `agentapi.Server.RotateTx` (new generation for each node whose
+  latest assignment references a handle), called from SetSecret's update path.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then split slice S7 (build and secrets)
-> into sub-slices and do the first one on branch `claude/relaxed-rubin-76m7dl`,
-> following ADR-0008, ADR-0020 items 2, 3 and 6, and CLAUDE.md rules 3 and 6. Start
-> Postgres, Docker and Temporal (tracker *Known gaps*). Verify with build, vet, golangci-lint (also with the integration
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S7b (secret rotation
+> reaches nodes) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0008,
+> ADR-0024, and CLAUDE.md rules 1 and 3. Start Postgres, Docker, Temporal and OpenBao
+> (tracker *Known gaps*). Verify with build, vet, golangci-lint (also with the integration
 > tag), unit and integration tests. Tick boxes, update the tracker and the next
 > session prompt, commit, push, and give me the next prompt.
 
@@ -518,10 +517,40 @@ Split into sub-slices in S6a, one session each. Shape: ADR-0026 (O12).
       from the App's current revision. Integration-tested at all three layers
 - [x] data-model.md and api-contract.md say so
 
-### S7 — Build and secrets ⏳
-- [ ] BuildKit Dockerfile builds, exported to the local image store, resource-limited
-- [ ] OpenBao in the install bundle, auto-unseal (ADR-0020)
-- [ ] Secret handles resolved only inside activities, never in workflow history
+### S7 — Build and secrets 🔄
+Split into sub-slices, one session each.
+
+#### S7a — secret storage ✅
+- [x] `internal/secrets/openbao`: KV v2 client over plain HTTP (Put/Get version/
+      Destroy/Ping; bodies never copied into errors), handles
+      `openbao:bohux/<tenant>/<secret id>`, `Resolver` (agentapi.SecretResolver) that
+      reads the **version Postgres recorded** and refuses another tenant's handle
+- [x] SecretService: SetSecret (create; overwrite only with `expected_revision_id`;
+      value to OpenBao first, revision records the version; backend down →
+      `UNAVAILABLE`), ListSecretRefs, DeleteSecret (refused while a live App
+      references it; destroys the value after commit)
+- [x] `bohux controlplane --openbao-address --openbao-token-file --openbao-kv-mount`;
+      the resolver is wired into the agent API, so assignments with secrets are sealed
+      and sent
+- [x] Tests: client and resolver on a real OpenBao dev server (CI starts one);
+      SecretService with an in-memory backend, including a scan of every Postgres
+      table for the value (rule 3)
+
+#### S7b — rotation reaches nodes ⏳
+- [ ] A new secret value must reach running workloads: SetSecret on an existing secret
+      writes a new generation for every node whose latest assignment references the
+      handle (same transaction, like `ScaleAppTx`); the agent re-applies on rotation
+      (S4e1)
+
+#### S7c — BuildKit builds ⏳
+- [ ] CreateRelease from Git starts a build workflow (BuildKit, Dockerfile, exported to
+      the node's local image store, resource-limited, cache capped, ADR-0020 items 2-3);
+      Release `BUILDING` → `READY`/`FAILED`; the deploy waits for the build
+- [ ] Builds refused while the node reports disk pressure (`Degraded()`, ADR-0020 item 4)
+- [ ] Build secrets resolved only inside activities, never in workflow history
+
+#### S7d — OpenBao in the install bundle ⏳
+- [ ] Auto-unseal with a node-local key (ADR-0020 item 6), in the install bundle (S9)
 
 ### S8 — CLI ⏳
 - [ ] `bohux deploy | logs | rollback | exec | scale`; host-port downtime warning
@@ -565,7 +594,7 @@ Split into sub-slices in S6a, one session each. Shape: ADR-0026 (O12).
   export BOHUX_TEST_POSTGRES_URL='postgres://postgres@127.0.0.1:55432/postgres?sslmode=disable'
   go test -tags=integration -race -count=1 ./internal/store/...
   ```
-  (skip `initdb` if `$D/data` exists). OpenBao still needs CI or a local machine.
+  (skip `initdb` if `$D/data` exists).
 - **Local Temporal in the cloud container:** `temporal.download` is blocked, GitHub
   releases are not:
   ```
@@ -577,6 +606,14 @@ Split into sub-slices in S6a, one session each. Shape: ADR-0026 (O12).
   ```
   CLI 1.4.1 = Server 1.28.0. Namespace `default` exists. The SDK's
   `testsuite.StartDevServer` downloads from the blocked host, so do not use it.
+- **Local OpenBao in the cloud container:** from GitHub releases:
+  ```
+  mkdir -p /opt/openbao && cd /opt/openbao
+  curl -sSL https://github.com/openbao/openbao/releases/download/v2.4.1/bao_2.4.1_Linux_x86_64.tar.gz | tar xz
+  nohup ./bao server -dev -dev-root-token-id=bohux-dev-root -dev-listen-address=127.0.0.1:8200 > /tmp/bao.log 2>&1 &
+  export BOHUX_TEST_OPENBAO_ADDR=http://127.0.0.1:8200 BOHUX_TEST_OPENBAO_TOKEN=bohux-dev-root
+  ```
+  The dev server has KV v2 at `secret/` and keeps everything in memory.
 - **Dev stack:** `deploy/dev/postgres-init/` creates `bohux_app` only on a fresh
   `postgres` volume. An existing volume needs `docker compose down -v` first.
 - **Go 1.23 pin holds dependencies back** (goose ≤ v3.26, pgx ≤ v5.7.6; newer need Go
@@ -605,6 +642,9 @@ Split into sub-slices in S6a, one session each. Shape: ADR-0026 (O12).
 - S6e done: ADR-0027 proposed (O13), ScaleApp assigns atomically, replicas follow the
   App. **S6 done.**
 - **Next:** S7, split first.
+- S7 split into S7a–S7d. S7a done: OpenBao client and resolver, SecretService, control
+  plane flags; CI starts OpenBao.
+- **Next:** S7b.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by

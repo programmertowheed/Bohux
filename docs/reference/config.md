@@ -13,6 +13,9 @@ Adding a setting means adding it here in the same commit.
 | `--data-dir` | `BOHUX_DATA_DIR` | `/var/lib/bohux` | Holds `pki/`: the node CA and assignment signing key, created on first start, mode 0600 (ADR-0024). **Back it up with the database**; losing it means every node re-registers. |
 | `--temporal-address` | `BOHUX_TEMPORAL_ADDRESS` | `127.0.0.1:7233` | Temporal frontend for deploy workflows (ADR-0002). The control plane also runs the deploy worker on task queue `bohux-deploy` (ADR-0026). |
 | `--temporal-namespace` | `BOHUX_TEMPORAL_NAMESPACE` | `default` | Temporal namespace for Bohux's workflows. It must exist. |
+| `--openbao-address` | `BOHUX_OPENBAO_ADDR` | empty | OpenBao URL holding secret values (ADR-0008). Empty disables secrets: `SetSecret` answers `UNAVAILABLE` and assignments that reference secrets cannot be sent. |
+| `--openbao-token-file` | `BOHUX_OPENBAO_TOKEN_FILE` | none, required with an address | File holding the OpenBao token. A file, so the token stays out of process listings and shell history. Read once at start. |
+| `--openbao-kv-mount` | `BOHUX_OPENBAO_KV_MOUNT` | `secret` | KV **v2** mount for values. Each secret is one path, `bohux/<tenant>/<secret id>`; Postgres records which version is current, and only that version is ever sent to a node. |
 | `--deploy-health-timeout` | `BOHUX_DEPLOY_HEALTH_TIMEOUT` | `5m` | How long a deployed Release has to report healthy before the deploy rolls back to the last healthy Release (ADR-0026). Go duration syntax. |
 
 On start it applies pending migrations, then serves. Temporal does not have to be up: the

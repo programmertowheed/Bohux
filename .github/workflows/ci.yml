@@ -86,6 +86,9 @@ jobs:
       BOHUX_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
       # Deploy workflow tests run on a Temporal dev server (ADR-0002, ADR-0026).
       BOHUX_TEST_TEMPORAL_ADDRESS: 127.0.0.1:7233
+      # Secret storage tests run on an OpenBao dev server (ADR-0008).
+      BOHUX_TEST_OPENBAO_ADDR: http://127.0.0.1:8200
+      BOHUX_TEST_OPENBAO_TOKEN: bohux-ci-root
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -109,6 +112,12 @@ jobs:
           nohup /tmp/temporal server start-dev --headless --ip 127.0.0.1 --port 7233 > /tmp/temporal.log 2>&1 &
           for i in $(seq 60); do /tmp/temporal operator cluster health --address 127.0.0.1:7233 && exit 0; sleep 1; done
           cat /tmp/temporal.log; exit 1
+      - name: Start an OpenBao dev server
+        run: |
+          curl -sSL https://github.com/openbao/openbao/releases/download/v2.4.1/bao_2.4.1_Linux_x86_64.tar.gz | tar xz -C /tmp bao
+          nohup /tmp/bao server -dev -dev-root-token-id=bohux-ci-root -dev-listen-address=127.0.0.1:8200 > /tmp/bao.log 2>&1 &
+          for i in $(seq 30); do curl -sf http://127.0.0.1:8200/v1/sys/health && exit 0; sleep 1; done
+          cat /tmp/bao.log; exit 1
       - name: Integration tests
         run: go test -tags=integration -race -count=1 ./internal/... ./cmd/...
 

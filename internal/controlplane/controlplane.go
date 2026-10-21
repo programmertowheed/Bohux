@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -22,6 +24,7 @@ import (
 	"github.com/bohumix/bohux/internal/api"
 	"github.com/bohumix/bohux/internal/auth"
 	"github.com/bohumix/bohux/internal/pki"
+	"github.com/bohumix/bohux/internal/secrets/openbao"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/workflow/deploy"
 )
@@ -43,6 +46,14 @@ type Config struct {
 	TemporalAddress string
 	// TemporalNamespace is the Temporal namespace for Bohux's workflows.
 	TemporalNamespace string
+	// OpenBaoAddress is the OpenBao server that holds secret values (ADR-0008). Empty
+	// disables secrets: SetSecret is unavailable and assignments with secrets fail.
+	OpenBaoAddress string
+	// OpenBaoTokenFile holds the OpenBao token. A file, not a flag value, so the token
+	// stays out of process listings and shell history.
+	OpenBaoTokenFile string
+	// OpenBaoMount is the KV v2 mount for secret values.
+	OpenBaoMount string
 	// DeployHealthTimeout is how long a deployed Release has to turn healthy before
 	// the deploy compensates. Zero means deploy.DefaultHealthTimeout.
 	DeployHealthTimeout time.Duration
@@ -103,6 +114,15 @@ func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 	defer temporal.Close()
 
 	agents := &agentapi.Server{Store: st, PKI: authority}
+	var secretBackend api.SecretBackend
+	if cfg.OpenBaoAddress != "" {
+		bao, err := openBao(cfg)
+		if err != nil {
+			return err
+		}
+		secretBackend = bao
+		agents.Secrets = &openbao.Resolver{Store: st, Bao: bao}
+	}
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	workerDone := make(chan struct{})
 	go func() {
@@ -117,7 +137,7 @@ func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 		Handler: h2c.NewHandler(newMux(st, (&api.Server{
 			Store: st, Authn: &auth.Authenticator{Store: st}, PKI: authority,
 			Deploys: &deploy.Starter{Client: temporal, HealthTimeout: cfg.DeployHealthTimeout},
-			Agents:  agents,
+			Agents:  agents, Secrets: secretBackend,
 		}).Mount), &http2.Server{}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -160,6 +180,20 @@ func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 	}
 	slog.InfoContext(ctx, "control plane stopped")
 	return nil
+}
+
+// openBao builds the OpenBao client from the token file. OpenBao may be down or
+// sealed at start; calls fail until it answers, nothing else does.
+func openBao(cfg Config) (*openbao.Client, error) {
+	raw, err := os.ReadFile(cfg.OpenBaoTokenFile)
+	if err != nil {
+		return nil, fmt.Errorf("read OpenBao token file: %w", err)
+	}
+	token := strings.TrimSpace(string(raw))
+	if token == "" {
+		return nil, errors.New("OpenBao token file is empty")
+	}
+	return &openbao.Client{Addr: cfg.OpenBaoAddress, Token: token, Mount: cfg.OpenBaoMount}, nil
 }
 
 // pinger is the part of the store the health check needs.
