@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -332,4 +333,88 @@ func (cp *controlPlane) acked(node uuid.UUID) int64 {
 		return 0
 	}
 	return *acked
+}
+
+func TestReportsKeepTheNodeOnline(t *testing.T) {
+	ctx := context.Background()
+	cp := newControlPlane(t, "")
+	cp.srv.SilenceTimeout = 400 * time.Millisecond
+
+	runWith := func(st *State, cache *Cache, reports ReportSource) func() {
+		rctx, cancel := context.WithCancel(ctx)
+		done := make(chan error, 1)
+		go func() {
+			done <- Run(rctx, RunOptions{State: st, Cache: cache, Reports: reports,
+				ReportInterval: 100 * time.Millisecond, MinBackoff: 20 * time.Millisecond})
+		}()
+		return func() {
+			cancel()
+			<-done
+		}
+	}
+
+	t.Run("heartbeats alone keep a quiet agent online", func(t *testing.T) {
+		st := cp.register(t, "quiet")
+		cache, err := OpenCache(st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stop := runWith(st, cache, nil)
+		defer stop()
+		// Registration already says online; a stored report proves the stream is up.
+		waitFor(t, func() bool {
+			var at *time.Time
+			err := cp.st.InTenant(ctx, cp.tenant, func(tx *store.Tx) error {
+				return tx.QueryRow(ctx, `SELECT report_received_at FROM nodes_heads WHERE id = $1`,
+					st.NodeID()).Scan(&at)
+			})
+			return err == nil && at != nil
+		})
+		revisions := func() int {
+			var n int
+			err := cp.st.InTenant(ctx, cp.tenant, func(tx *store.Tx) error {
+				return tx.QueryRow(ctx, `SELECT count(*) FROM nodes_revisions WHERE resource_id = $1`,
+					st.NodeID()).Scan(&n)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return n
+		}
+		before := revisions()
+		time.Sleep(time.Second) // well past the silence timeout
+		if after := revisions(); after != before {
+			t.Fatalf("node state changed %d times while the agent was healthy", after-before)
+		}
+	})
+
+	t.Run("reconciler reports reach the control plane", func(t *testing.T) {
+		st := cp.register(t, "busy")
+		cache, err := OpenCache(st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := &Reconciler{State: st, Cache: cache, Provider: newFake(), Interval: 50 * time.Millisecond}
+		rctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go func() { _ = rec.Run(rctx) }()
+		stop := runWith(st, cache, rec)
+		defer stop()
+		cp.waitState(st.NodeID(), "online")
+		node := uuid.MustParse(st.NodeID())
+		work := []*agentv1.Workload{{AppId: "app-1", EnvironmentId: "env", Provider: "fake",
+			Runtime: &bohuxv1.Runtime{Replicas: 1}}}
+		if _, err := cp.srv.Assign(ctx, cp.tenant, node, work,
+			store.Actor{ID: store.SystemActorID, Kind: store.ActorSystem}); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, func() bool {
+			var report *string
+			err := cp.st.InTenant(ctx, cp.tenant, func(tx *store.Tx) error {
+				return tx.QueryRow(ctx, `SELECT report::text FROM nodes_heads
+					WHERE id = $1 AND report_generation = 1`, node).Scan(&report)
+			})
+			return err == nil && report != nil && strings.Contains(*report, "WORKLOAD_STATE_HEALTHY")
+		})
+	})
 }

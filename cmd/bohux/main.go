@@ -99,6 +99,7 @@ func runAgent(ctx context.Context, stateDir string) error {
 	}
 	opts.Providers = []*bohuxv1.ProviderDescriptor{descriptorProto(desc)}
 	rec := &agent.Reconciler{State: st, Cache: cache, Provider: nodeProvider}
+	opts.Reports = rec
 	errc := make(chan error, 2)
 	go func() { errc <- rec.Run(ctx) }()
 	go func() { errc <- agent.Run(ctx, opts) }()

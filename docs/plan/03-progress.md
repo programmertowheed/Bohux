@@ -38,24 +38,25 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S4e2 — status reports (⏳, next to start)
-- **Exact next step:** have the reconciler publish its latest `StatusReport` and the
-  agent stream send it; store it on the control plane.
+- **Slice:** S5a — Docker provider plan (⏳, next to start)
+- **Exact next step:** check whether a Docker daemon can run in the cloud container;
+  decide CLI (`docker compose`) vs. Engine API client (an ADR if it adds a dependency).
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S4e2 (status reports) on
-> branch `claude/relaxed-rubin-76m7dl`, following ADR-0007. Agent: the reconciler
-> publishes each pass's StatusReport (latest only); the stream sends it when connected,
-> at least every 30 s (resend the latest if nothing changed). Control plane: store the
-> latest report per node as an observation (migration: report generation, per-workload
-> state as jsonb, received_at on nodes_heads), and close a stream that has sent nothing
-> for 90 s (configurable) so half-open links end (S4c1 note); the node then goes
-> offline. Test over real mTLS on the local Postgres with the fake provider from
-> internal/agent tests (move it to an internal test helper package if needed). Verify
-> with build, vet, golangci-lint (also with the integration tag) and tests. Tick boxes,
-> update the tracker and the next session prompt, commit, push, and give me the next
-> prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S5a (Docker provider
+> plan) on branch `claude/relaxed-rubin-76m7dl`. Read docs/specs/provider-interface.md
+> (including the Types section), providers/provider.go, ADR-0008 (Compose artifact plus
+> 0600 secrets.env), ADR-0020 (image retention, log rotation, disk pressure, host-port
+> downtime), and .claude/skills/new-provider/. Find out whether a Docker daemon can run
+> in this cloud container (dockerd as root, or rootless) so conformance can run here; if
+> not, say what must run in CI. Decide how the provider drives Docker: the `docker
+> compose` CLI against the written Compose file, or the Engine API via a Go client (a
+> new dependency needs an ADR via .claude/skills/write-adr/, written as proposed and
+> listed under *Waiting on the owner*). Then split S5 into sub-slices in the tracker
+> (conformance suite first, then the verbs) and start the first one if time allows.
+> Tick boxes, update the tracker and the next session prompt, commit, push, and give me
+> the next prompt.
 
 ## Waiting on the owner
 
@@ -269,7 +270,7 @@ Split into sub-slices, one session each.
 - Not validated (the provider will): `cpu`/`memory` quantity syntax. DeleteApp does
   not yet remove the workload from nodes; that is an assignment change (S4/S6)
 
-### S4 — Agent ⏳
+### S4 — Agent ✅
 Split into sub-slices, one session each.
 
 #### S4a — node PKI and crypto ✅
@@ -356,9 +357,15 @@ Split into sub-slices, one session each.
 - [x] Wired into `bohux agent run` beside the stream; until S5 there is no provider in
       the build, so the agent says so and only caches
 
-#### S4e2 — status reports ⏳
-- [ ] StatusReports sent on the stream; stored per node on the control plane; streams
-      silent for 90 s closed (half-open links)
+#### S4e2 — status reports ✅
+- [x] The reconciler publishes each pass's report; the stream sends it on change and
+      at least every 30 s; without a reconciler the agent heartbeats an empty report
+      with its cached generation
+- [x] Control plane stores the latest report per node (migration `00015`, observation
+      columns) and closes streams silent for 90 s (configurable); the node goes offline
+- [x] Tested over mTLS: report stored, silent stream closed, a quiet healthy agent
+      causes no state changes, reconciler reports (fake provider) reach the control
+      plane
 
 ### S5 — Docker provider ⏳
 - [ ] Conformance suite in `providers/_conformance`
@@ -430,7 +437,8 @@ Split into sub-slices, one session each.
   S4c2 done: the agent process (`bohux agent register|run`).
 - S4d split; S4d1 done: assignments written, sealed, signed, pushed, acked. S4d2
   done: the agent verifies, caches, and acks them.
-- S4e split; S4e1 done: provider interface (O10) and the offline reconcile loop.
+- S4e split; S4e1 done: provider interface (O10) and the offline reconcile loop. S4e2
+  done: status reports and silent-stream detection. **S4 done.**
 - S4b split into S4b1/S4b2, both done: `internal/pki`, NodeService, data dir, agent
   TLS listener, Register.
 - S3d done: `internal/secrets` redaction, access-log interceptor, rule 3 test.

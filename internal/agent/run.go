@@ -15,6 +15,10 @@ import (
 )
 
 const (
+	// defaultReportInterval is how often the agent sends a StatusReport even when
+	// nothing changed; the control plane closes streams silent for three of these.
+	defaultReportInterval = 30 * time.Second
+
 	defaultMinBackoff = time.Second
 	defaultMaxBackoff = time.Minute
 	// After a VersionRejected, retrying soon cannot help until someone upgrades.
@@ -23,14 +27,35 @@ const (
 	healthyStream = time.Minute
 )
 
+// ReportSource supplies StatusReports for the stream: the Reconciler.
+type ReportSource interface {
+	Latest() *agentv1.StatusReport
+	Updated() <-chan struct{}
+}
+
 // RunOptions configure the agent's connection loop.
 type RunOptions struct {
 	State *State
 	// Cache receives verified assignments and supplies Hello.applied_generation.
 	Cache     *Cache
 	Providers []*bohuxv1.ProviderDescriptor
+	// Reports, if set, is sent on every change and at least every ReportInterval.
+	// Without it the agent still sends an empty report each interval as a heartbeat.
+	Reports        ReportSource
+	ReportInterval time.Duration
 	// MinBackoff and MaxBackoff bound reconnect delays; zero means 1s and 1m.
 	MinBackoff, MaxBackoff time.Duration
+}
+
+// report is what to send now: the reconciler's latest, or a heartbeat that carries
+// only the cached generation.
+func (o RunOptions) report() *agentv1.StatusReport {
+	if o.Reports != nil {
+		if r := o.Reports.Latest(); r != nil {
+			return r
+		}
+	}
+	return &agentv1.StatusReport{Generation: o.Cache.Generation()}
 }
 
 // Run keeps a stream to the control plane open until ctx ends, reconnecting with
@@ -122,9 +147,37 @@ func session(ctx context.Context, client agentv1connect.AgentServiceClient, o Ru
 			}
 		}
 	}()
+	interval := o.ReportInterval
+	if interval <= 0 {
+		interval = defaultReportInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	var updated <-chan struct{}
+	if o.Reports != nil {
+		updated = o.Reports.Updated()
+	}
+	sendReport := func() error {
+		if err := stream.Send(&agentv1.ConnectRequest{Msg: &agentv1.ConnectRequest_StatusReport{
+			StatusReport: o.report()}}); err != nil {
+			return fmt.Errorf("send status report: %w", err)
+		}
+		return nil
+	}
+	if err := sendReport(); err != nil {
+		return err
+	}
 	first := true
 	for {
 		select {
+		case <-ticker.C:
+			if err := sendReport(); err != nil {
+				return err
+			}
+		case <-updated:
+			if err := sendReport(); err != nil {
+				return err
+			}
 		case <-ctx.Done():
 			_ = stream.CloseRequest()
 			grace := time.After(closeGrace)

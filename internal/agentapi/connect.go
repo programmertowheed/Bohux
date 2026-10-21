@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"connectrpc.com/connect"
@@ -23,7 +24,10 @@ import (
 	"github.com/bohumix/bohux/internal/version"
 )
 
-const defaultPingInterval = 30 * time.Second
+const (
+	defaultPingInterval   = 30 * time.Second
+	defaultSilenceTimeout = 90 * time.Second
+)
 
 type peerCertKey struct{}
 
@@ -105,6 +109,8 @@ func (s *Server) Connect(ctx context.Context, stream *connect.BidiStream[agentv1
 	}()
 
 	recvErr := make(chan error, 1)
+	var lastHeard atomic.Int64
+	lastHeard.Store(time.Now().UnixNano())
 	go func() {
 		for {
 			msg, err := stream.Receive()
@@ -112,13 +118,18 @@ func (s *Server) Connect(ctx context.Context, stream *connect.BidiStream[agentv1
 				recvErr <- err
 				return
 			}
+			lastHeard.Store(time.Now().UnixNano())
 			switch m := msg.GetMsg().(type) {
 			case *agentv1.ConnectRequest_Ack:
 				if err := s.recordAck(ctx, tenant, node, m.Ack.GetGeneration()); err != nil {
 					slog.WarnContext(ctx, "record ack", "node", node.String(), "err", err)
 				}
+			case *agentv1.ConnectRequest_StatusReport:
+				if err := s.recordReport(ctx, tenant, node, m.StatusReport); err != nil {
+					slog.WarnContext(ctx, "record status report", "node", node.String(), "err", err)
+				}
 			default:
-				// StatusReport, LogChunk, and ExecOutput are handled from S4e on.
+				// LogChunk and ExecOutput are handled with WorkloadService (S8).
 				slog.DebugContext(ctx, "agent message", "node", node.String(), "type", fmt.Sprintf("%T", m))
 			}
 		}
@@ -163,6 +174,10 @@ func (s *Server) Connect(ctx context.Context, stream *connect.BidiStream[agentv1
 				return nil
 			}
 		case <-ticker.C:
+			if silent := time.Since(time.Unix(0, lastHeard.Load())); silent > s.silenceTimeout() {
+				slog.WarnContext(ctx, "agent silent; closing its stream", "node", node.String(), "silent", silent)
+				return nil
+			}
 			if err := stream.Send(&agentv1.ConnectResponse{Msg: &agentv1.ConnectResponse_Ping{
 				Ping: &agentv1.Ping{SentAt: timestamppb.New(s.now())}}}); err != nil {
 				return nil
@@ -184,6 +199,26 @@ func (s *Server) version() string {
 		return s.Version
 	}
 	return version.Version
+}
+
+func (s *Server) silenceTimeout() time.Duration {
+	if s.SilenceTimeout > 0 {
+		return s.SilenceTimeout
+	}
+	return defaultSilenceTimeout
+}
+
+// recordReport stores the node's latest StatusReport (an observation).
+func (s *Server) recordReport(ctx context.Context, tenant, node uuid.UUID, r *agentv1.StatusReport) error {
+	b, err := providerJSON.Marshal(r)
+	if err != nil {
+		return fmt.Errorf("encode status report: %w", err)
+	}
+	return s.Store.InTenant(ctx, tenant, func(tx *store.Tx) error {
+		return tx.Exec(ctx, `UPDATE nodes_heads SET report_generation = $1, report = $2,
+			report_received_at = $3, last_seen_at = $3 WHERE id = $4`,
+			int64(r.GetGeneration()), b, s.now(), node)
+	})
 }
 
 func (s *Server) pingInterval() time.Duration {

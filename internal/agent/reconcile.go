@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -39,6 +40,42 @@ type Reconciler struct {
 	// Interval between passes; zero means 10 seconds. A new assignment triggers a
 	// pass at once.
 	Interval time.Duration
+
+	mu      sync.Mutex
+	latest  *agentv1.StatusReport
+	updated chan struct{}
+}
+
+// Latest is the most recent pass's report, or nil before the first one. It satisfies
+// ReportSource for the stream.
+func (r *Reconciler) Latest() *agentv1.StatusReport {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.latest
+}
+
+// Updated is signaled after each pass that produced a report.
+func (r *Reconciler) Updated() <-chan struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.updated == nil {
+		r.updated = make(chan struct{}, 1)
+	}
+	return r.updated
+}
+
+func (r *Reconciler) publish(rep *agentv1.StatusReport) {
+	r.mu.Lock()
+	r.latest = rep
+	if r.updated == nil {
+		r.updated = make(chan struct{}, 1)
+	}
+	ch := r.updated
+	r.mu.Unlock()
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
 }
 
 // Run reconciles until ctx ends.
@@ -50,7 +87,9 @@ func (r *Reconciler) Run(ctx context.Context) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		r.Once(ctx)
+		if rep := r.Once(ctx); rep != nil {
+			r.publish(rep)
+		}
 		select {
 		case <-ctx.Done():
 			return nil

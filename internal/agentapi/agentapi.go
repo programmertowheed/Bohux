@@ -42,6 +42,10 @@ type Server struct {
 	// PingInterval is how often an open stream is pinged and last_seen_at written;
 	// zero means 30 seconds.
 	PingInterval time.Duration
+	// SilenceTimeout closes a stream on which the agent has sent nothing for this
+	// long, so half-open links end and the node goes offline; zero means 90 seconds
+	// (three agent report intervals).
+	SilenceTimeout time.Duration
 
 	// Secrets resolves secret handles when an assignment is sent. Nil means
 	// assignments with secrets cannot be sent yet (S7 adds OpenBao).
