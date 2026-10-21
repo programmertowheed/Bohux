@@ -4,10 +4,11 @@ Phased so that the plugin boundary and the workflow model land early. Those two 
 let v2 through v8 happen without a rewrite, and the rewrite is what kills these projects —
 not the missing features.
 
-## v0.1 — Walking skeleton (weeks 1–10)
+## v0.1 — Walking skeleton (weeks 1–12)
 **Goal: one service, one VPS, deployed and rolled back from a CLI — obeying every hard
-rule.** Scope is fixed by ADR-0011.
+rule.** Scope is fixed by ADR-0011, extended by ADR-0020.
 
+- [ ] **Week 1:** footprint spike on a 2GB VPS, published before feature work (ADR-0020)
 - [ ] `proto/` contract for Tenant/Project/Environment/App/Release/Deployment, plus
       the agent protocol (ADR-0007); `tenant_id` on every resource
 - [ ] Postgres schema: revisions, audit events in the same transaction, row-level security
@@ -24,17 +25,23 @@ rule.** Scope is fixed by ADR-0011.
 - [ ] OpenBao as the one secrets backend, shipped in the install bundle
 - [ ] `bohux deploy`, `bohux logs`, `bohux rollback`, `bohux exec`, `bohux scale`
 - [ ] Compensation/rollback tested in CI before forward path merges (CLAUDE.md rule 5)
-- [ ] Footprint measured on a 2GB VPS and published; <1GB left for workloads reopens
-      ADR-0002
+- [ ] Footprint re-measured at the end of v0.1; <1GB left for workloads reopens ADR-0002
+- [ ] No registry in single-node mode: BuildKit exports to the local image store
+- [ ] Image retention (current + last 5 Releases), BuildKit cache cap, log rotation,
+      disk-pressure fails closed (ADR-0020)
+- [ ] `bohux admin backup` / `restore` for Bohux's own state, restore tested in CI
+- [ ] OpenBao auto-unseal; Docker `live-restore` checked at agent registration
+- [ ] Agent/control-plane version skew handled in the agent protocol (N-1 minor)
+- [ ] Host-port deploy downtime measured and printed by the CLI
 - [ ] `.claude/skills/new-workflow/` and `deploy/dev/compose.yaml` exist
 
 **Exit criterion:** Bohux deploys Bohux, and rolls itself back.
 
-## v0.2 — Usable by someone who is not us (weeks 11–18)
+## v0.2 — Usable by someone who is not us (weeks 13–20)
 - [ ] Buildpacks + Nixpacks auto-detection
 - [ ] Secrets: envelope encryption, per-env keys
 - [ ] Managed Postgres/Redis as Resources, with backups
-- [ ] Ingress: Caddy, automatic TLS, DNS
+- [ ] Ingress: Caddy via admin API, automatic TLS, DNS, zero-downtime deploys (ADR-0019)
 - [ ] Web UI (read-only first, then mutations)
 - [ ] Audit log and RBAC surfaced in the UI
 - [ ] Git push and webhook triggers
@@ -46,9 +53,9 @@ rule.** Scope is fixed by ADR-0011.
 - [ ] Basic server and app resource view (CPU/memory/disk) from node agents — current
       values only; history goes to the user's OTLP backend (non-goal: metrics storage)
 
-## v0.3 — The reason to choose this (weeks 19–28)
+## v0.3 — The reason to choose this (weeks 21–30)
 - [ ] Preview environments per PR, with seeded data
-- [ ] Blue/green and canary via Envoy xDS
+- [ ] Blue/green and canary via Caddy weighted upstreams (ADR-0019)
 - [ ] OTEL correlation, deploy markers, SLO burn-rate health gate
 - [ ] Automatic rollback on SLO violation
 - [ ] Schema migrations as a gated workflow step
