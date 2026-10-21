@@ -138,35 +138,67 @@ type Audit struct {
 // Head holds the identity columns, Revision the mutable ones (data-model.md, "Schema
 // rules"). It returns the new resource ID and revision ID.
 func (t *Tx) Create(ctx context.Context, resource string, head, revision []Col, a Audit) (id, rev uuid.UUID, err error) {
-	if err := checkWrite(resource, a, head, revision); err != nil {
-		return uuid.Nil, uuid.Nil, err
-	}
 	if resource == "tenants" {
 		id = t.tenant
 	} else if id, err = uuid.NewV7(); err != nil {
 		return uuid.Nil, uuid.Nil, fmt.Errorf("new id: %w", err)
 	}
-	if rev, err = uuid.NewV7(); err != nil {
-		return uuid.Nil, uuid.Nil, fmt.Errorf("new revision id: %w", err)
+	rev, err = t.CreateWithID(ctx, resource, id, head, revision, a)
+	return id, rev, err
+}
+
+// CreateWithID is Create with a caller-chosen ID, for resources whose ID must be known
+// before the row exists (a token embeds its own ID, ADR-0022). Use NewID for it.
+func (t *Tx) CreateWithID(ctx context.Context, resource string, id uuid.UUID, head, revision []Col, a Audit) (uuid.UUID, error) {
+	if err := checkWrite(resource, a, head, revision); err != nil {
+		return uuid.Nil, err
+	}
+	if id == uuid.Nil {
+		return uuid.Nil, errors.New("store: id is required")
+	}
+	rev, err := uuid.NewV7()
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("new revision id: %w", err)
 	}
 
 	headCols := append([]Col{
 		{"id", id}, {"tenant_id", t.tenant}, {"revision_id", rev}, {"created_by", a.Actor.ID},
 	}, head...)
 	if err := t.insert(ctx, resource+"_heads", headCols); err != nil {
-		return uuid.Nil, uuid.Nil, fmt.Errorf("create %s: %w", resource, err)
+		return uuid.Nil, fmt.Errorf("create %s: %w", resource, err)
 	}
 	revCols := append([]Col{
 		{"id", rev}, {"tenant_id", t.tenant}, {"resource_id", id}, {"actor_id", a.Actor.ID},
 	}, revision...)
 	if err := t.insert(ctx, resource+"_revisions", revCols); err != nil {
-		return uuid.Nil, uuid.Nil, fmt.Errorf("create %s revision: %w", resource, err)
+		return uuid.Nil, fmt.Errorf("create %s revision: %w", resource, err)
 	}
 	if err := t.audit(ctx, a, id, rev); err != nil {
-		return uuid.Nil, uuid.Nil, err
+		return uuid.Nil, err
 	}
-	return id, rev, nil
+	return rev, nil
 }
+
+// NewID returns a server-generated UUIDv7 (api-contract.md, convention 3).
+func NewID() (uuid.UUID, error) {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("new id: %w", err)
+	}
+	return id, nil
+}
+
+// Exec runs a statement in the transaction. Writes to versioned resources go through
+// Create, Update, and Delete; Exec is for non-versioned rows such as observations.
+func (t *Tx) Exec(ctx context.Context, sql string, args ...any) error {
+	if _, err := t.tx.Exec(ctx, sql, args...); err != nil {
+		return mapError(err)
+	}
+	return nil
+}
+
+// Tenant is the tenant this transaction is scoped to.
+func (t *Tx) Tenant() uuid.UUID { return t.tenant }
 
 // Update writes a new revision with the full mutable state, moves the head to it with
 // a compare-and-swap on expected, and records the audit event (ADR-0017). A stale

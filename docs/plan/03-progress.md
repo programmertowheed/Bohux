@@ -38,24 +38,25 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S3c — authentication and RBAC (⏳, next to start)
-- **Exact next step:** migration `00012` for `idempotency_keys` (ADR-0022), then the
-  token parse/hash package in `internal/auth`.
+- **Slice:** S3c2 — authorization interceptor (⏳, next to start)
+- **Exact next step:** decide how tenant-level RPCs (CreateProject, ListProjects,
+  GetTenant, NodeService) are authorized, given tokens are scoped to one project (see
+  the S3c2 note), then write the ConnectRPC interceptor and permission table.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S3c (authentication and
-> RBAC) on branch `claude/relaxed-rubin-76m7dl`. Follow ADR-0022 (token format,
-> tenant-first lookup, SHA-256, idempotency records) and ADR-0011 (fixed roles).
-> Build: the idempotency_keys migration; `internal/auth` (token parse/issue/verify);
-> a ConnectRPC interceptor that authenticates, puts tenant and principal in ctx, and
-> checks a per-RPC permission table, with a test that every RPC in the generated
-> bohux.v1 descriptors has an entry; a tenant bootstrap CLI step that prints the first
-> owner token once; IdentityService and TenantService handlers mounted in the control
-> plane. CI's integration job needs a generate step once packages import gen/. Verify
-> with build, vet, golangci-lint (also with the integration tag), unit and integration
-> tests on the local Postgres. If the slice is too big, stop at a clean point and split
-> it in the tracker. Tick boxes, update the tracker and the next session prompt, commit,
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S3c2 (authorization
+> interceptor) on branch `claude/relaxed-rubin-76m7dl`. First resolve the S3c2 note on
+> tenant-level RPCs (a token is scoped to one project), following the owner rule for
+> gates (write it up as proposed, build on it, list it under *Waiting on the owner*);
+> if it changes the contract, change proto/ first. Then add, in internal/auth or a new
+> internal/api package, a ConnectRPC interceptor that reads the bearer token,
+> authenticates it with auth.Authenticator, puts the Principal in ctx, and checks a
+> per-RPC permission table (viewer/deployer/owner), with a test that every RPC in the
+> generated bohux.v1 descriptors has an entry. The CI go and integration jobs must run
+> buf generate before tests once a package imports gen/. Verify with build, vet,
+> golangci-lint (also with the integration tag), unit and integration tests on the
+> local Postgres. Tick boxes, update the tracker and the next session prompt, commit,
 > push, and give me the next prompt.
 
 ## Waiting on the owner
@@ -203,12 +204,27 @@ Split into sub-slices, one session each.
       freely before v0.1). Binary smoke-tested: migrate, serve, `/healthz`, SIGTERM → 0,
       superuser DSN refused
 
-#### S3c — authentication and RBAC ⏳
-- [ ] API tokens (hashed), roles `viewer`/`deployer`/`owner`, permission check on every
-      RPC via an interceptor with a per-RPC permission table and a test that every RPC
-      in the generated service descriptors has an entry
-- [ ] Tenant and actor taken from authentication only; tenant bootstrap CLI step;
-      IdentityService + TenantService handlers
+#### S3c1 — tokens and authentication ✅
+- [x] Migration `00012_idempotency_keys` (ADR-0022)
+- [x] `internal/auth`: `bxa_`/`bxb_` token issue/parse, SHA-256 hash, constant-time
+      match, secret never printed (String/GoString/LogValue, tested); `Principal`,
+      `Role`; `Authenticator.AuthenticateAPIToken` (tenant-first lookup, expiry,
+      revocation, throttled `last_used_at`); `CreateAPIToken`
+- [x] `store.Tx.CreateWithID`, `Exec`, `Tenant`; `store.NewID`
+
+#### S3c2 — authorization interceptor ⏳
+- [ ] Interceptor: bearer token → Principal in ctx; per-RPC permission table; test that
+      every bohux.v1 RPC has an entry; CI generates `gen/` before tests
+- **Note (decide first):** an API token is scoped to one project (S1a choice), but
+  CreateProject, ListProjects, GetTenant, and NodeService are tenant-level. Likely fix:
+  an API token with no `project_id` is tenant-wide (its role applies to every project
+  and to tenant-level RPCs). That changes `ApiToken.project_id` / the
+  `CreateApiTokenRequest` from REQUIRED to optional in proto, and
+  `api_tokens_heads.project_id` to nullable (new migration).
+
+#### S3c3 — bootstrap and identity handlers ⏳
+- [ ] Tenant bootstrap CLI step (prints the first owner token once);
+      IdentityService + TenantService handlers mounted in the control plane
 
 #### S3d — redaction ⏳
 - [ ] Secret-redacting interceptor (rule 3) and a test that `SetSecretRequest.value`
@@ -289,6 +305,9 @@ Split into sub-slices, one session each.
   rule for gates: write the ADR as *proposed*, build on it, list it under *Waiting on
   the owner* (O6 onward).
 - S2a done: ADR-0021 (goose on pgx).
+- S3c split into S3c1–S3c3. S3c1 done: idempotency table, `internal/auth` tokens and
+  API-token authentication, integration-tested (expired, revoked, wrong secret,
+  tenant swapped, wrong kind, unknown ID all `ErrUnauthenticated`).
 - S3b done: `internal/controlplane` (h2c server, `/healthz`, clean shutdown),
   `bohux controlplane`, `bohux admin migrate`, `internal/store/storetest` helper,
   config reference. CI integration job now covers `./internal/... ./cmd/...`.
