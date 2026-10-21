@@ -41,16 +41,23 @@ func (s *Server) Assign(ctx context.Context, tenant, node uuid.UUID, workloads [
 	}
 	var gen uint64
 	err := s.Store.InTenant(ctx, tenant, func(tx *store.Tx) error {
-		var state string
-		// Locking the node serializes generations per node.
-		err := tx.QueryRow(ctx, `SELECT r.state FROM nodes_heads h
-			JOIN nodes_revisions r ON r.id = h.revision_id
-			WHERE h.id = $1 AND NOT h.deleted FOR UPDATE OF h`, node).Scan(&state)
+		// Locking the node serializes generations per node. The head is locked alone
+		// and its state read afterwards: with a join, a concurrent state change (the
+		// node coming online) moves the head to a new revision, and Postgres's recheck
+		// of the locked row against the old revision row would drop it as not found.
+		var revision uuid.UUID
+		err := tx.QueryRow(ctx, `SELECT revision_id FROM nodes_heads
+			WHERE id = $1 AND NOT deleted FOR UPDATE`, node).Scan(&revision)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return store.ErrNotFound
 		}
 		if err != nil {
 			return fmt.Errorf("lock node: %w", err)
+		}
+		var state string
+		if err := tx.QueryRow(ctx, `SELECT state FROM nodes_revisions WHERE id = $1`,
+			revision).Scan(&state); err != nil {
+			return fmt.Errorf("read node state: %w", err)
 		}
 		if state == "revoked" {
 			return errRevokedNode
