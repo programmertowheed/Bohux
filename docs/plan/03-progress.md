@@ -38,19 +38,24 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S2b — storage: schema (⏳, next to start)
-- **Exact next step:** add pgx v5.7.6 + goose v3.26.0 (ADR-0021), write the first
-  migration in `internal/store/migrations/` and a migrate runner in `internal/store`.
+- **Slice:** S2c — storage: write path (⏳, next to start)
+- **Exact next step:** in `internal/store`, a tenant-scoped transaction helper
+  (`set_config('bohux.tenant_id', …, true)`) and one generic "write revision + CAS head +
+  audit event" function, with integration tests.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S2b (storage: schema) on
-> branch `claude/relaxed-rubin-76m7dl`. Follow ADR-0021 (goose on pgx, embedded SQL
-> migrations), ADR-0004 and ADR-0017 (revisions + heads), and docs/specs/data-model.md;
-> every table gets `tenant_id` and row-level security. Verify the migrations apply on the
-> local Postgres 16 (see "Local Postgres" in the tracker) with an `integration`-tagged
-> test, run go build, vet, and unit tests, tick the S2b box, update the tracker and the
-> next session prompt, commit, push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S2c (storage: write path) on
+> branch `claude/relaxed-rubin-76m7dl`. In internal/store, add a pgxpool-based store with
+> a tenant-scoped transaction helper and one write path that inserts a revision, moves
+> the head with a compare-and-swap on the expected revision (a miss is a conflict
+> error), and inserts the audit event, all in one transaction (ADR-0004, ADR-0017,
+> docs/specs/data-model.md "Schema rules"). Server-generated UUIDv7 IDs. Prove it with
+> `integration`-tagged tests on the local Postgres (see "Local Postgres" in the tracker),
+> including a stale-revision conflict and an audit event that rolls back with a failed
+> write. Run build, vet, golangci-lint (also with the integration tag) and tests, tick
+> the S2c boxes, update the tracker and the next session prompt, commit, push, and give
+> me the next prompt.
 
 ## Waiting on the owner
 
@@ -157,10 +162,22 @@ Split into sub-slices, one session each.
 - [x] Migration tool choice, as a proposed ADR (it is a new dependency): ADR-0021,
       goose v3.26.0 on pgx v5.7.6 (last versions supporting Go 1.23)
 
-#### S2b — schema ⏳
-- [ ] Schema: tenants, projects, environments, apps, releases, deployments, nodes,
+#### S2b — schema ✅
+- [x] Schema: tenants, projects, environments, apps, releases, deployments, nodes,
       secret_refs, revisions, audit_events; `tenant_id` + row-level security everywhere;
       `<resource>_revisions` + `<resource>_heads` per ADR-0017
+- [x] Also: role_bindings, api_tokens, node_bootstrap_tokens; append-only triggers;
+      linear-history constraints; `store.Migrate` (refuses superuser/BYPASSRLS roles);
+      file-convention unit test; integration tests (RLS, invariants, up/down/up);
+      CI `integration` job with a Postgres service; dev stack `bohux_app` role
+- Choices made in S2b (documented in data-model.md "Schema rules"): identity in heads,
+  mutable state in revisions; enums as checked lowercase text; nested messages as
+  protojson `jsonb`; observations (`last_seen_at`, `last_used_at`) not versioned;
+  bootstrap tokens not versioned. Idempotency-key storage is left to S3 (it must not
+  store responses that contain secrets, e.g. `CreateApiToken`).
+- **Open for S3:** authentication looks up token hashes *before* the tenant is known,
+  which row-level security blocks. Options: tokens embed the tenant ID, or a narrow
+  non-RLS `token_hash → tenant_id` index table. Decide in S3.
 
 #### S2c — write path ⏳
 - [ ] Revision + audit event written in one transaction (ADR-0004, ADR-0017)
@@ -222,9 +239,17 @@ Split into sub-slices, one session each.
   may need to run `buf dep update` where the registry is reachable (CI or locally).
 - The cloud container has no running Docker daemon, so `make run-dev` cannot run there.
 - **Local Postgres in the cloud container:** Postgres 16 binaries are in
-  `/usr/lib/postgresql/16/bin`. As a non-root user (`postgres` exists), `initdb` a
-  scratch dir, `pg_ctl start`, and point integration tests at it. This is enough for
-  the S2 storage tests; Temporal/OpenBao still need CI or a local machine.
+  `/usr/lib/postgresql/16/bin`. The scratchpad is not readable by the `postgres` user,
+  so use its home:
+  ```
+  D=/var/lib/postgresql/bohux-test
+  su postgres -c "mkdir -p $D && /usr/lib/postgresql/16/bin/initdb -D $D/data -U postgres --auth=trust && /usr/lib/postgresql/16/bin/pg_ctl -D $D/data -o '-p 55432 -k $D -c listen_addresses=127.0.0.1' -l $D/log start"
+  export BOHUX_TEST_POSTGRES_URL='postgres://postgres@127.0.0.1:55432/postgres?sslmode=disable'
+  go test -tags=integration -race -count=1 ./internal/store/...
+  ```
+  (skip `initdb` if `$D/data` exists). Temporal/OpenBao still need CI or a local machine.
+- **Dev stack:** `deploy/dev/postgres-init/` creates `bohux_app` only on a fresh
+  `postgres` volume. An existing volume needs `docker compose down -v` first.
 - **Go 1.23 pin holds dependencies back** (goose ≤ v3.26, pgx ≤ v5.7.6; newer need Go
   1.24–1.26). Raising the `go` directive is cheap and its own commit when wanted.
 
@@ -235,6 +260,9 @@ Split into sub-slices, one session each.
   rule for gates: write the ADR as *proposed*, build on it, list it under *Waiting on
   the owner* (O6 onward).
 - S2a done: ADR-0021 (goose on pgx).
+- S2b done: 11 migrations (all v0.1 resources), `store.Migrate`, unit + integration
+  tests passing on local Postgres 16.15; build, vet, golangci-lint (with and without the
+  integration tag) clean. Added CI integration job and dev `bohux_app` role.
 
 ### 2026-10-21 (S1c) — branch `claude/relaxed-rubin-76m7dl`
 - S1c done, so S1 is done: node, secret, audit protos and
