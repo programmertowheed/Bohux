@@ -111,26 +111,39 @@ func (c *command) scale(ctx context.Context, args []string) error {
 	return nil
 }
 
+// reconnectFor bounds how long follow keeps trying to reach the control plane, which
+// is away while a deploy replaces the control plane itself (ADR-0030) — at worst until
+// the agent falls back after the health timeout plus its margin (ADR-0031).
+const reconnectFor = 10 * time.Minute
+
 // follow prints each state the Deployment passes through until it ends, and fails
-// unless it succeeded.
+// unless it succeeded. A watch that ends early is picked up again: the run goes on
+// whether or not anyone watches it.
 func (c *command) follow(ctx context.Context, d *bohuxv1.Deployment) error {
 	start := time.Now()
 	c.printf("deployment %s\n", d.GetMeta().GetId())
-	stream, err := c.deployments.WatchDeployment(ctx, call(c.token, &bohuxv1.WatchDeploymentRequest{Id: d.GetMeta().GetId()}))
-	if err != nil {
-		return fmt.Errorf("watch deployment: %w", err)
-	}
-	defer func() { _ = stream.Close() }()
 	last := ""
-	for stream.Receive() {
-		d = stream.Msg().GetDeployment()
-		if s := state(d.GetState().String()); s != last {
-			last = s
-			c.printf("  %-12s %s\n", s, time.Since(start).Round(100*time.Millisecond))
+	var away time.Time
+	for {
+		ended, err := c.watch(ctx, d.GetMeta().GetId(), start, &last, &d)
+		if ended {
+			break
 		}
-	}
-	if err := stream.Err(); err != nil {
-		return fmt.Errorf("watch deployment: %w", err)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if away.IsZero() {
+			away = time.Now()
+			c.printf("  control plane unavailable (%v); still following\n", err)
+		}
+		if time.Since(away) > reconnectFor {
+			return fmt.Errorf("watch deployment: control plane unavailable for %s: %w", reconnectFor, err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
 	}
 	if d.GetState() != bohuxv1.DeploymentState_DEPLOYMENT_STATE_SUCCEEDED {
 		msg := "deployment ended " + state(d.GetState().String())
@@ -140,6 +153,39 @@ func (c *command) follow(ctx context.Context, d *bohuxv1.Deployment) error {
 		return errors.New(msg)
 	}
 	return nil
+}
+
+// watch streams the Deployment's states once, printing new ones, and reports whether
+// it reached a terminal state.
+func (c *command) watch(ctx context.Context, id string, start time.Time, last *string, d **bohuxv1.Deployment) (bool, error) {
+	stream, err := c.deployments.WatchDeployment(ctx, call(c.token, &bohuxv1.WatchDeploymentRequest{Id: id}))
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = stream.Close() }()
+	for stream.Receive() {
+		*d = stream.Msg().GetDeployment()
+		if s := state((*d).GetState().String()); s != *last {
+			*last = s
+			c.printf("  %-12s %s\n", s, time.Since(start).Round(100*time.Millisecond))
+		}
+	}
+	if terminal((*d).GetState()) {
+		return true, nil
+	}
+	if err := stream.Err(); err != nil {
+		return false, err
+	}
+	return false, errors.New("the watch ended early")
+}
+
+func terminal(s bohuxv1.DeploymentState) bool {
+	switch s {
+	case bohuxv1.DeploymentState_DEPLOYMENT_STATE_SUCCEEDED, bohuxv1.DeploymentState_DEPLOYMENT_STATE_FAILED,
+		bohuxv1.DeploymentState_DEPLOYMENT_STATE_ROLLED_BACK, bohuxv1.DeploymentState_DEPLOYMENT_STATE_CANCELLED:
+		return true
+	}
+	return false
 }
 
 // warnDowntime says so up front when a deploy stops the old container before the new
