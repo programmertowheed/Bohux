@@ -4,7 +4,9 @@
 package memory
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -229,7 +231,9 @@ func (p *Provider) Logs(ctx context.Context, req provider.LogRequest) (iter.Seq2
 	}, nil
 }
 
-// Exec runs a tiny command language: "echo ARGS", "printenv NAME", "exit N".
+// Exec runs a tiny command language: "echo ARGS", "printenv NAME", "exit N", "cat"
+// (stdin to stdout), and with a TTY "sh", which reads lines of "stty size" and
+// "exit N", separated by ";".
 func (p *Provider) Exec(_ context.Context, req provider.ExecRequest) (provider.Session, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -238,6 +242,28 @@ func (p *Provider) Exec(_ context.Context, req provider.ExecRequest) (provider.S
 		return nil, fmt.Errorf("no running instance of %s", req.Ref.App)
 	}
 	in := w.instances[0]
+	switch {
+	case len(req.Command) == 1 && req.Command[0] == "cat" && !req.TTY:
+		return startInteractive(nil, func(line string, out io.Writer) (int, bool) {
+			_, _ = io.WriteString(out, line+"\n")
+			return 0, false
+		}), nil
+	case len(req.Command) == 1 && req.Command[0] == "sh" && req.TTY:
+		size := &termSize{rows: req.Rows, cols: req.Cols}
+		return startInteractive(size, func(line string, out io.Writer) (int, bool) {
+			for _, cmd := range strings.Split(line, ";") {
+				switch f := strings.Fields(cmd); {
+				case len(f) == 2 && f[0] == "stty" && f[1] == "size":
+					rows, cols := size.get()
+					_, _ = fmt.Fprintf(out, "%d %d\r\n", rows, cols)
+				case len(f) == 2 && f[0] == "exit":
+					code, _ := strconv.Atoi(f[1])
+					return code, true
+				}
+			}
+			return 0, false
+		}), nil
+	}
 	var out string
 	code := 0
 	switch {
@@ -279,6 +305,79 @@ func (s *session) Stderr() io.Reader           { return strings.NewReader("") }
 func (s *session) Resize(uint16, uint16) error { return nil }
 func (s *session) Wait() (int, error)          { return s.code, nil }
 func (s *session) Close() error                { return nil }
+
+type termSize struct {
+	mu         sync.Mutex
+	rows, cols uint16
+}
+
+func (t *termSize) get() (uint16, uint16) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.rows, t.cols
+}
+
+// interactive is a session fed line by line from its stdin until a line ends it or
+// stdin closes.
+type interactive struct {
+	stdin  *io.PipeWriter
+	stdout *io.PipeReader
+	size   *termSize
+	code   chan int
+}
+
+func startInteractive(size *termSize, line func(string, io.Writer) (int, bool)) *interactive {
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	s := &interactive{stdin: inW, stdout: outR, size: size, code: make(chan int, 1)}
+	go func() {
+		code := 0
+		sc := bufio.NewScanner(inR)
+		for sc.Scan() {
+			var done bool
+			if code, done = line(sc.Text(), outW); done {
+				break
+			}
+		}
+		_ = inR.Close()
+		_ = outW.Close()
+		s.code <- code
+	}()
+	return s
+}
+
+func (s *interactive) Stdin() io.WriteCloser { return s.stdin }
+func (s *interactive) Stdout() io.Reader     { return s.stdout }
+
+// Stderr is nil for a TTY session, as the interface says.
+func (s *interactive) Stderr() io.Reader {
+	if s.size != nil {
+		return nil
+	}
+	return strings.NewReader("")
+}
+
+func (s *interactive) Resize(rows, cols uint16) error {
+	if s.size == nil {
+		return errors.New("this session has no TTY")
+	}
+	s.size.mu.Lock()
+	defer s.size.mu.Unlock()
+	s.size.rows, s.size.cols = rows, cols
+	return nil
+}
+
+func (s *interactive) Wait() (int, error) {
+	code := <-s.code
+	s.code <- code
+	return code, nil
+}
+
+func (s *interactive) Close() error {
+	_ = s.stdin.Close()
+	_ = s.stdout.Close()
+	return nil
+}
 
 // Scale changes the replica count by re-applying with the new count, so the target
 // never drifts from its artifact.

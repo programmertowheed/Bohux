@@ -17,6 +17,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bohumix/bohux/internal/provider"
@@ -571,6 +572,53 @@ func Cases() []Case {
 			}
 			return nil
 		}},
+		{"exec forwards stdin, and a TTY session is sized and resized", func(ctx context.Context, h *Harness) error {
+			s, err := h.S.Provider.Exec(ctx, provider.ExecRequest{Ref: h.Ref, Command: []string{"cat"}})
+			if err != nil {
+				return fmt.Errorf("exec cat: %w", err)
+			}
+			if _, err := s.Stdin().Write([]byte("conformance-stdin\n")); err != nil {
+				_ = s.Close()
+				return fmt.Errorf("write stdin: %w", err)
+			}
+			_ = s.Stdin().Close()
+			out, err := io.ReadAll(s.Stdout())
+			code, werr := s.Wait()
+			_ = s.Close()
+			if err != nil || werr != nil || code != 0 || strings.TrimSpace(string(out)) != "conformance-stdin" {
+				return fmt.Errorf("cat: exit %d, output %q, %v, %v", code, out, err, werr)
+			}
+
+			t, err := h.S.Provider.Exec(ctx, provider.ExecRequest{Ref: h.Ref, Command: []string{"sh"}, TTY: true, Rows: 24, Cols: 80})
+			if err != nil {
+				return fmt.Errorf("exec with a TTY: %w", err)
+			}
+			defer func() { _ = t.Close() }()
+			if t.Stderr() != nil {
+				return errors.New("a TTY session has a separate stderr")
+			}
+			term := newTermReader(t.Stdout())
+			if _, err := t.Stdin().Write([]byte("stty size\n")); err != nil {
+				return fmt.Errorf("write to the terminal: %w", err)
+			}
+			if err := term.waitFor("24 80", 20*time.Second); err != nil {
+				return fmt.Errorf("initial size: %w", err)
+			}
+			if err := t.Resize(40, 100); err != nil {
+				return fmt.Errorf("resize: %w", err)
+			}
+			if _, err := t.Stdin().Write([]byte("stty size; exit 3\n")); err != nil {
+				return fmt.Errorf("write to the terminal: %w", err)
+			}
+			if err := term.waitFor("40 100", 20*time.Second); err != nil {
+				return fmt.Errorf("size after resize: %w", err)
+			}
+			term.drain(20 * time.Second)
+			if code, err := t.Wait(); err != nil || code != 3 {
+				return fmt.Errorf("TTY session exit %d, %v; want 3", code, err)
+			}
+			return nil
+		}},
 		{"destroy leaves nothing and is repeatable", func(ctx context.Context, h *Harness) error {
 			if err := h.S.Provider.Destroy(ctx, h.Ref); err != nil {
 				return fmt.Errorf("destroy: %w", err)
@@ -600,4 +648,54 @@ func Cases() []Case {
 // Cleanup destroys the workload if a failed run left it behind.
 func (h *Harness) Cleanup(ctx context.Context) {
 	_ = h.S.Provider.Destroy(ctx, h.Ref)
+}
+
+// termReader collects a terminal's output as it arrives, for waiting on text.
+type termReader struct {
+	mu   sync.Mutex
+	buf  strings.Builder
+	done chan struct{}
+}
+
+func newTermReader(r io.Reader) *termReader {
+	t := &termReader{done: make(chan struct{})}
+	go func() {
+		defer close(t.done)
+		b := make([]byte, 4096)
+		for {
+			n, err := r.Read(b)
+			t.mu.Lock()
+			t.buf.Write(b[:n])
+			t.mu.Unlock()
+			if err != nil {
+				// A terminal reports the end of its last writer as an error (EIO).
+				return
+			}
+		}
+	}()
+	return t
+}
+
+func (t *termReader) waitFor(text string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		t.mu.Lock()
+		got := t.buf.String()
+		t.mu.Unlock()
+		if strings.Contains(got, text) {
+			return nil
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return fmt.Errorf("no %q in terminal output %q", text, t.buf.String())
+}
+
+// drain waits until the terminal's output ends.
+func (t *termReader) drain(timeout time.Duration) {
+	select {
+	case <-t.done:
+	case <-time.After(timeout):
+	}
 }

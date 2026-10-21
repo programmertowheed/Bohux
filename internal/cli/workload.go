@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
+	"sync"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -56,8 +58,9 @@ func (c *command) logs(ctx context.Context, args []string) error {
 	return nil
 }
 
-// exec runs a command in one of the App's instances and prints its output. Standard
-// input is not forwarded in v0.1, and there is no TTY.
+// exec runs a command in one of the App's instances and prints its output. With -i
+// it forwards standard input; with -t it also gives the command a terminal, puts the
+// local one in raw mode, and follows its size, like `ssh -t`.
 func (c *command) exec(ctx context.Context, args []string) error {
 	i := slices.Index(args, "--")
 	if i < 0 || i == len(args)-1 {
@@ -66,9 +69,19 @@ func (c *command) exec(ctx context.Context, args []string) error {
 	command := args[i+1:]
 	fs, t := c.flags("exec")
 	instance := fs.String("instance", "", "instance to run in (default: any)")
+	interactive := fs.Bool("i", false, "forward standard input")
+	tty := fs.Bool("t", false, "allocate a terminal (implies -i); standard input must be one")
 	slug, err := parse(fs, args[:i])
 	if err != nil {
 		return err
+	}
+	var term *os.File
+	if *tty {
+		f, ok := c.in.(*os.File)
+		if !ok || !isTerminal(f) {
+			return fmt.Errorf("exec -t: standard input is not a terminal; use -i: %w", ErrUsage)
+		}
+		term, *interactive = f, true
 	}
 	if err := c.connect(); err != nil {
 		return err
@@ -77,14 +90,60 @@ func (c *command) exec(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	stream := c.workloads.Exec(ctx)
 	stream.RequestHeader().Set("Authorization", "Bearer "+c.token)
-	if err := stream.Send(&bohuxv1.ExecRequest{Msg: &bohuxv1.ExecRequest_Start{Start: &bohuxv1.ExecStart{
-		AppId: app.GetMeta().GetId(), Instance: *instance, Command: command}}}); err != nil {
+	start := &bohuxv1.ExecStart{AppId: app.GetMeta().GetId(), Instance: *instance, Command: command, Tty: *tty}
+	if term != nil {
+		rows, cols := termSize(term)
+		start.Size = &bohuxv1.TerminalSize{Rows: rows, Cols: cols}
+	}
+	// Sends come from the input and resize goroutines; a stream takes one at a time.
+	var sendMu sync.Mutex
+	send := func(m *bohuxv1.ExecRequest) error {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		return stream.Send(m)
+	}
+	if err := send(&bohuxv1.ExecRequest{Msg: &bohuxv1.ExecRequest_Start{Start: start}}); err != nil {
 		return fmt.Errorf("exec: %w", err)
 	}
-	// No stdin: the process reads end of file at once.
-	if err := stream.CloseRequest(); err != nil {
+	if term != nil {
+		restore, err := makeRaw(term)
+		if err != nil {
+			return fmt.Errorf("exec -t: %w", err)
+		}
+		defer restore()
+		go func() {
+			for range resizes(ctx) {
+				rows, cols := termSize(term)
+				_ = send(&bohuxv1.ExecRequest{Msg: &bohuxv1.ExecRequest_Resize{
+					Resize: &bohuxv1.TerminalSize{Rows: rows, Cols: cols}}})
+			}
+		}()
+	}
+	if *interactive && c.in != nil {
+		go func() {
+			buf := make([]byte, 32<<10)
+			for {
+				n, err := c.in.Read(buf)
+				if n > 0 {
+					if send(&bohuxv1.ExecRequest{Msg: &bohuxv1.ExecRequest_Stdin{Stdin: append([]byte(nil), buf[:n]...)}}) != nil {
+						return
+					}
+				}
+				if err != nil {
+					// End of input: the process reads end of file.
+					sendMu.Lock()
+					_ = stream.CloseRequest()
+					sendMu.Unlock()
+					return
+				}
+			}
+		}()
+	} else if err := stream.CloseRequest(); err != nil {
+		// No stdin: the process reads end of file at once.
 		return fmt.Errorf("exec: %w", err)
 	}
 	for {

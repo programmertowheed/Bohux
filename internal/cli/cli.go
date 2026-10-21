@@ -41,9 +41,10 @@ const Commands = `  deploy          build or import a release of an app and depl
   logs            print an app's log lines
   exec            run a command in one of an app's instances`
 
-// Run executes one CLI command. stdin is read only by `secret set`.
+// Run executes one CLI command. stdin is read by `secret set`, `channel create`, and
+// `exec -i`.
 func Run(ctx context.Context, cmd string, args []string, stdin io.Reader, stdout io.Writer, getenv func(string) string) error {
-	c := &command{out: stdout, getenv: getenv}
+	c := &command{out: stdout, in: stdin, getenv: getenv}
 	if IsResource(cmd) {
 		return c.runResource(ctx, cmd, args, stdin)
 	}
@@ -64,6 +65,7 @@ func Run(ctx context.Context, cmd string, args []string, stdin io.Reader, stdout
 
 type command struct {
 	out    io.Writer
+	in     io.Reader
 	getenv func(string) string
 
 	token       string

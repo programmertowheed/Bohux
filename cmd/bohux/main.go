@@ -98,7 +98,7 @@ type deps struct {
 	bootstrap       func(ctx context.Context, dsn, slug, displayName string) (token string, err error)
 	agentRegister   func(context.Context, agent.RegisterOptions) error
 	agentRun        func(ctx context.Context, cfg agentConfig) error
-	// stdin is what `bohux secret set` reads the value from.
+	// stdin is what `bohux secret set` reads the value from, and `exec -i` forwards.
 	stdin io.Reader
 }
 

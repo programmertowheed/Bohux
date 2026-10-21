@@ -114,6 +114,14 @@ image. A rotated credential is used by the next pull; it does not restart anythi
 since the image is pinned by digest. Short-lived registry tokens (ECR, GCR) are not
 refreshed on the node yet.
 
+## Exec
+
+`docker compose exec -T` for plain sessions. A TTY session runs the docker CLI on a
+pseudo-terminal the agent opens (Linux), as session leader, so compose allocates a
+terminal in the container too; resizes set the agent's terminal size, which the CLI
+passes on. A TTY session's output is all stdout, and closing its input types end of
+file (^D).
+
 ## Known gaps (v0.1)
 
 - **Deploys have downtime.** Compose recreates containers stop-old/start-new; a
@@ -123,8 +131,6 @@ refreshed on the node yet.
   its stop timeout, so a process that ignores SIGTERM makes the deploy slower (10 s),
   not the outage longer.
 - **Replicas above 1 cannot publish a host port.** Docker refuses the second bind.
-- **Exec has no TTY yet.** Non-interactive commands work; an interactive shell needs a
-  pseudo-terminal on the agent, planned later.
 - **Logs do not separate stdout from stderr** (`LogLine.Stderr` is always false).
 - Secret values cannot contain newlines (env-file format).
 - Build logs stay in the agent's log.

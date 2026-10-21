@@ -422,6 +422,19 @@ func TestBuildEndToEnd(t *testing.T) {
 	if err != nil || strings.TrimSpace(out) != "g1" {
 		t.Errorf("exec = %q, %v; want g1", out, err)
 	}
+	// -i forwards standard input to the process; its end is the process's end of file.
+	var piped bytes.Buffer
+	withInput := defaultDeps
+	withInput.stdin = strings.NewReader("line one\nline two\n")
+	env := map[string]string{"BOHUX_API_URL": s.base, "BOHUX_TOKEN": s.token, "BOHUX_PROJECT": "shop"}
+	err = runWith(s.ctx, []string{"exec", "built", "-e", "prod", "-i", "--", "wc", "-l"}, &piped,
+		func(k string) string { return env[k] }, withInput)
+	if err != nil || strings.TrimSpace(piped.String()) != "2" {
+		t.Errorf("exec -i wc -l = %q, %v; want 2", piped.String(), err)
+	}
+	if _, err := bohux("exec", "built", "-e", "prod", "-t", "--", "sh"); err == nil || !errors.Is(err, errUsage) {
+		t.Errorf("exec -t without a terminal = %v, want a usage error", err)
+	}
 	_, err = bohux("exec", "built", "-e", "prod", "--", "sh", "-c", "exit 3")
 	var exit *cli.ExitError
 	if !errors.As(err, &exit) || exit.Code != 3 {

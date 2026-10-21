@@ -152,9 +152,12 @@ Apps are named by slug: `bohux deploy api -p shop -e prod`.
   (ADR-0027).
 - `bohux logs <app> -e <env> [-f] [--tail <n>] [--since <duration>] [--instance <name>]`
   prints the App's log lines, relayed from its node; `-f` keeps following.
-- `bohux exec <app> -e <env> [--instance <name>] -- <command> [args…]` runs a command in
-  one of the App's instances and exits with its status. v0.1 forwards no standard input
-  and has no TTY. Every session is audited; its input and output are not recorded.
+- `bohux exec <app> -e <env> [--instance <name>] [-i] [-t] -- <command> [args…]` runs a
+  command in one of the App's instances and exits with its status. `-i` forwards
+  standard input (its end is the command's end of file); `-t` gives the command a
+  terminal, puts yours in raw mode and follows its size, as `ssh -t` does: `bohux exec
+  api -e prod -t -- sh` is a shell. `-t` needs standard input to be a terminal. Every
+  session is audited; its input and output are not recorded.
 
 ## CLI: resource commands (ADR-0036)
 

@@ -1038,6 +1038,23 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       (the sandbox has no ssh client): fetch, `RUN --mount=type=ssh`, key removed,
       wrong key → `SOURCE_FETCH_FAILED`, unopenable key → `BUILD_REQUEST_INVALID`
 
+### S18 — Interactive exec (spec'd, never implemented) ✅
+- [x] Docker provider: TTY sessions on an agent-side pseudo-terminal (`x/sys/unix`, no
+      new dependency), sized at start and resized; stdin forwarding already worked
+- [x] CLI `bohux exec -i` (forward stdin) and `-t` (raw local terminal, size and
+      SIGWINCH), Linux and macOS; `-t` refuses a non-terminal stdin
+- [x] Conformance case (rule 4): stdin to `cat`, and a TTY `sh` sized 24x80, resized to
+      40x100, exit 3; the in-memory reference provider gained both; Docker passes
+- [x] Tests: CLI against a fake API (stdin, no stdin, `-t` refusal), agent relay
+      (stdin, resize, close), e2e `exec -i` (written; the build e2e cannot run in this
+      sandbox: the base system leaves under 10% free, so the agent refuses builds)
+- [x] Found on the live install: **logs and exec never reached Apps with routes** since
+      S10f, because the agent looked up the workload without its blue/green slot. Fixed,
+      with a test. Then a real `bohux exec -t -- sh` on the install: prompt, `/dev/pts/0`,
+      the local 30x90 size, exit status 5 passed back
+- [x] The binary did not build for macOS (S16 `statfs` types); fixed, and CI now
+      cross-builds for macOS
+
 ## Known gaps and notes
 - **CI has not run on this branch.** `ci.yml` triggers on pushes to `main` and on
   pull requests; there is no PR for `claude/relaxed-rubin-76m7dl`, so every check so
@@ -1137,6 +1154,8 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   live install and fixed with a test over every noun. The test install now runs this
   branch's control plane (upgraded with `bohux deploy controlplane`, migration 00021
   applied).
+- S18: interactive exec (`-i`, `-t`), conformance case; found and fixed logs/exec
+  missing slotted Apps, and the macOS build.
 - **Next:** see Current focus.
 
 ### 2026-10-21 (auto run, S9e–S9f) — branch `claude/relaxed-rubin-76m7dl`

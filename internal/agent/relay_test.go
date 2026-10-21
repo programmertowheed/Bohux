@@ -10,6 +10,7 @@ import (
 	"time"
 
 	agentv1 "github.com/bohumix/bohux/gen/bohux/agent/v1"
+	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/internal/provider"
 )
 
@@ -129,5 +130,83 @@ func TestRelayExec(t *testing.T) {
 	collect(t, out, exit)
 	if none.handle(&agentv1.ConnectResponse{Msg: &agentv1.ConnectResponse_Ping{}}) {
 		t.Error("relays claimed a ping")
+	}
+}
+
+// pipeWorkloads' Exec is a cat on pipes that records its request and resizes.
+type pipeWorkloads struct {
+	fakeWorkloads
+	req     provider.ExecRequest
+	resized chan [2]uint16
+}
+
+type pipeSession struct {
+	in      *io.PipeWriter
+	out     *io.PipeReader
+	resized chan [2]uint16
+	done    chan struct{}
+}
+
+func (p *pipeWorkloads) Exec(_ context.Context, req provider.ExecRequest) (provider.Session, error) {
+	p.req = req
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	s := &pipeSession{in: inW, out: outR, resized: p.resized, done: make(chan struct{})}
+	go func() {
+		_, _ = io.Copy(outW, inR)
+		_ = outW.Close()
+		close(s.done)
+	}()
+	return s, nil
+}
+
+func (s *pipeSession) Stdin() io.WriteCloser { return s.in }
+func (s *pipeSession) Stdout() io.Reader     { return s.out }
+func (s *pipeSession) Stderr() io.Reader     { return nil }
+func (s *pipeSession) Resize(rows, cols uint16) error {
+	s.resized <- [2]uint16{rows, cols}
+	return nil
+}
+func (s *pipeSession) Wait() (int, error) { <-s.done; return 0, nil }
+func (s *pipeSession) Close() error       { return nil }
+
+// Input, resizes, and the end of input reach the provider's session; a TTY session's
+// output is all stdout.
+func TestRelayExecInput(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := make(chan *agentv1.ConnectRequest, 16)
+	w := &pipeWorkloads{resized: make(chan [2]uint16, 1)}
+	r := newRelays(ctx, w, out)
+
+	r.handle(&agentv1.ConnectResponse{Msg: &agentv1.ConnectResponse_ExecOpen{ExecOpen: &agentv1.ExecOpen{
+		SessionId: "s1", AppId: "app-1", Command: []string{"sh"}, Tty: true, Size: &bohuxv1.TerminalSize{Rows: 24, Cols: 80}}}})
+	r.handle(&agentv1.ConnectResponse{Msg: &agentv1.ConnectResponse_ExecData{ExecData: &agentv1.ExecData{
+		SessionId: "s1", Msg: &agentv1.ExecData_Stdin{Stdin: []byte("typed\n")}}}})
+	r.handle(&agentv1.ConnectResponse{Msg: &agentv1.ConnectResponse_ExecData{ExecData: &agentv1.ExecData{
+		SessionId: "s1", Msg: &agentv1.ExecData_Resize{Resize: &bohuxv1.TerminalSize{Rows: 40, Cols: 100}}}}})
+	select {
+	case got := <-w.resized:
+		if got != [2]uint16{40, 100} {
+			t.Errorf("resized to %v, want 40x100", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("resize did not reach the session")
+	}
+	r.handle(&agentv1.ConnectResponse{Msg: &agentv1.ConnectResponse_ExecClose{ExecClose: &agentv1.ExecClose{SessionId: "s1"}}})
+
+	got := collect(t, out, func(m *agentv1.ConnectRequest) bool { return m.GetExecOutput().GetExit() != nil })
+	var stdout string
+	for _, m := range got {
+		stdout += string(m.GetExecOutput().GetStdout())
+		if m.GetExecOutput().GetStderr() != nil {
+			t.Error("a TTY session sent stderr")
+		}
+	}
+	if stdout != "typed\n" {
+		t.Errorf("stdout %q, want the typed input", stdout)
+	}
+	if !w.req.TTY || w.req.Rows != 24 || w.req.Cols != 80 {
+		t.Errorf("provider request %+v, want a 24x80 TTY", w.req)
 	}
 }
