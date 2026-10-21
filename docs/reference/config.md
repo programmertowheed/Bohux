@@ -13,6 +13,7 @@ Adding a setting means adding it here in the same commit.
 | `--data-dir` | `BOHUX_DATA_DIR` | `/var/lib/bohux` | Holds `pki/`: the node CA and assignment signing key, created on first start, mode 0600 (ADR-0024). **Back it up with the database**; losing it means every node re-registers. |
 | `--temporal-address` | `BOHUX_TEMPORAL_ADDRESS` | `127.0.0.1:7233` | Temporal frontend for deploy workflows (ADR-0002). The control plane also runs the deploy worker on task queue `bohux-deploy` (ADR-0026). |
 | `--temporal-namespace` | `BOHUX_TEMPORAL_NAMESPACE` | `default` | Temporal namespace for Bohux's workflows. It must exist. |
+| `--deploy-health-timeout` | `BOHUX_DEPLOY_HEALTH_TIMEOUT` | `5m` | How long a deployed Release has to report healthy before the deploy rolls back to the last healthy Release (ADR-0026). Go duration syntax. |
 
 On start it applies pending migrations, then serves. Temporal does not have to be up: the
 API serves without it, deploys are refused with `UNAVAILABLE` until it is reachable, and

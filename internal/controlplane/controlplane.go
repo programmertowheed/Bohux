@@ -43,6 +43,9 @@ type Config struct {
 	TemporalAddress string
 	// TemporalNamespace is the Temporal namespace for Bohux's workflows.
 	TemporalNamespace string
+	// DeployHealthTimeout is how long a deployed Release has to turn healthy before
+	// the deploy compensates. Zero means deploy.DefaultHealthTimeout.
+	DeployHealthTimeout time.Duration
 }
 
 // shutdownTimeout bounds how long in-flight requests get after the context ends.
@@ -113,7 +116,7 @@ func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 		// termination is in front of Bohux (Caddy, ADR-0019) or added with mTLS in S4.
 		Handler: h2c.NewHandler(newMux(st, (&api.Server{
 			Store: st, Authn: &auth.Authenticator{Store: st}, PKI: authority,
-			Deploys: &deploy.Starter{Client: temporal},
+			Deploys: &deploy.Starter{Client: temporal, HealthTimeout: cfg.DeployHealthTimeout},
 		}).Mount), &http2.Server{}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

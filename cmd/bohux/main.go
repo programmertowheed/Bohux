@@ -22,6 +22,7 @@ import (
 	"github.com/bohumix/bohux/internal/provider"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/version"
+	"github.com/bohumix/bohux/internal/workflow/deploy"
 	"github.com/bohumix/bohux/providers/docker"
 )
 
@@ -45,6 +46,7 @@ const (
 	envBootstrapToken  = "BOHUX_BOOTSTRAP_TOKEN"
 	envTemporalAddress = "BOHUX_TEMPORAL_ADDRESS"
 	envTemporalNS      = "BOHUX_TEMPORAL_NAMESPACE"
+	envHealthTimeout   = "BOHUX_DEPLOY_HEALTH_TIMEOUT"
 
 	defaultListenAddr      = "127.0.0.1:7400"
 	defaultAgentListenAddr = "127.0.0.1:7443"
@@ -202,6 +204,13 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 			"Temporal frontend host:port for deploys (env "+envTemporalAddress+")")
 		temporalNS := fs.String("temporal-namespace", envOr(getenv, envTemporalNS, defaultTemporalNS),
 			"Temporal namespace (env "+envTemporalNS+")")
+		healthTimeout := fs.Duration("deploy-health-timeout", deploy.DefaultHealthTimeout,
+			"how long a deployed release has to turn healthy before it is rolled back (env "+envHealthTimeout+")")
+		if v := getenv(envHealthTimeout); v != "" {
+			if err := fs.Set("deploy-health-timeout", v); err != nil {
+				return fmt.Errorf("controlplane: %s: %w", envHealthTimeout, err)
+			}
+		}
 		if err := fs.Parse(args[1:]); err != nil {
 			return fmt.Errorf("controlplane: %w", err)
 		}
@@ -209,7 +218,8 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 			return fmt.Errorf("controlplane: --database-url or %s is required", envDatabaseURL)
 		}
 		cfg := controlplane.Config{ListenAddr: *listen, AgentListenAddr: *agentListen,
-			DatabaseURL: *dbURL, DataDir: *dataDir, TemporalAddress: *temporalAddr, TemporalNamespace: *temporalNS}
+			DatabaseURL: *dbURL, DataDir: *dataDir, TemporalAddress: *temporalAddr, TemporalNamespace: *temporalNS,
+			DeployHealthTimeout: *healthTimeout}
 		if err := d.runControlPlane(ctx, cfg); err != nil {
 			return fmt.Errorf("controlplane: %w", err)
 		}
