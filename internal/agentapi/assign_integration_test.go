@@ -396,3 +396,79 @@ func TestScaleAppTx(t *testing.T) {
 		}
 	}
 }
+
+// TestRotateTx checks a rotated secret reaches the node that uses it as a new,
+// sealed generation, and leaves other nodes alone (ADR-0008).
+func TestRotateTx(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	secrets := fakeSecrets{"openbao:db": "postgres://user:first-hunter2@db/app"}
+	h.srv.Secrets = secrets
+	a1, a2 := h.register("vps-1"), h.register("vps-2")
+	node1, node2 := uuid.MustParse(a1.node), uuid.MustParse(a2.node)
+	app1, _ := fixture.App(t, h.st, h.tenant, "api", "prod")
+	app2, _ := fixture.App(t, h.st, h.tenant, "worker", "prod2")
+	if _, err := h.srv.Assign(ctx, h.tenant, node1, []*agentv1.Workload{workload(app1.String())}, system); err != nil {
+		t.Fatal(err)
+	}
+	plain := workload(app2.String())
+	plain.Secrets = nil
+	if _, err := h.srv.Assign(ctx, h.tenant, node2, []*agentv1.Workload{plain}, system); err != nil {
+		t.Fatal(err)
+	}
+
+	sctx, cancel := context.WithCancel(ctx)
+	stream, first, err := open(sctx, a1.client, hello(a1.node, "0.3.0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStream(stream, cancel)
+	if first.GetAssignment() == nil {
+		nextAssignment(t, stream)
+	}
+
+	secrets["openbao:db"] = "postgres://user:second-hunter2@db/app"
+	var woken []uuid.UUID
+	if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+		var err error
+		woken, err = h.srv.RotateTx(ctx, tx, "openbao:db", system)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(woken) != 1 || woken[0] != node1 {
+		t.Fatalf("woken = %v, want only %s", woken, node1)
+	}
+	for _, n := range woken {
+		h.srv.Wake(n)
+	}
+	got := nextAssignment(t, stream)
+	p := &agentv1.AssignmentPayload{}
+	if err := proto.Unmarshal(got.GetPayload(), p); err != nil {
+		t.Fatal(err)
+	}
+	if p.GetGeneration() != 2 {
+		t.Fatalf("generation = %d, want 2", p.GetGeneration())
+	}
+	var pub, priv [32]byte
+	copy(pub[:], a1.sealing.PublicKey().Bytes())
+	copy(priv[:], a1.sealing.Bytes())
+	opened, ok := box.OpenAnonymous(nil, p.GetWorkloads()[0].GetSealedSecrets(), &pub, &priv)
+	if !ok {
+		t.Fatal("rotated values do not open with the node's key")
+	}
+	vals := &agentv1.SecretValues{}
+	if err := proto.Unmarshal(opened, vals); err != nil {
+		t.Fatal(err)
+	}
+	if vals.GetValues()["DATABASE_URL"] != "postgres://user:second-hunter2@db/app" {
+		t.Errorf("node got %v, want the rotated value", vals.GetValues())
+	}
+
+	var gen2 int64
+	if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+		return tx.QueryRow(ctx, `SELECT max(generation) FROM assignments WHERE node_id = $1`, node2).Scan(&gen2)
+	}); err != nil || gen2 != 1 {
+		t.Errorf("node without the secret is at generation %d, %v; want 1", gen2, err)
+	}
+}

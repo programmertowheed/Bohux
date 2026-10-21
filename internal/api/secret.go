@@ -35,7 +35,8 @@ type secretService struct {
 // SetSecret creates a secret or, with expected_revision_id, gives it a new value. The
 // value goes to the backend first; the revision records only its version, and the
 // resolver reads exactly that version, so a value whose revision never commits is
-// never used. The handle stays the same across values.
+// never used. The handle stays the same across values. A new value is rotated onto
+// every node that uses it.
 func (ss *secretService) SetSecret(ctx context.Context, req *connect.Request[bohuxv1.SetSecretRequest]) (*connect.Response[bohuxv1.SetSecretResponse], error) {
 	msg := req.Msg
 	p, _ := auth.FromContext(ctx)
@@ -115,6 +116,7 @@ func (ss *secretService) SetSecret(ctx context.Context, req *connect.Request[boh
 		slog.ErrorContext(ctx, "store secret value", "secret", id.String(), "err", err)
 		return nil, errNoSecrets
 	}
+	var wake []uuid.UUID
 	err = ss.s.Store.InTenant(ctx, p.Tenant, func(tx *store.Tx) error {
 		audit := store.Audit{Actor: p.Actor(), Action: bohuxv1connect.SecretServiceSetSecretProcedure,
 			ResourceType: secretType, ProjectID: project}
@@ -138,10 +140,21 @@ func (ss *secretService) SetSecret(ctx context.Context, req *connect.Request[boh
 			return err
 		}
 		out, err = getSecret(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		// A new value reaches running workloads through a new generation on every
+		// node that uses it, committed with the version it carries.
+		if exists && ss.s.Agents != nil {
+			wake, err = ss.s.Agents.RotateTx(ctx, tx, out.GetHandle(), p.Actor())
+		}
 		return err
 	})
 	if err != nil {
 		return nil, toConnect(ctx, err)
+	}
+	for _, node := range wake {
+		ss.s.Agents.Wake(node)
 	}
 	return connect.NewResponse(&bohuxv1.SetSecretResponse{Secret: out}), nil
 }

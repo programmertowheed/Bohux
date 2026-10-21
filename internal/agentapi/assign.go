@@ -211,6 +211,71 @@ func (s *Server) ScaleAppTx(ctx context.Context, tx *store.Tx, node, app uuid.UU
 	return written, nil
 }
 
+// RotateTx writes a new generation, with the same workloads, for every node whose
+// latest assignment references handle, inside the caller's transaction. Values are
+// resolved and sealed when a generation is sent, so the new generation carries the
+// rotated value and the agent re-applies (ADR-0008). It returns the nodes to wake
+// after commit.
+func (s *Server) RotateTx(ctx context.Context, tx *store.Tx, handle string, actor store.Actor) ([]uuid.UUID, error) {
+	rows, err := tx.Query(ctx, `SELECT a.node_id, a.payload FROM assignments a
+		JOIN nodes_heads n ON n.id = a.node_id AND NOT n.deleted
+		WHERE a.generation = (SELECT max(generation) FROM assignments WHERE node_id = a.node_id)`)
+	if err != nil {
+		return nil, fmt.Errorf("read latest assignments: %w", err)
+	}
+	var nodes []uuid.UUID
+	for rows.Next() {
+		var (
+			node uuid.UUID
+			raw  []byte
+		)
+		if err := rows.Scan(&node, &raw); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("read latest assignments: %w", err)
+		}
+		p := &agentv1.AssignmentPayload{}
+		if err := proto.Unmarshal(raw, p); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("decode stored assignment: %w", err)
+		}
+		if references(p.GetWorkloads(), handle) {
+			nodes = append(nodes, node)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read latest assignments: %w", err)
+	}
+	var woken []uuid.UUID
+	for _, node := range nodes {
+		_, written, err := s.writeTx(ctx, tx, node, actor, func(_ *store.Tx, current []*agentv1.Workload) ([]*agentv1.Workload, bool, error) {
+			// Re-check under the node lock: a concurrent write may have moved on.
+			return current, references(current, handle), nil
+		})
+		if errors.Is(err, ErrRevokedNode) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("rotate secret on node %s: %w", node, err)
+		}
+		if written {
+			woken = append(woken, node)
+		}
+	}
+	return woken, nil
+}
+
+func references(workloads []*agentv1.Workload, handle string) bool {
+	for _, w := range workloads {
+		for _, ref := range w.GetSecrets() {
+			if ref.GetHandle() == handle {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Wake tells the node's open stream, if any, that a new generation is waiting.
 func (s *Server) Wake(node uuid.UUID) { s.wake(node) }
 

@@ -34,9 +34,11 @@ type Server struct {
 	Now func() time.Time
 }
 
-// Scaler changes an App's replicas on its node; agentapi.Server implements it.
+// Scaler writes node generations outside a deploy: a scale (ADR-0027) or a rotated
+// secret (ADR-0008). agentapi.Server implements it.
 type Scaler interface {
 	ScaleAppTx(ctx context.Context, tx *store.Tx, node, app uuid.UUID, replicas int32, actor store.Actor) (bool, error)
+	RotateTx(ctx context.Context, tx *store.Tx, handle string, actor store.Actor) ([]uuid.UUID, error)
 	Wake(node uuid.UUID)
 }
 

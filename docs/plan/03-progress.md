@@ -38,16 +38,18 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S7b — secret rotation reaches nodes (⏳, next to start)
-- **Exact next step:** `agentapi.Server.RotateTx` (new generation for each node whose
-  latest assignment references a handle), called from SetSecret's update path.
+- **Slice:** S7c — BuildKit builds (⏳, next to start)
+- **Exact next step:** get BuildKit running in the cloud container (the `buildkitd`
+  binary from GitHub releases, or the `moby/buildkit` image), then decide where builds
+  run: the agent (it owns the node's image store) through a build assignment, or the
+  control plane talking to the node's BuildKit. That is an ADR.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S7b (secret rotation
-> reaches nodes) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0008,
-> ADR-0024, and CLAUDE.md rules 1 and 3. Start Postgres, Docker, Temporal and OpenBao
-> (tracker *Known gaps*). Verify with build, vet, golangci-lint (also with the integration
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S7c (BuildKit builds) on
+> branch `claude/relaxed-rubin-76m7dl`, following ADR-0011 item 7, ADR-0020 items 2-4,
+> ADR-0007, and CLAUDE.md rules 1, 3 and 6. Start Postgres, Docker, Temporal and
+> OpenBao (tracker *Known gaps*). Write the ADR for where builds run first. Verify with build, vet, golangci-lint (also with the integration
 > tag), unit and integration tests. Tick boxes, update the tracker and the next
 > session prompt, commit, push, and give me the next prompt.
 
@@ -536,11 +538,14 @@ Split into sub-slices, one session each.
       SecretService with an in-memory backend, including a scan of every Postgres
       table for the value (rule 3)
 
-#### S7b — rotation reaches nodes ⏳
-- [ ] A new secret value must reach running workloads: SetSecret on an existing secret
-      writes a new generation for every node whose latest assignment references the
-      handle (same transaction, like `ScaleAppTx`); the agent re-applies on rotation
-      (S4e1)
+#### S7b — rotation reaches nodes ✅
+- [x] `agentapi.Server.RotateTx`: a new generation (same workloads, re-checked under
+      the node lock) for every node whose latest assignment references the handle;
+      revoked nodes skipped. SetSecret's overwrite calls it in its transaction and wakes
+      the nodes after commit; the new generation is sealed with the new value at send
+      time and the agent re-applies (its spec hash covers secret values, keyed)
+- [x] Tested over mTLS (the node receives generation 2 whose sealed values open to the
+      new value; a node without the secret stays at 1) and through SetSecret
 
 #### S7c — BuildKit builds ⏳
 - [ ] CreateRelease from Git starts a build workflow (BuildKit, Dockerfile, exported to
@@ -645,6 +650,8 @@ Split into sub-slices, one session each.
 - S7 split into S7a–S7d. S7a done: OpenBao client and resolver, SecretService, control
   plane flags; CI starts OpenBao.
 - **Next:** S7b.
+- S7b done: rotated secrets reach the nodes that use them.
+- **Next:** S7c.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by

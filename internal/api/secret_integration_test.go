@@ -12,9 +12,12 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 
+	agentv1 "github.com/bohumix/bohux/gen/bohux/agent/v1"
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/gen/bohux/v1/bohuxv1connect"
+	"github.com/bohumix/bohux/internal/agentapi"
 	"github.com/bohumix/bohux/internal/auth"
 	"github.com/bohumix/bohux/internal/store"
 )
@@ -193,4 +196,69 @@ func TestSecrets(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+}
+
+// TestSecretRotationAssigns checks a new value writes a new generation for the node
+// running a workload that uses it, in SetSecret's transaction.
+func TestSecretRotationAssigns(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	agents := &agentapi.Server{Store: h.st}
+	mux := http.NewServeMux()
+	(&Server{Store: h.st, Authn: &auth.Authenticator{Store: h.st}, PKI: h.pki,
+		Secrets: &memBackend{vals: map[string][]string{}}, Agents: agents}).Mount(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	secrets := bohuxv1connect.NewSecretServiceClient(srv.Client(), srv.URL)
+	envs := bohuxv1connect.NewEnvironmentServiceClient(srv.Client(), srv.URL)
+	node := h.node("vps-1")
+	e, err := envs.CreateEnvironment(ctx, req(h.root, &bohuxv1.CreateEnvironmentRequest{
+		ProjectId: h.project("one").String(), Slug: "prod", ProviderBinding: dockerOn(node), IdempotencyKey: "e"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := e.Msg.GetEnvironment().GetMeta().GetId()
+	s1, err := secrets.SetSecret(ctx, req(h.root, &bohuxv1.SetSecretRequest{EnvironmentId: env, Key: "TOKEN",
+		Value: "one", IdempotencyKey: "s1"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec := s1.Msg.GetSecret()
+	appID := fixtureApp(t, h, env)
+	if _, err := agents.AssignApp(ctx, h.tenant, node, appID, &agentv1.Workload{AppId: appID.String(),
+		ReleaseId: "r1", DeploymentId: "d1", Image: "img", Runtime: &bohuxv1.Runtime{Replicas: 1},
+		Secrets: []*bohuxv1.SecretRef{{Key: "TOKEN", Handle: sec.GetHandle()}}},
+		store.Actor{ID: store.SystemActorID, Kind: store.ActorSystem}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := secrets.SetSecret(ctx, req(h.root, &bohuxv1.SetSecretRequest{EnvironmentId: env, Key: "TOKEN",
+		Value: "two", ExpectedRevisionId: sec.GetMeta().GetRevisionId(), IdempotencyKey: "s2"})); err != nil {
+		t.Fatal(err)
+	}
+	var gen int64
+	if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+		return tx.QueryRow(ctx, `SELECT max(generation) FROM assignments WHERE node_id = $1`, node).Scan(&gen)
+	}); err != nil || gen != 2 {
+		t.Errorf("after rotation the node is at generation %d, %v; want 2", gen, err)
+	}
+}
+
+// fixtureApp creates an App row in env directly and returns its ID.
+func fixtureApp(t *testing.T, h *harness, env string) uuid.UUID {
+	t.Helper()
+	ctx := context.Background()
+	envID := mustUUID(t, env)
+	var app uuid.UUID
+	err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+		var err error
+		app, _, err = tx.Create(ctx, "apps",
+			[]store.Col{{Name: "environment_id", Value: envID}, {Name: "slug", Value: "api"}},
+			[]store.Col{{Name: "source", Value: "{}"}, {Name: "runtime", Value: "{}"}},
+			store.Audit{Actor: store.Actor{ID: store.SystemActorID, Kind: store.ActorSystem}, Action: "test", ResourceType: appType})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return app
 }
