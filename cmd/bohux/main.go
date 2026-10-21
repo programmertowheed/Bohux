@@ -18,6 +18,7 @@ import (
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/internal/agent"
 	"github.com/bohumix/bohux/internal/api"
+	"github.com/bohumix/bohux/internal/cli"
 	"github.com/bohumix/bohux/internal/controlplane"
 	"github.com/bohumix/bohux/internal/provider"
 	"github.com/bohumix/bohux/internal/store"
@@ -29,6 +30,7 @@ import (
 var errUsage = errors.New(`usage: bohux <command>
 
 commands:
+` + cli.Commands + `
   version         print the version
   controlplane    run the control plane API
   admin migrate   apply database migrations and exit
@@ -266,6 +268,14 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 		return nil
 	case "agent":
 		return agentCommand(ctx, args[1:], getenv, d)
+	case "deploy", "rollback", "scale":
+		if err := cli.Run(ctx, args[0], args[1:], stdout, getenv); err != nil {
+			if errors.Is(err, cli.ErrUsage) {
+				return fmt.Errorf("%w\n\n%w", err, errUsage)
+			}
+			return err
+		}
+		return nil
 	default:
 		return fmt.Errorf("unknown command %q: %w", args[0], errUsage)
 	}

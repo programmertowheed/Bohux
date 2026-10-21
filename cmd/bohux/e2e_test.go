@@ -296,9 +296,9 @@ func TestDeployEndToEnd(t *testing.T) {
 	}
 }
 
-// TestBuildEndToEnd: Releases created through the API from a Git repository are built
-// by the real agent with buildx (ADR-0028), deployed, and a broken build-from-Git
-// Release rolls back to the healthy one.
+// TestBuildEndToEnd drives the CLI: Releases built from a Git repository by the real
+// agent with buildx (ADR-0028) are deployed, a broken one rolls back on its own, a
+// rollback goes back to the last healthy Release, and scale reaches the node.
 func TestBuildEndToEnd(t *testing.T) {
 	s := startStack(t)
 	repo := t.TempDir()
@@ -329,43 +329,73 @@ func TestBuildEndToEnd(t *testing.T) {
 	commit("g1", false, "v1")
 	commit("g2", true, "v2")
 
+	commit("g3", false, "v3")
+
 	hostPort := freePort(t)
 	app := s.app("built", &bohuxv1.Source{Kind: &bohuxv1.Source_Git{Git: &bohuxv1.GitSource{RepoUrl: repo, Ref: "v1"}}}, hostPort)
-	releases := bohuxv1connect.NewReleaseServiceClient(s.hc, s.base)
-	release := func(ref, key string) string {
-		t.Helper()
-		r, err := releases.CreateRelease(s.ctx, call(s.token, &bohuxv1.CreateReleaseRequest{AppId: app,
-			From: &bohuxv1.CreateReleaseRequest_GitRef{GitRef: ref}, IdempotencyKey: key}))
-		if err != nil {
-			t.Fatal(err)
-		}
-		id := r.Msg.GetRelease().GetMeta().GetId()
-		t.Cleanup(func() {
-			_ = exec.Command("sh", "-c", "docker images -q --filter label=io.bohux.release="+id+" | xargs -r docker rmi -f").Run()
-		})
-		return id
-	}
+	t.Cleanup(func() {
+		_ = exec.Command("sh", "-c", "docker images -q --filter label=io.bohux.app="+app+" | xargs -r docker rmi -f").Run()
+	})
 	served := fmt.Sprintf("http://127.0.0.1:%d/version", hostPort)
+	// The CLI, as a user runs it (rule 8: nothing here is more than public RPCs).
+	bohux := func(args ...string) (string, error) {
+		var out bytes.Buffer
+		env := map[string]string{"BOHUX_API_URL": s.base, "BOHUX_TOKEN": s.token, "BOHUX_PROJECT": "shop"}
+		err := runWith(s.ctx, args, &out, func(k string) string { return env[k] }, defaultDeps)
+		t.Logf("bohux %s\n%s", strings.Join(args, " "), out.String())
+		return out.String(), err
+	}
+	serving := func(want string) {
+		t.Helper()
+		if got, err := get(served); got != want {
+			t.Fatalf("serving %q (%v), want %q", got, err, want)
+		}
+	}
 
 	start := time.Now()
-	good := release("v1", "r1")
-	s.deploy(good, "b1", bohuxv1.DeploymentState_DEPLOYMENT_STATE_SUCCEEDED)
-	t.Logf("built and deployed from git in %v", time.Since(start).Round(time.Millisecond))
-	if got, err := get(served); got != "g1" {
-		t.Fatalf("serving %q (%v), want g1", got, err)
-	}
-	r, err := releases.GetRelease(s.ctx, call(s.token, &bohuxv1.GetReleaseRequest{Id: good}))
+	out, err := bohux("deploy", "built", "-e", "prod", "--ref", "v1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rel := r.Msg.GetRelease(); len(rel.GetSourceRef()) != 40 || !strings.HasPrefix(rel.GetArtifactDigest(), "sha256:") {
-		t.Errorf("built release = %v, want a commit and an image ID", rel)
+	t.Logf("built and deployed from git in %v", time.Since(start).Round(time.Millisecond))
+	serving("g1")
+	if !strings.Contains(out, "publishes host port") || !strings.Contains(out, "succeeded") {
+		t.Errorf("deploy output lacks the downtime note or the result:\n%s", out)
 	}
 
-	d := s.deploy(release("v2", "r2"), "b2", bohuxv1.DeploymentState_DEPLOYMENT_STATE_ROLLED_BACK)
-	t.Logf("broken build rolled back (%s)", d.GetFailure().GetReason())
-	if got, err := get(served); got != "g1" {
-		t.Fatalf("after rollback serving %q (%v), want g1", got, err)
+	if _, err := bohux("deploy", "built", "-e", "prod", "--ref", "v2"); err == nil ||
+		!strings.Contains(err.Error(), "rolled_back") {
+		t.Fatalf("deploying the broken build = %v, want it rolled back", err)
+	}
+	serving("g1")
+
+	if _, err := bohux("deploy", "built", "-e", "prod", "--ref", "v3"); err != nil {
+		t.Fatal(err)
+	}
+	serving("g3")
+	if _, err := bohux("rollback", "built", "-e", "prod", "--reason", "e2e"); err != nil {
+		t.Fatal(err)
+	}
+	serving("g1")
+
+	if _, err := bohux("scale", "built", "-e", "prod", "--replicas", "0"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { _, err := get(served); return err != nil }, "scaled to 0, the port to close")
+	if _, err := bohux("scale", "built", "-e", "prod", "--replicas", "1"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { got, _ := get(served); return got == "g1" }, "scaled to 1, g1 to serve again")
+}
+
+func waitFor(t *testing.T, ok func() bool, what string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Minute)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }
 

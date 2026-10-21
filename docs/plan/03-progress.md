@@ -38,18 +38,18 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S8 — CLI (⏳, next to start; split it first). S7d (OpenBao auto-unseal)
+- **Slice:** S8b — logs and exec (⏳, next to start). S7d (OpenBao auto-unseal)
   belongs with the install bundle in S9
-- **Exact next step:** split S8; start with the CLI's shape (config file, login, how
-  it finds the control plane) and `bohux deploy`.
+- **Exact next step:** WorkloadService.StreamLogs relayed over the agent stream
+  (control plane sends `LogRequest`, agent answers `LogChunk`s from the provider's
+  Logs verb).
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then split slice S8 (CLI) into
-> sub-slices and do the first on branch `claude/relaxed-rubin-76m7dl`, following
-> ADR-0006, api-contract.md, and CLAUDE.md rule 8 (the CLI is a client of the public
-> API, nothing more). Start Postgres, Docker, Temporal and OpenBao (tracker *Known
-> gaps*). Verify with build, vet, golangci-lint (also with the integration
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S8b (logs and exec) on
+> branch `claude/relaxed-rubin-76m7dl`, following ADR-0007, api-contract.md, and
+> CLAUDE.md rules 3, 8 and 10 (exec sessions are audited). Start Postgres, Docker,
+> Temporal and OpenBao (tracker *Known gaps*). Verify with build, vet, golangci-lint (also with the integration
 > tag), unit and integration tests. Tick boxes, update the tracker and the next
 > session prompt, commit, push, and give me the next prompt.
 
@@ -591,9 +591,32 @@ Split into sub-slices, one session each.
 #### S7d — OpenBao in the install bundle ⏳
 - [ ] Auto-unseal with a node-local key (ADR-0020 item 6), in the install bundle (S9)
 
-### S8 — CLI ⏳
-- [ ] `bohux deploy | logs | rollback | exec | scale`; host-port downtime warning
-- [ ] `bohux admin backup | restore`, restore tested in CI (ADR-0020)
+### S8 — CLI 🔄
+Split into sub-slices, one session each.
+
+#### S8a — deploy, rollback, scale ✅
+- [x] `internal/cli`, wired into `bohux deploy | rollback | scale`: slugs resolved
+      through Get*-by-slug (`-p` / `BOHUX_PROJECT`, `-e`), `BOHUX_API_URL` (h2c for
+      `http://`) and `BOHUX_TOKEN`; no config file. `deploy` creates a Release (`--ref`,
+      `--image`, or the App's source) and follows the Deployment over
+      `WatchDeployment`, exiting non-zero unless it succeeded; the host-port downtime
+      note is printed first (ADR-0020 item 5); `rollback`; `scale`. Fresh idempotency
+      key per invocation
+- [x] Unit tests (argument order, image refs, refusals before any call) and the CLI
+      driving `TestBuildEndToEnd`: deploy from Git, a broken build rolls back, deploy,
+      rollback, scale to 0 and back
+- [x] `docs/reference/config.md` CLI section
+
+#### S8b — logs and exec ⏳
+- [ ] WorkloadService.StreamLogs and Exec relayed over the agent stream (`LogRequest`
+      / `LogChunk`, `ExecOpen` / `ExecData` / `ExecOutput`; audited; values of secrets
+      never logged); agent side through the provider's Logs and Exec verbs
+- [ ] `bohux logs <app> -e <env> [-f]`, `bohux exec <app> -e <env> -- <cmd>`
+
+#### S8c — backup and restore ⏳
+- [ ] `bohux admin backup | restore` (Postgres dump, OpenBao snapshot, node CA;
+      encrypted with an operator key, never logged); restore tested in CI (ADR-0020
+      item 7)
 
 ### S9 — Exit: Bohux deploys Bohux ⏳
 - [ ] Bohux deploys itself and rolls itself back, end to end
@@ -710,6 +733,8 @@ Split into sub-slices, one session each.
 - **Next:** S7c3.
 - S7c3 done: Git → agent build → deploy → rollback end to end.
 - **Next:** S8, split first.
+- S8 split into S8a–S8c. S8a done: `bohux deploy | rollback | scale`, driven end to end.
+- **Next:** S8b.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by

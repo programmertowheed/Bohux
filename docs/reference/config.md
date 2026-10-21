@@ -97,3 +97,26 @@ BOHUX_DATABASE_URL='postgres://bohux_app:bohux-dev@localhost:5432/bohux_app?sslm
 | Environment | Used by | Meaning |
 |---|---|---|
 | `BOHUX_TEST_POSTGRES_URL` | `go test -tags=integration` | DSN of a role that can create roles and databases. Each test creates and drops its own. |
+
+## CLI: `bohux deploy | rollback | scale`
+
+The CLI is a client of the public API (CLAUDE.md rule 8). It has no config file in
+v0.1; it reads:
+
+| Environment | Default | Meaning |
+|---|---|---|
+| `BOHUX_API_URL` | `http://127.0.0.1:7400` | Control plane API. `http://` speaks cleartext HTTP/2 (h2c), as `bohux controlplane` serves; `https://` uses TLS. |
+| `BOHUX_TOKEN` | none, required | API token (`bxa_…`). Never put it in a flag: flags show up in process listings. |
+| `BOHUX_PROJECT` | none | Project slug, the default for `-p`. |
+
+Apps are named by slug: `bohux deploy api -p shop -e prod`.
+
+- `bohux deploy <app> -e <env> [-p <project>] [--ref <git ref> | --image <repo>@sha256:<digest>] [--reason <text>]`
+  creates a Release (built from Git, an image, or the App's own source) and deploys it,
+  printing each state until it ends. It exits non-zero unless the deploy succeeded.
+  When the App publishes a host port it first says the deploy has a short outage
+  (ADR-0020 item 5).
+- `bohux rollback <app> -e <env> [--to <release id>] [--reason <text>]` deploys the
+  last healthy Release before the current one, or the one named.
+- `bohux scale <app> -e <env> --replicas <n>` changes replicas; the node follows at once
+  (ADR-0027).
