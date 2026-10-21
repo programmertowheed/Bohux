@@ -38,26 +38,27 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S4b2 — AgentService.Register (⏳, next to start)
-- **Exact next step:** the agent TLS listener (`--agent-listen`) in the control plane,
-  serving `bohux.agent.v1.AgentService` with `Register` implemented.
+- **Slice:** S4c — agent process and stream (⏳, next to start)
+- **Exact next step:** `internal/agent` state directory (keys, cert, CA, node id) and
+  `bohux agent register`, then the `Connect` stream with `Hello` and the version check.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S4b2 (AgentService.Register)
-> on branch `claude/relaxed-rubin-76m7dl`, following ADR-0024 and ADR-0022. Add a TLS
-> listener to the control plane (`--agent-listen`, server cert from internal/pki,
-> client certs from the node CA verified if given) serving bohux.agent.v1.AgentService;
-> implement Register: authenticate the bxb_ bootstrap token tenant-first, single use,
-> unexpired; sign the CSR; create the node (slug from the token, sealing public key,
-> agent and protocol versions, providers, state online) and mark the token used, all
-> in one transaction with audit events; return node_id, client cert, CA cert, and the
-> assignment signing public key. Connect stays Unimplemented (S4c). Document the flag in
-> docs/reference/config.md. Test over real TLS on the local Postgres: success, reused
-> token, expired token, wrong kind, CSR signature mismatch, and the returned cert
-> verifying against the CA with the right URI SAN. Verify with build, vet,
-> golangci-lint (also with the integration tag) and tests. Tick boxes, update the
-> tracker and the next session prompt, commit, push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S4c (agent process and
+> stream) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0003, ADR-0020 items
+> 8-9, ADR-0024. Build internal/agent: a 0700 state directory holding the ECDSA key,
+> X25519 sealing key, client cert, pinned CA, node id, and signing public key;
+> `bohux agent register` (pins the CA by --ca-cert-sha256, refuses without Docker
+> live-restore, behind an interface so tests need no Docker); `bohux agent run` dialing
+> Connect over mTLS and sending Hello. On the control plane, implement Connect: require
+> a node-CA client cert, map it to the node (refuse revoked nodes), accept protocol N
+> and N-1 and agent versions of the same or previous minor, else send VersionRejected
+> and close; update last_seen_at and the node's online/offline state. Reconnect with
+> backoff in the agent. Test over real mTLS on the local Postgres (accepted, rejected
+> version, revoked node, no client cert). If the slice is too big, stop at a clean
+> point and split it in the tracker. Verify with build, vet, golangci-lint (also with
+> the integration tag) and tests. Tick boxes, update the tracker and the next session
+> prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -289,9 +290,13 @@ Split into sub-slices, one session each.
       `revoked`); `store.Tx.AuditOnly` for non-versioned records
 - [x] `bohux controlplane --data-dir` (`BOHUX_DATA_DIR`, default `/var/lib/bohux`)
 
-#### S4b2 — AgentService.Register ⏳
-- [ ] Agent TLS listener (`--agent-listen`); Register: single-use bootstrap token,
-      CSR → client cert, node row, audit, all in one transaction
+#### S4b2 — AgentService.Register ✅
+- [x] Agent TLS listener (`--agent-listen`, default `127.0.0.1:7443`, TLS 1.3, node-CA
+      server cert, client certs verified if given); `internal/agentapi.Register`:
+      single-use unexpired bootstrap token (tenant-first), CSR → client cert, node row
+      (state online, providers, sealing key), token marked used, audit events, one
+      transaction. Tested over real TLS: bad CSR leaves the token unspent; reuse,
+      expiry, wrong kind, slug conflict, short sealing key refused
 
 #### S4c — agent process and stream ⏳
 - [ ] `bohux agent`: register once, keep keys and cert on disk, dial `Connect` over
@@ -372,7 +377,8 @@ Split into sub-slices, one session each.
 - S2a done: ADR-0021 (goose on pgx).
 - S3e split into S3e1–S3e3, all done: Project, Environment, App services. **S3 done.**
 - Split S4 into S4a–S4e. S4a done: ADR-0024 proposed (O9).
-- S4b split into S4b1/S4b2. S4b1 done: `internal/pki`, NodeService, data dir.
+- S4b split into S4b1/S4b2, both done: `internal/pki`, NodeService, data dir, agent
+  TLS listener, Register.
 - S3d done: `internal/secrets` redaction, access-log interceptor, rule 3 test.
 - S3c3 done: bootstrap command, Identity/Tenant handlers, idempotency records, all
   tested over real ConnectRPC; end-to-end binary smoke test passed.

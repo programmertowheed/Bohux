@@ -30,12 +30,14 @@ commands:
 
 // Environment fallbacks for flags. See docs/reference/config.md.
 const (
-	envListenAddr  = "BOHUX_LISTEN_ADDR"
-	envDatabaseURL = "BOHUX_DATABASE_URL"
-	envDataDir     = "BOHUX_DATA_DIR"
+	envListenAddr      = "BOHUX_LISTEN_ADDR"
+	envAgentListenAddr = "BOHUX_AGENT_LISTEN_ADDR"
+	envDatabaseURL     = "BOHUX_DATABASE_URL"
+	envDataDir         = "BOHUX_DATA_DIR"
 
-	defaultListenAddr = "127.0.0.1:7400"
-	defaultDataDir    = "/var/lib/bohux"
+	defaultListenAddr      = "127.0.0.1:7400"
+	defaultAgentListenAddr = "127.0.0.1:7443"
+	defaultDataDir         = "/var/lib/bohux"
 )
 
 func main() {
@@ -88,6 +90,8 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 		fs := newFlagSet("controlplane")
 		listen := fs.String("listen", envOr(getenv, envListenAddr, defaultListenAddr),
 			"API listen address (env "+envListenAddr+")")
+		agentListen := fs.String("agent-listen", envOr(getenv, envAgentListenAddr, defaultAgentListenAddr),
+			"agent TLS listen address (env "+envAgentListenAddr+")")
 		dbURL := fs.String("database-url", getenv(envDatabaseURL),
 			"Postgres DSN (env "+envDatabaseURL+")")
 		dataDir := fs.String("data-dir", envOr(getenv, envDataDir, defaultDataDir),
@@ -98,7 +102,8 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 		if *dbURL == "" {
 			return fmt.Errorf("controlplane: --database-url or %s is required", envDatabaseURL)
 		}
-		cfg := controlplane.Config{ListenAddr: *listen, DatabaseURL: *dbURL, DataDir: *dataDir}
+		cfg := controlplane.Config{ListenAddr: *listen, AgentListenAddr: *agentListen,
+			DatabaseURL: *dbURL, DataDir: *dataDir}
 		if err := d.runControlPlane(ctx, cfg); err != nil {
 			return fmt.Errorf("controlplane: %w", err)
 		}

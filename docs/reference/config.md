@@ -8,6 +8,7 @@ Adding a setting means adding it here in the same commit.
 | Flag | Environment | Default | Meaning |
 |---|---|---|---|
 | `--listen` | `BOHUX_LISTEN_ADDR` | `127.0.0.1:7400` | TCP address for the API (ConnectRPC over h2c) and `GET /healthz`. |
+| `--agent-listen` | `BOHUX_AGENT_LISTEN_ADDR` | `127.0.0.1:7443` | TLS address agents connect to (`bohux.agent.v1`), with a certificate from the node CA (ADR-0024). Set it to an address remote nodes can reach. |
 | `--database-url` | `BOHUX_DATABASE_URL` | none, required | Postgres DSN. |
 | `--data-dir` | `BOHUX_DATA_DIR` | `/var/lib/bohux` | Holds `pki/`: the node CA and assignment signing key, created on first start, mode 0600 (ADR-0024). **Back it up with the database**; losing it means every node re-registers. |
 

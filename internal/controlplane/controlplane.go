@@ -11,9 +11,11 @@ import (
 	"net/http"
 	"time"
 
+	"connectrpc.com/connect"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
+	"github.com/bohumix/bohux/internal/agentapi"
 	"github.com/bohumix/bohux/internal/api"
 	"github.com/bohumix/bohux/internal/auth"
 	"github.com/bohumix/bohux/internal/pki"
@@ -24,6 +26,8 @@ import (
 type Config struct {
 	// ListenAddr is the TCP address the API listens on.
 	ListenAddr string
+	// AgentListenAddr is the TLS listener for agents (bohux.agent.v1, ADR-0024).
+	AgentListenAddr string
 	// DatabaseURL is the Postgres DSN. Its role must own the schema and must not bypass
 	// row-level security (ADR-0021, data-model.md).
 	DatabaseURL string
@@ -48,12 +52,18 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", cfg.ListenAddr, err)
 	}
-	return Serve(ctx, ln, cfg)
+	agentLn, err := net.Listen("tcp", cfg.AgentListenAddr)
+	if err != nil {
+		_ = ln.Close()
+		return fmt.Errorf("listen on %s: %w", cfg.AgentListenAddr, err)
+	}
+	return Serve(ctx, ln, agentLn, cfg)
 }
 
-// Serve is Run on an existing listener, which it closes.
-func Serve(ctx context.Context, ln net.Listener, cfg Config) error {
+// Serve is Run on existing listeners (the API's and the agents'), which it closes.
+func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 	defer func() { _ = ln.Close() }()
+	defer func() { _ = agentLn.Close() }()
 	authority, err := pki.LoadOrCreate(cfg.DataDir, nil)
 	if err != nil {
 		return fmt.Errorf("load node PKI: %w", err)
@@ -75,22 +85,43 @@ func Serve(ctx context.Context, ln net.Listener, cfg Config) error {
 		}).Mount), &http2.Server{}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	errc := make(chan error, 1)
-	go func() { errc <- srv.Serve(ln) }()
-	slog.InfoContext(ctx, "control plane listening", "addr", ln.Addr().String())
+	agents := &agentapi.Server{Store: st, PKI: authority}
+	agentTLS, err := agents.TLSConfig()
+	if err != nil {
+		return err
+	}
+	agentMux := http.NewServeMux()
+	agentMux.Handle(agents.Handler(connect.WithInterceptors(api.NewLoggingInterceptor())))
+	agentSrv := &http.Server{Handler: agentMux, TLSConfig: agentTLS, ReadHeaderTimeout: 10 * time.Second}
 
+	errc := make(chan error, 2)
+	go func() { errc <- srv.Serve(ln) }()
+	go func() { errc <- agentSrv.ServeTLS(agentLn, "", "") }()
+	slog.InfoContext(ctx, "control plane listening",
+		"addr", ln.Addr().String(), "agent_addr", agentLn.Addr().String())
+
+	// Wait for cancellation or for either server to fail, then stop both and collect
+	// both results. A server that stopped for any reason but Shutdown is a failure.
+	pending := 2
+	var serveErr error
 	select {
-	case err := <-errc:
-		return fmt.Errorf("serve: %w", err)
+	case serveErr = <-errc:
+		pending--
 	case <-ctx.Done():
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("shutdown: %w", err)
+	shutdownErr := errors.Join(srv.Shutdown(shutdownCtx), agentSrv.Shutdown(shutdownCtx))
+	for ; pending > 0; pending-- {
+		if err := <-errc; !errors.Is(err, http.ErrServerClosed) && serveErr == nil {
+			serveErr = err
+		}
 	}
-	if err := <-errc; !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("serve: %w", err)
+	if serveErr != nil {
+		return fmt.Errorf("serve: %w", serveErr)
+	}
+	if shutdownErr != nil {
+		return fmt.Errorf("shutdown: %w", shutdownErr)
 	}
 	slog.InfoContext(ctx, "control plane stopped")
 	return nil

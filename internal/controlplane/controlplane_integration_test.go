@@ -18,11 +18,15 @@ func TestServeMigratesServesAndShutsDown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	agentLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- Serve(ctx, ln, Config{DatabaseURL: storetest.NewAppDSN(t), DataDir: t.TempDir()})
+		done <- Serve(ctx, ln, agentLn, Config{DatabaseURL: storetest.NewAppDSN(t), DataDir: t.TempDir()})
 	}()
 
 	url := "http://" + ln.Addr().String() + "/healthz"
