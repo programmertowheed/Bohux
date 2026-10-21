@@ -8,6 +8,7 @@ package bohux.agent.v1;
 import "bohux/v1/app.proto";
 import "bohux/v1/common.proto";
 import "bohux/v1/node.proto";
+import "bohux/v1/usage.proto";
 import "bohux/v1/workload.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
@@ -162,6 +163,8 @@ message StatusReport {
   // Set when the node refuses new builds, e.g. disk pressure (ADR-0020 item 4).
   bool degraded = 3;
   bohux.v1.ErrorDetail degraded_detail = 4;
+  // The node's latest resource sample (ADR-0040); unset until the first one.
+  bohux.v1.NodeUsage usage = 5;
 }
 
 message WorkloadStatus {
@@ -175,6 +178,9 @@ message WorkloadStatus {
   // The ingress serves this workload's routes from its endpoints (ADR-0034). Always
   // false for a workload without routes.
   bool ingress_loaded = 6;
+  // The workload's latest resource sample (ADR-0040); unset if the provider reports
+  // none.
+  bohux.v1.Usage usage = 7;
 }
 
 enum WorkloadState {

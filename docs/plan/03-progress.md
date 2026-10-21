@@ -83,6 +83,7 @@ work is in right now*.
 | O25 | Accept or reject ADR-0038 (deploy notifications: project channels, URL in OpenBao, sent by activities after the terminal state; no email yet). Adds `notification.proto` | S13 |
 | O26 | Accept or reject ADR-0039 (web UI sign-in with an API token in `sessionStorage`, strict CSP, no cookie sessions until user accounts exist) | S15 |
 | O27 | Logs in the UI: keep the plain `<pre>` (no ANSI colors) or allow xterm.js, which needs `style-src 'unsafe-inline'` or nonces in the CSP (ADR-0013 vs ADR-0039) | S15 log view |
+| O28 | Accept or reject ADR-0040 (resource view: agents sample node and workloads every 30 s, carried in status reports, no history) | S16 |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -957,6 +958,19 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       runs every type's historical query
 - [ ] Next: release history per App, environment and App creation (mirroring `bohux
       env|app create`), routes and scale
+
+### S16 — Resource view (ADR-0040) ✅
+- [x] Proposed ADR-0040 (O28): agents sample the node (`/proc`, `statfs`) and, through
+      the optional `provider.UsageReader`, their workloads every 30 s off the reconcile
+      loop; samples ride in `StatusReport` (stale after 2 min); `Node.usage` and
+      `WorkloadService.GetAppUsage` read the stored report; no history (OTLP's job)
+- [x] Proto `usage.proto`, agent.proto and node/workload fields; Docker `Usage` (one
+      `docker stats`, limits from `docker inspect`, slots from the project name);
+      `agent.Sampler`; reports sum a workload's slots
+- [x] Tests: `/proc` parsing (fixture), report attachment, Docker against a real
+      daemon, the API reading a stored report (viewer-scoped); CLI `node list` and
+      `app show` columns; UI nodes page and App usage column
+- [ ] The self-deploy test checks the installed UI's CSP and the samples end to end
 
 ## Known gaps and notes
 - **CI has not run on this branch.** `ci.yml` triggers on pushes to `main` and on

@@ -6,13 +6,22 @@ import { AppService } from "../gen/bohux/v1/app_pb";
 import { DeploymentService, DeploymentState } from "../gen/bohux/v1/deployment_pb";
 import { Failed, Loading, Table } from "../components/Table";
 import { AppActions } from "../components/Actions";
-import { enumName, short, when } from "../format";
+import { WorkloadService } from "../gen/bohux/v1/workload_pb";
+import { bytes, enumName, short, when } from "../format";
 
 const stateColor: Partial<Record<DeploymentState, string>> = {
   [DeploymentState.SUCCEEDED]: "text-ok",
   [DeploymentState.FAILED]: "text-danger",
   [DeploymentState.ROLLED_BACK]: "text-danger",
 };
+
+// AppUsage is the App's latest resource sample (ADR-0040), refreshed every 30 s.
+function AppUsage({ appId }: { appId: string }) {
+  const q = useQuery(WorkloadService.method.getAppUsage, { appId }, { refetchInterval: 30000 });
+  const u = q.data?.usage;
+  if (!u) return <span className="text-muted">-</span>;
+  return <span>{`${u.cpuMillicores}m · ${bytes(u.memoryBytes)}`}</span>;
+}
 
 export function Environment() {
   const { project, env } = useParams({ from: "/p/$project/e/$env" });
@@ -34,11 +43,12 @@ export function Environment() {
       <div>
         <h2 className="mb-2 font-semibold">Apps</h2>
         <Table
-          head={["App", "Replicas", "Routes", "Source", ""]}
+          head={["App", "Replicas", "Usage", "Routes", "Source", ""]}
           empty="No apps yet. Create one with: bohux app create <slug> -e <env> --image …"
           rows={apps.data.apps.map((a) => [
             a.slug,
             String(a.runtime?.replicas ?? 0),
+            <AppUsage appId={a.meta?.id ?? ""} />,
             a.routes.map((r) => r.host).join(", "),
             a.source?.kind.case === "image"
               ? `${a.source.kind.value.repository}@${a.source.kind.value.digest.slice(0, 19)}…`

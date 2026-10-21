@@ -122,3 +122,35 @@ func TestRestartAfterFailedStartKeepsNetworks(t *testing.T) {
 		t.Errorf("networks = %q, want %s among them", nets, network)
 	}
 }
+
+// TestUsageDocker samples a running workload's memory and CPU from Docker, under the
+// ref the agent knows it by (ADR-0040).
+func TestUsageDocker(t *testing.T) {
+	if err := exec.Command("docker", "info").Run(); err != nil {
+		t.Skip("no Docker daemon: ", err)
+	}
+	ctx := context.Background()
+	suffix := fmt.Sprint(time.Now().UnixNano())
+	p, err := New(t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := provider.ResourceRef{Environment: "env-" + suffix, App: "app-" + suffix, AppSlug: "use", EnvironmentSlug: "test", Slot: "green"}
+	spec := provider.Spec{Ref: ref, Release: "r1", Image: sleeper(t, suffix), Hash: "h1",
+		Runtime: &bohuxv1.Runtime{Replicas: 2, Memory: "64Mi"}}
+	t.Cleanup(func() { _ = p.Destroy(ctx, ref) })
+	if _, err := p.Apply(ctx, provider.ApplyRequest{Spec: spec}); err != nil {
+		t.Fatal(err)
+	}
+	usage, err := p.Usage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, ok := usage[provider.ResourceRef{Environment: ref.Environment, App: ref.App, Slot: "green"}]
+	if !ok {
+		t.Fatalf("usage has no entry for the workload: %v", usage)
+	}
+	if u.MemoryBytes <= 0 || u.MemoryLimitBytes != 2*64<<20 {
+		t.Errorf("usage = %+v; want memory used and a limit of two 64Mi replicas", u)
+	}
+}

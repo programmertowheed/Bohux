@@ -336,10 +336,15 @@ func (r *resource) nodeList(ctx context.Context, args []string) error {
 		if n.GetLastSeenAt() != nil {
 			seen = n.GetLastSeenAt().AsTime().UTC().Format(time.RFC3339)
 		}
+		cpu, mem := "-", "-"
+		if u := n.GetUsage(); u != nil {
+			cpu = fmt.Sprintf("%.0f%% of %d", u.GetCpuBusy()*100, u.GetCpuCores())
+			mem = fmt.Sprintf("%s / %s", bytesHuman(u.GetMemoryTotalBytes()-u.GetMemoryAvailableBytes()), bytesHuman(u.GetMemoryTotalBytes()))
+		}
 		rows = append(rows, []string{n.GetSlug(), strings.ToLower(strings.TrimPrefix(n.GetState().String(), "NODE_STATE_")),
-			n.GetAgentVersion(), seen, n.GetMeta().GetId()})
+			n.GetAgentVersion(), seen, cpu, mem, n.GetMeta().GetId()})
 	}
-	return r.emit(resp, []string{"SLUG", "STATE", "AGENT", "LAST SEEN", "ID"}, rows)
+	return r.emit(resp, []string{"SLUG", "STATE", "AGENT", "LAST SEEN", "CPU", "MEMORY", "ID"}, rows)
 }
 
 // nodeToken prints a bootstrap token for `bohux agent register` on a new node. The
@@ -516,7 +521,18 @@ func (r *resource) appShow(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	return r.emit(&bohuxv1.GetAppResponse{App: a}, appHeader, [][]string{appRow(a)})
+	if *r.output == "json" {
+		return r.emit(&bohuxv1.GetAppResponse{App: a}, nil, nil)
+	}
+	// The latest resource sample, when the node has reported one (ADR-0040).
+	cpu, mem := "-", "-"
+	if u, err := r.workloads.GetAppUsage(ctx, call(r.token, &bohuxv1.GetAppUsageRequest{AppId: a.GetMeta().GetId()})); err == nil &&
+		u.Msg.GetUsage() != nil {
+		cpu = fmt.Sprintf("%dm", u.Msg.GetUsage().GetCpuMillicores())
+		mem = bytesHuman(u.Msg.GetUsage().GetMemoryBytes())
+	}
+	return r.emit(&bohuxv1.GetAppResponse{App: a}, append(append([]string{}, appHeader...), "CPU", "MEMORY"),
+		[][]string{append(appRow(a), cpu, mem)})
 }
 
 // repeated is a flag that may be given more than once.
@@ -964,4 +980,17 @@ func shortID(id string) string {
 		return id[len(id)-8:]
 	}
 	return id
+}
+
+// bytesHuman prints a byte count as KiB, MiB, or GiB.
+func bytesHuman(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.1fGiB", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.0fMiB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.0fKiB", float64(n)/(1<<10))
+	}
+	return fmt.Sprintf("%dB", n)
 }

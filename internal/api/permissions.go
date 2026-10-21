@@ -65,8 +65,9 @@ var permissions = map[string]Permission{
 	"/bohux.v1.DeploymentService/Rollback":         deployer,
 	"/bohux.v1.DeploymentService/CancelDeployment": deployer,
 
-	"/bohux.v1.WorkloadService/StreamLogs": viewer,
-	"/bohux.v1.WorkloadService/Exec":       deployer,
+	"/bohux.v1.WorkloadService/StreamLogs":  viewer,
+	"/bohux.v1.WorkloadService/GetAppUsage": viewer,
+	"/bohux.v1.WorkloadService/Exec":        deployer,
 
 	"/bohux.v1.NodeService/CreateBootstrapToken": tenantOwner,
 	"/bohux.v1.NodeService/GetNode":              tenantViewer,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/jackc/pgx/v5"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -160,4 +161,50 @@ func (ws *workloadService) Exec(ctx context.Context, stream *connect.BidiStream[
 		}
 	}
 	return errNodeOffline
+}
+
+// GetAppUsage returns the App's latest resource sample from its node's stored report
+// (ADR-0040). It needs no connection to the node: an offline node's last sample ages
+// out on the agent side and is simply absent here.
+func (ws *workloadService) GetAppUsage(ctx context.Context, req *connect.Request[bohuxv1.GetAppUsageRequest]) (*connect.Response[bohuxv1.GetAppUsageResponse], error) {
+	p, _ := auth.FromContext(ctx)
+	app, err := parseID("app_id", req.Msg.GetAppId())
+	if err != nil {
+		return nil, err
+	}
+	resp := &bohuxv1.GetAppUsageResponse{}
+	err = ws.s.Store.InTenant(ctx, p.Tenant, func(tx *store.Tx) error {
+		project, env, err := appProject(ctx, tx, app)
+		if err != nil {
+			return err
+		}
+		if err := authorizeProject(ctx, project, auth.RoleViewer); err != nil {
+			return err
+		}
+		var raw []byte
+		err = tx.QueryRow(ctx, `SELECT n.report FROM environments_heads h
+			JOIN environments_revisions r ON r.id = h.revision_id
+			JOIN nodes_heads n ON n.id = r.node_id
+			WHERE h.id = $1`, env).Scan(&raw)
+		if errors.Is(err, pgx.ErrNoRows) || raw == nil {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read node report: %w", err)
+		}
+		report := &agentv1.StatusReport{}
+		if err := loadJSON.Unmarshal(raw, report); err != nil {
+			return fmt.Errorf("decode node report: %w", err)
+		}
+		for _, w := range report.GetWorkloads() {
+			if w.GetAppId() == app.String() {
+				resp.Usage, resp.ReadyReplicas = w.GetUsage(), w.GetReadyReplicas()
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, toConnect(ctx, err)
+	}
+	return connect.NewResponse(resp), nil
 }

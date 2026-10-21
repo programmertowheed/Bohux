@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	agentv1 "github.com/bohumix/bohux/gen/bohux/agent/v1"
 	"time"
 
 	"connectrpc.com/connect"
@@ -231,7 +232,7 @@ func (ns *nodeService) RevokeNode(ctx context.Context, req *connect.Request[bohu
 }
 
 const nodeSelect = `SELECT ` + metaColumns + `, h.slug, h.last_seen_at, r.agent_version,
-		r.protocol_version, r.providers, r.state, r.state_detail, r.revoked_at
+		r.protocol_version, r.providers, r.state, r.state_detail, r.revoked_at, h.report
 	FROM nodes_heads h JOIN nodes_revisions r ON r.id = h.revision_id`
 
 func getNode(ctx context.Context, tx *store.Tx, id uuid.UUID, slug string) (*bohuxv1.Node, error) {
@@ -263,9 +264,10 @@ func scanNode(row pgx.Row) (*bohuxv1.Node, error) {
 		lastSeen, revokedAt *time.Time
 		protocol            int32
 		providers, detail   []byte
+		report              []byte
 	)
 	if err := row.Scan(append(m.dest(), &slug, &lastSeen, &version, &protocol, &providers, &st,
-		&detail, &revokedAt)...); err != nil {
+		&detail, &revokedAt, &report)...); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
 		}
@@ -291,6 +293,14 @@ func scanNode(row pgx.Row) (*bohuxv1.Node, error) {
 		if err := loadJSON.Unmarshal(detail, n.StateDetail); err != nil {
 			return nil, fmt.Errorf("decode node state detail: %w", err)
 		}
+	}
+	if report != nil {
+		// The node's latest resource sample travels in its stored report (ADR-0040).
+		r := &agentv1.StatusReport{}
+		if err := loadJSON.Unmarshal(report, r); err != nil {
+			return nil, fmt.Errorf("decode node report: %w", err)
+		}
+		n.Usage = r.GetUsage()
 	}
 	return n, nil
 }

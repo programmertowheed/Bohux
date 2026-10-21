@@ -169,7 +169,8 @@ func runAgent(ctx context.Context, cfg agentConfig) error {
 		}
 		disk.Paths = append(disk.Paths, root)
 	}
-	rec := &agent.Reconciler{State: st, Cache: cache, Provider: p}
+	sampler := &agent.Sampler{Paths: disk.Paths, Provider: p}
+	rec := &agent.Reconciler{State: st, Cache: cache, Provider: p, Usage: sampler}
 	if cfg.IngressSocket != "" {
 		rec.Ingress = &ingress.Caddy{AdminSocket: cfg.IngressSocket, ACMEEmail: cfg.ACMEEmail,
 			Dir: filepath.Join(stateDir, "ingress")}
@@ -183,6 +184,7 @@ func runAgent(ctx context.Context, cfg agentConfig) error {
 		rec.Run,
 		func(ctx context.Context) error { return agent.Run(ctx, opts) },
 		disk.Run,
+		sampler.Run,
 	}
 	if images, ok := p.(provider.ImageStore); ok {
 		tasks = append(tasks, (&agent.Retention{Images: images, Cache: cache}).Run)

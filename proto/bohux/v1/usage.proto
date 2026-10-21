@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package bohux.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
+
+// Current resource use, sampled by the node's agent (ADR-0040). Latest values only:
+// history belongs to the user's OTLP backend.
+
+// One workload's use, summed over its replicas.
+message Usage {
+  int64 cpu_millicores = 1;
+  int64 memory_bytes = 2;
+  // Sum of the replicas' memory limits; 0 when unlimited.
+  int64 memory_limit_bytes = 3;
+  google.protobuf.Timestamp sampled_at = 4;
+}
+
+// A node's use.
+message NodeUsage {
+  int32 cpu_cores = 1;
+  // Share of all cores busy since the previous sample, 0 to 1.
+  double cpu_busy = 2;
+  int64 memory_total_bytes = 3;
+  int64 memory_available_bytes = 4;
+  repeated DiskUsage disks = 5;
+  google.protobuf.Timestamp sampled_at = 6;
+}
+
+message DiskUsage {
+  // A path on the filesystem, e.g. the agent's state directory or Docker's data root.
+  string path = 1;
+  int64 total_bytes = 2;
+  int64 free_bytes = 3;
+}

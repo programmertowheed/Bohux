@@ -106,3 +106,11 @@ func TestRunRefusesBeforeCalling(t *testing.T) {
 		}
 	}
 }
+
+func TestBytesHuman(t *testing.T) {
+	for n, want := range map[int64]string{512: "512B", 64 << 20: "64MiB", 3 << 29: "1.5GiB", 2048: "2KiB"} {
+		if got := bytesHuman(n); got != want {
+			t.Errorf("bytesHuman(%d) = %q, want %q", n, got, want)
+		}
+	}
+}

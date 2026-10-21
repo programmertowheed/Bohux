@@ -15,3 +15,12 @@ export function when(ts: Timestamp | undefined): string {
 export function short(id: string | undefined): string {
   return id ? id.slice(-8) : "";
 }
+
+// bytes prints a byte count as KiB, MiB, or GiB, like the CLI.
+export function bytes(n: bigint | number): string {
+  const v = Number(n);
+  if (v >= 2 ** 30) return `${(v / 2 ** 30).toFixed(1)}GiB`;
+  if (v >= 2 ** 20) return `${Math.round(v / 2 ** 20)}MiB`;
+  if (v >= 2 ** 10) return `${Math.round(v / 2 ** 10)}KiB`;
+  return `${v}B`;
+}

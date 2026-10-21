@@ -125,4 +125,18 @@ grep -q '^hello again$' "$poll" || die "the new release was never served"
 [[ "$failed" == 0 ]] || die "$failed of $((failed + served)) requests failed during the deploy"
 log "zero downtime: $served requests, none failed"
 
+# --- The UI, and resource samples from the agent (ADR-0039, ADR-0040) ----------------
+log "checking the web UI and the agent's resource samples"
+curl -fsSI http://127.0.0.1:7400/ui/ | grep -qi "^content-security-policy: default-src 'self'" ||
+  die "the UI is not served with its Content-Security-Policy"
+for _ in $(seq 30); do
+  mem="$("$bin" node list -o json | jq -r '.nodes[0].usage.memory_total_bytes // empty')"
+  app_mem="$(BOHUX_PROJECT=demo "$bin" app show hello -e prod | awk 'NR == 2 {print $NF}')"
+  [[ -n "$mem" && -n "$app_mem" && "$app_mem" != "-" ]] && break
+  sleep 5
+done
+[[ -n "$mem" ]] || die "the node reported no resource sample"
+[[ -n "$app_mem" && "$app_mem" != "-" ]] || die "hello reported no resource sample"
+log "node memory $mem bytes; hello uses $app_mem"
+
 log "PASS: Bohux deployed itself, rolled itself back, recovered from a broken version of itself, backed itself up, and served an App on a route through a deploy without downtime"

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	agentv1 "github.com/bohumix/bohux/gen/bohux/agent/v1"
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
@@ -52,6 +53,9 @@ type Reconciler struct {
 	// Ingress is the node's ingress (ADR-0034); nil when the node has none, and then
 	// workloads with routes report INGRESS_FAILED.
 	Ingress Ingress
+	// Usage supplies the latest resource sample for reports (ADR-0040); nil reports
+	// none.
+	Usage UsageSource
 
 	// endpoints remembers each routed port's last reported endpoint, so a replica
 	// restarting does not drop its host from the ingress for a pass.
@@ -60,6 +64,11 @@ type Reconciler struct {
 	mu      sync.Mutex
 	latest  *agentv1.StatusReport
 	updated chan struct{}
+}
+
+// UsageSource is the latest resource sample; Sampler implements it.
+type UsageSource interface {
+	Latest() (*bohuxv1.NodeUsage, map[provider.ResourceRef]provider.Usage, time.Time)
 }
 
 // Ingress serves hosts from endpoints; ingress.Caddy implements it.
@@ -221,6 +230,7 @@ func (r *Reconciler) Once(ctx context.Context) *agentv1.StatusReport {
 			r.destroy(ctx, ref, applied)
 		}
 	}
+	r.attachUsage(report)
 	return report
 }
 
@@ -280,6 +290,33 @@ func (r *Reconciler) serve(ctx context.Context, routed []routedWorkload, slots m
 		if rw.cut != nil {
 			r.finish(ctx, rw.cut, slots, applied)
 		}
+	}
+}
+
+// attachUsage adds the latest sample to the report: the node's, and each workload's
+// summed over its slots (ADR-0040, ADR-0035).
+func (r *Reconciler) attachUsage(report *agentv1.StatusReport) {
+	if r.Usage == nil {
+		return
+	}
+	node, workloads, at := r.Usage.Latest()
+	if node == nil {
+		return
+	}
+	report.Usage = node
+	byApp := map[string]*bohuxv1.Usage{}
+	for ref, u := range workloads {
+		sum := byApp[ref.App]
+		if sum == nil {
+			sum = &bohuxv1.Usage{SampledAt: timestamppb.New(at)}
+			byApp[ref.App] = sum
+		}
+		sum.CpuMillicores += u.CPUMillicores
+		sum.MemoryBytes += u.MemoryBytes
+		sum.MemoryLimitBytes += u.MemoryLimitBytes
+	}
+	for _, ws := range report.GetWorkloads() {
+		ws.Usage = byApp[ws.GetAppId()]
 	}
 }
 

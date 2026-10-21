@@ -3,6 +3,7 @@ syntax = "proto3";
 package bohux.v1;
 
 import "bohux/v1/options.proto";
+import "bohux/v1/usage.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -12,6 +13,10 @@ option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
 // (ADR-0007). Exec is bidirectional, so browsers cannot use it; the CLI can. That is
 // allowed: rule 8 forbids the UI having more than the CLI, not less.
 service WorkloadService {
+  // The App's latest resource sample, from its node's agent (ADR-0040).
+  rpc GetAppUsage(GetAppUsageRequest) returns (GetAppUsageResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
   rpc StreamLogs(StreamLogsRequest) returns (stream StreamLogsResponse) {
     option (bohux.v1.tool) = TOOL_POLICY_HIDDEN;
   }
@@ -83,4 +88,15 @@ message ExecResponse {
 // Last message of a session.
 message ExecExit {
   int32 exit_code = 1;
+}
+
+message GetAppUsageRequest {
+  string app_id = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message GetAppUsageResponse {
+  // Unset when the node has reported no sample for the App (offline, or a provider
+  // without usage).
+  Usage usage = 1;
+  int32 ready_replicas = 2;
 }
