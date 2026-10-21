@@ -145,6 +145,26 @@ func TestAuthenticateAPIToken(t *testing.T) {
 		})
 	}
 
+	t.Run("tenant-wide token has no project", func(t *testing.T) {
+		var tw string
+		err := s.InTenant(ctx, tenantA, func(tx *store.Tx) error {
+			var err error
+			tw, _, _, err = CreateAPIToken(ctx, tx, uuid.Nil, RoleOwner, "admin", nil,
+				audit("bohux.v1.IdentityService/CreateApiToken", "bohux.v1.ApiToken"))
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := a.AuthenticateAPIToken(ctx, tw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !p.TenantWide() || p.Role != RoleOwner || p.Tenant != tenantA {
+			t.Errorf("got %+v, want a tenant-wide owner in tenant A", p)
+		}
+	})
+
 	t.Run("records last use", func(t *testing.T) {
 		var used *time.Time
 		err := s.InTenant(ctx, tenantA, func(tx *store.Tx) error {

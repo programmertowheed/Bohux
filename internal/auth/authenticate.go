@@ -41,7 +41,7 @@ func (a *Authenticator) AuthenticateAPIToken(ctx context.Context, raw string) (P
 	err = a.Store.InTenant(ctx, tok.Tenant, func(tx *store.Tx) error {
 		var (
 			hash      []byte
-			project   uuid.UUID
+			project   *uuid.UUID
 			role      string
 			expiresAt *time.Time
 			revokedAt *time.Time
@@ -70,9 +70,9 @@ func (a *Authenticator) AuthenticateAPIToken(ctx context.Context, raw string) (P
 				return fmt.Errorf("record api token use: %w", err)
 			}
 		}
-		p = Principal{
-			ID: tok.ID, Kind: store.ActorAPIToken, Tenant: tok.Tenant,
-			ProjectID: project, Role: ParseRole(role),
+		p = Principal{ID: tok.ID, Kind: store.ActorAPIToken, Tenant: tok.Tenant, Role: ParseRole(role)}
+		if project != nil {
+			p.ProjectID = *project
 		}
 		return nil
 	})
@@ -86,10 +86,15 @@ func (a *Authenticator) AuthenticateAPIToken(ctx context.Context, raw string) (P
 }
 
 // CreateAPIToken creates an API token in tx and returns the credential to show once.
-// expiresAt may be nil for no expiry.
+// A nil project makes it tenant-wide (ADR-0023); expiresAt may be nil for no expiry.
+// The caller has already checked that the scope and role do not exceed its own.
 func CreateAPIToken(ctx context.Context, tx *store.Tx, project uuid.UUID, role Role, name string, expiresAt *time.Time, a store.Audit) (raw string, id, rev uuid.UUID, err error) {
 	if role == RoleNone {
 		return "", uuid.Nil, uuid.Nil, errors.New("create api token: role is required")
+	}
+	var projectCol any
+	if project != uuid.Nil {
+		projectCol = project
 	}
 	if id, err = store.NewID(); err != nil {
 		return "", uuid.Nil, uuid.Nil, err
@@ -100,7 +105,7 @@ func CreateAPIToken(ctx context.Context, tx *store.Tx, project uuid.UUID, role R
 	}
 	rev, err = tx.CreateWithID(ctx, "api_tokens", id,
 		[]store.Col{
-			{Name: "project_id", Value: project}, {Name: "role", Value: role.String()},
+			{Name: "project_id", Value: projectCol}, {Name: "role", Value: role.String()},
 			{Name: "token_hash", Value: hash}, {Name: "expires_at", Value: expiresAt},
 		},
 		[]store.Col{{Name: "name", Value: name}}, a)

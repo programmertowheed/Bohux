@@ -32,11 +32,9 @@ message Principal {
 message ApiToken {
   ResourceMeta meta = 1;
   string name = 2 [(google.api.field_behavior) = REQUIRED];
-  // The token's role scope: one project, one role.
-  string project_id = 3 [
-    (google.api.field_behavior) = REQUIRED,
-    (google.api.field_behavior) = IMMUTABLE
-  ];
+  // The token's scope. Empty means tenant-wide: the role applies to every project and
+  // to tenant-level RPCs (ADR-0023).
+  string project_id = 3 [(google.api.field_behavior) = IMMUTABLE];
   Role role = 4 [
     (google.api.field_behavior) = REQUIRED,
     (google.api.field_behavior) = IMMUTABLE
@@ -62,7 +60,9 @@ message WhoAmIResponse {
 
 message CreateApiTokenRequest {
   string name = 1 [(google.api.field_behavior) = REQUIRED];
-  string project_id = 2 [(google.api.field_behavior) = REQUIRED];
+  // Empty means tenant-wide (ADR-0023). Must be within the caller's own scope, with a
+  // role no higher than the caller's.
+  string project_id = 2;
   Role role = 3 [(google.api.field_behavior) = REQUIRED];
   google.protobuf.Timestamp expires_at = 4;
   string idempotency_key = 5 [(google.api.field_behavior) = REQUIRED];
