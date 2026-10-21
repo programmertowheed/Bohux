@@ -42,8 +42,8 @@ work is in right now*.
   (webhooks, channels, tokens, terminal not in the UI); S16 done
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** the UI's missing screens (webhooks, notification channels) so it
-  matches the CLI, then the next v0.2 item. Buildpacks/Nixpacks needs an owner choice
+- **Exact next step:** finish checking the pull-secret and deploy-key fields in Chromium
+  on an upgraded install, then the next v0.2 item. Buildpacks/Nixpacks needs an owner choice
   (O32); team invites need user accounts (identity model): ask the owner first.
 
 ## Next session prompt
@@ -90,6 +90,7 @@ work is in right now*.
 | O30 | Accept or reject ADR-0041 (registry credentials and Git deploy keys are environment secrets the App names; sealed apart from its env vars; on the node only for the one command). Adds `App.image_pull_secret`, migration 00021 | S17 |
 | O31 | Git host keys for deploy-key fetches: trusted on first use per node and pinned in `<state>/builds/known_hosts` (now). Alternative: a known_hosts secret per environment, refusing unknown hosts | S17 |
 | O32 | Buildpacks or Nixpacks (v0.2 "auto-detect builds"): which builder, and is the extra builder image on the node acceptable (ADR-0011 item 7 lists Dockerfile only) | next v0.2 item |
+| O33 | Accept or reject ADR-0042 (refines ADR-0031: a release cancels its fallback only when healthy while the control plane accepts the agent; found when a new control plane refused its own agent) | S15 check |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -969,10 +970,14 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 - [x] App page: releases (state, source, pruned images), the App's deployments, the
       environment's secrets (keys only; which the App uses) with a set-secret form
       (password field; the value is never shown back). Checked in Chromium
-- [ ] Not in the UI yet: webhooks, notification channels, tokens (CLI has the first
-      two); the web terminal needs bidirectional streaming, which Connect over
-      HTTP/1.1 in a browser does not have (a WebSocket endpoint would be a UI-only path:
-      owner decision under rule 8, O29)
+- [x] Webhooks on a Git App's page and notification channels on the project page:
+      list, create (the secret shown once, as the CLI prints it once; a channel's URL
+      sent once and never shown back), remove with a confirmation. Checked in
+      Chromium against the live install
+- [ ] Not in the UI yet: tokens (the CLI has `bohux token` already); the web terminal
+      needs bidirectional streaming, which Connect over HTTP/1.1 in a browser does not
+      have (a WebSocket endpoint would be a UI-only path: owner decision under rule 8,
+      O29)
 
 ### S16 — Resource view (ADR-0040) ✅
 - [x] Proposed ADR-0040 (O28): agents sample the node (`/proc`, `statfs`) and, through
@@ -1111,7 +1116,13 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   against a real authenticated registry; CLI, UI, docs. Full integration suite green.
 - S17 done: Git deploy keys (sealed in the build request, throwaway key file, buildx
   `--ssh`). Host key policy raised as O31; Buildpacks/Nixpacks choice as O32.
-- **Next:** UI screens for webhooks and notification channels.
+- S15: webhooks and notification channel screens, checked in Chromium.
+- Upgrading the test install's control plane to check the UI found a gap: an image
+  stamped as a release refused the sandbox's non-release agent; the release was
+  healthy locally, so the agent never fell back and the rollback could not reach it.
+  Fixed (ADR-0042 proposed, O33): healthy counts only while the control plane accepts
+  the agent. Verified on the install: the new agent fell back on its own.
+- **Next:** see Current focus.
 
 ### 2026-10-21 (auto run, S9e–S9f) — branch `claude/relaxed-rubin-76m7dl`
 - S9e done: `scripts/selfdeploy-test.sh` and the CI `selfdeploy` job; passed here. The

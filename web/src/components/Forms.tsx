@@ -8,14 +8,14 @@ import { AppService, type App } from "../gen/bohux/v1/app_pb";
 // The forms below mirror `bohux env create`, `bohux app create`, `bohux scale`, and
 // `bohux route add|remove` (rule 8): same RPCs, same checks on the server.
 
-function key(): string {
+export function key(): string {
   const b = crypto.getRandomValues(new Uint8Array(16));
   return "web-" + Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 }
 
-const input = "rounded border border-border bg-background px-2 py-1 text-sm";
+export const input = "rounded border border-border bg-background px-2 py-1 text-sm";
 
-function Field({ id, label, children }: { id: string; label: string; children: ReactNode }) {
+export function Field({ id, label, children }: { id: string; label: string; children: ReactNode }) {
   return (
     <label htmlFor={id} className="flex flex-col gap-1 text-sm">
       <span className="text-muted">{label}</span>
@@ -24,7 +24,7 @@ function Field({ id, label, children }: { id: string; label: string; children: R
   );
 }
 
-function Toggle({ label, children }: { label: string; children: (close: () => void) => ReactNode }) {
+export function Toggle({ label, children }: { label: string; children: (close: () => void) => ReactNode }) {
   const [open, setOpen] = useState(false);
   if (!open) return <button className="text-sm text-accent" onClick={() => setOpen(true)}>{label}</button>;
   return (

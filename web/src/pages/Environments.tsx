@@ -5,6 +5,7 @@ import { EnvironmentService } from "../gen/bohux/v1/environment_pb";
 import { Failed, Loading, Table } from "../components/Table";
 import { short } from "../format";
 import { NewEnvironment } from "../components/Forms";
+import { Channels } from "../components/Hooks";
 
 export function Environments() {
   const { project } = useParams({ from: "/p/$project" });
@@ -31,6 +32,7 @@ export function Environments() {
         ])}
       />
       <div className="mt-4"><NewEnvironment projectId={projectId} /></div>
+      <div className="mt-8"><Channels projectId={projectId} /></div>
     </section>
   );
 }

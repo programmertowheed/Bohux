@@ -10,14 +10,16 @@ import { DeploymentService, DeploymentState } from "../gen/bohux/v1/deployment_p
 import { SecretService } from "../gen/bohux/v1/secret_pb";
 import { Failed, Loading, Table } from "../components/Table";
 import { enumName, short, when } from "../format";
+import { Webhooks } from "../components/Hooks";
 
 function key(): string {
   const b = crypto.getRandomValues(new Uint8Array(16));
   return "web-" + Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 }
 
-// AppPage is one App: its releases, its deployments, and the environment's secrets
-// it uses, like `bohux app show` plus the release and secret commands.
+// AppPage is one App: its releases, its deployments, its Git push webhooks, and the
+// environment's secrets it uses, like `bohux app show` plus the release, webhook, and
+// secret commands.
 export function AppPage() {
   const { project, env, app } = useParams({ from: "/p/$project/e/$env/a/$app" });
   const p = useQuery(ProjectService.method.getProject, { lookup: { case: "slug", value: project } });
@@ -69,6 +71,7 @@ export function AppPage() {
           ])}
         />
       </div>
+      {a.data.app.source?.kind.case === "git" && <Webhooks appId={appId} />}
       <Secrets environmentId={envId} used={used} />
     </section>
   );
