@@ -24,8 +24,17 @@ type Server struct {
 	PKI *pki.Authority
 	// Deploys starts and cancels deploy workflows (ADR-0026). Nil refuses deploys.
 	Deploys Deployer
+	// Agents writes node assignments outside a deploy (ScaleApp, ADR-0027). Nil means
+	// ScaleApp changes only the App, and the next deploy carries the new replicas.
+	Agents Scaler
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
+}
+
+// Scaler changes an App's replicas on its node; agentapi.Server implements it.
+type Scaler interface {
+	ScaleAppTx(ctx context.Context, tx *store.Tx, node, app uuid.UUID, replicas int32, actor store.Actor) (bool, error)
+	Wake(node uuid.UUID)
 }
 
 // Deployer starts and cancels deploy runs; deploy.Starter implements it.

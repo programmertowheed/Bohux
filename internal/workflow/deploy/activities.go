@@ -329,8 +329,8 @@ func appNode(ctx context.Context, tx *store.Tx, app uuid.UUID) (uuid.UUID, error
 	return *node, nil
 }
 
-// buildWorkload reads the Release, the App revision it captured, and the environment's
-// provider, and returns the workload to assign.
+// buildWorkload reads the Release, the App revision it captured, the App's current
+// replicas, and the environment's provider, and returns the workload to assign.
 func buildWorkload(ctx context.Context, tx *store.Tx, app uuid.UUID, in AssignInput) (*agentv1.Workload, error) {
 	release, err := uuid.Parse(in.ReleaseID)
 	if err != nil {
@@ -341,18 +341,19 @@ func buildWorkload(ctx context.Context, tx *store.Tx, app uuid.UUID, in AssignIn
 		provider, digest, state string
 		sourceRef               string
 		available               bool
-		rt, secs                []byte
+		rt, secs, currentRT     []byte
 	)
 	err = tx.QueryRow(ctx, `SELECT a.environment_id, er.provider, r.artifact_digest, r.state,
-		r.artifact_available, r.source_ref, ar.runtime, ar.secrets
+		r.artifact_available, r.source_ref, ar.runtime, ar.secrets, cur.runtime
 		FROM releases_heads h
 		JOIN releases_revisions r ON r.id = h.revision_id
 		JOIN apps_revisions ar ON ar.id = h.config_revision_id
 		JOIN apps_heads a ON a.id = h.app_id
+		JOIN apps_revisions cur ON cur.id = a.revision_id
 		JOIN environments_heads e ON e.id = a.environment_id
 		JOIN environments_revisions er ON er.id = e.revision_id
 		WHERE h.id = $1 AND h.app_id = $2 AND NOT h.deleted`, release, app).Scan(
-		&env, &provider, &digest, &state, &available, &sourceRef, &rt, &secs)
+		&env, &provider, &digest, &state, &available, &sourceRef, &rt, &secs, &currentRT)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, invalid("release does not exist for this app")
 	}
@@ -362,10 +363,15 @@ func buildWorkload(ctx context.Context, tx *store.Tx, app uuid.UUID, in AssignIn
 	if state != "ready" || !available {
 		return nil, invalid("release is not ready or its artifact is gone")
 	}
-	runtime := &bohuxv1.Runtime{}
+	runtime, current := &bohuxv1.Runtime{}, &bohuxv1.Runtime{}
 	if err := loadJSON.Unmarshal(rt, runtime); err != nil {
 		return nil, fmt.Errorf("decode app runtime: %w", err)
 	}
+	if err := loadJSON.Unmarshal(currentRT, current); err != nil {
+		return nil, fmt.Errorf("decode current app runtime: %w", err)
+	}
+	// Replicas are operational, not part of the Release (ADR-0027).
+	runtime.Replicas = current.GetReplicas()
 	secrets, err := decodeSecretRefs(secs)
 	if err != nil {
 		return nil, err

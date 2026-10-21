@@ -292,6 +292,32 @@ func TestAssignRelease(t *testing.T) {
 		t.Errorf("repeat removal wrote generation %d", again.Generation)
 	}
 
+	t.Run("replicas come from the app's current revision", func(t *testing.T) {
+		// Scale the App after the Release captured replicas 2 (ADR-0027).
+		if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+			var rev uuid.UUID
+			var rt []byte
+			if err := tx.QueryRow(ctx, `SELECT h.revision_id, r.runtime FROM apps_heads h
+				JOIN apps_revisions r ON r.id = h.revision_id WHERE h.id = $1`, app).Scan(&rev, &rt); err != nil {
+				return err
+			}
+			var src, secs []byte
+			if err := tx.QueryRow(ctx, `SELECT source, secrets FROM apps_revisions WHERE id = $1`, rev).Scan(&src, &secs); err != nil {
+				return err
+			}
+			scaled := strings.Replace(string(rt), `"replicas": 2`, `"replicas": 5`, 1)
+			_, err := tx.Update(ctx, "apps", app, rev, []store.Col{{Name: "source", Value: src},
+				{Name: "runtime", Value: scaled}, {Name: "secrets", Value: secs}},
+				store.Audit{Actor: store.Actor{ID: store.SystemActorID, Kind: store.ActorSystem}, Action: "test", ResourceType: "bohux.v1.App"})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if got := assign(release.String()); got.Replicas != 5 {
+			t.Errorf("replicas = %d, want the current 5, not the release's 2", got.Replicas)
+		}
+	})
+
 	t.Run("refusals are non-retryable", func(t *testing.T) {
 		for name, rel := range map[string]string{
 			"building":      fixture.Release(t, h.st, h.tenant, app, "building", false).String(),

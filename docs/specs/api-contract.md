@@ -88,7 +88,8 @@ Notes:
 - **Rollback** = `CreateDeployment` of an older Release with `rollback_of` set.
   `DeploymentService.Rollback` is a convenience that picks the last healthy Release
   (ADR-0010). There is no other rollback path.
-- **ScaleApp** writes a new App revision and a new assignment; no new Release.
+- **ScaleApp** writes a new App revision and a new assignment, in one transaction; no
+  new Release. Deploys and rollbacks keep the current replicas (ADR-0027).
 - **Exec is bidirectional streaming**, which ConnectRPC cannot carry from browsers. The
   CLI gets Exec in v0.1; the UI does not. That is allowed — rule 8 forbids the UI having
   *more* than the CLI, not less.

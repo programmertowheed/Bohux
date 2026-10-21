@@ -117,6 +117,7 @@ func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 		Handler: h2c.NewHandler(newMux(st, (&api.Server{
 			Store: st, Authn: &auth.Authenticator{Store: st}, PKI: authority,
 			Deploys: &deploy.Starter{Client: temporal, HealthTimeout: cfg.DeployHealthTimeout},
+			Agents:  agents,
 		}).Mount), &http2.Server{}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

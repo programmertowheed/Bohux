@@ -38,18 +38,17 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S6e — ScaleApp reaches the node (⏳, next to start)
-- **Exact next step:** decide how ScaleApp changes the running workload (a small
-  workflow on the App's workflow ID is the proposal), then make `AssignApp` compare the
-  whole workload for idempotency.
+- **Slice:** S7 — build and secrets (⏳, next to start; split it first)
+- **Exact next step:** split S7 into sub-slices (SecretService + OpenBao resolver;
+  BuildKit build workflow), starting with the secret path, which deploys already need
+  (`SecretResolver` is still unset in the control plane).
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S6e (ScaleApp reaches the
-> node) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0026, api-contract.md
-> ("ScaleApp writes a new App revision and a new assignment"), and CLAUDE.md rules 5,
-> 6 and 10. Start Postgres, Docker and Temporal (tracker *Known gaps*). Make the
-> running workload follow ScaleApp through Temporal, not an API side effect. Verify with build, vet, golangci-lint (also with the integration
+> Read CLAUDE.md and docs/plan/03-progress.md, then split slice S7 (build and secrets)
+> into sub-slices and do the first one on branch `claude/relaxed-rubin-76m7dl`,
+> following ADR-0008, ADR-0020 items 2, 3 and 6, and CLAUDE.md rules 3 and 6. Start
+> Postgres, Docker and Temporal (tracker *Known gaps*). Verify with build, vet, golangci-lint (also with the integration
 > tag), unit and integration tests. Tick boxes, update the tracker and the next
 > session prompt, commit, push, and give me the next prompt.
 
@@ -68,6 +67,7 @@ work is in right now*.
 | O10 | Review the provider types in `internal/provider/provider.go` and the *Types* section of `docs/specs/provider-interface.md` (hash-based drift detection, no list verb: agent records what it applied). Built on already | S5 implements them |
 | O11 | Accept or reject ADR-0025 (Docker provider drives `docker compose` on its own artifact; agent-side HTTP health checks; layout and labels). Owner allowed building on it | S5c onward |
 | O12 | Accept or reject ADR-0026 (deploy workflow shape: worker in the control plane, workflow ID per App, row written by API and workflow, per-App assign, polling health activity, compensation by reassignment). Built on already | S6b onward |
+| O13 | Accept or reject ADR-0027 (replicas are not part of a Release; ScaleApp writes the App revision and the assignment in one transaction). Built on already | S6e onward |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -428,7 +428,7 @@ Split into sub-slices, one session each.
 - [x] `docs/providers/docker.md`, `docs/reference/config.md`; Docker conformance still
       green (92 s)
 
-### S6 — Deploy workflow 🔄
+### S6 — Deploy workflow ✅
 Split into sub-slices in S6a, one session each. Shape: ADR-0026 (O12).
 
 #### S6a — plan, local Temporal, rollback test first ✅
@@ -507,27 +507,16 @@ Split into sub-slices in S6a, one session each. Shape: ADR-0026 (O12).
   is refused while that run is open (the run still writes its row). Acceptable for
   v0.1; revisit with the CLI (S8)
 
-#### S6e — ScaleApp reaches the node ⏳
-- [ ] ScaleApp (and later App edits) must change the running workload
-      (api-contract.md: "ScaleApp writes a new App revision and a new assignment"). Doing
-      it in the API outside a workflow lets the App revision and the assignment drift
-      apart on a crash. Decide: a small Temporal workflow per scale on the App's
-      workflow ID (serializes with deploys), using `AssignApp` with only replicas
-      changed. `AssignApp` must then compare the whole workload, not only
-      Deployment + Release, for idempotency
-
-#### S6d — end to end ✅
-- [x] `cmd/bohux/e2e_test.go` (`integration,e2e` tags; CI job `e2e` enables Docker
-      live-restore and starts Temporal): the real binary's modes in process — bootstrap,
-      control plane, agent register and run on the local Docker daemon, deploy workflow
-      on Temporal. v1 deploys healthy (2.3 s); v2 replaces it (12.4 s, the busybox stop
-      timeout); a Release with no `/healthz` rolls back to v2 after the health timeout.
-      Host-port downtime of the recreate: **~0.35 s** (ADR-0020 item 5), recorded in
-      `docs/providers/docker.md`. No leftovers afterwards
-- [x] `--deploy-health-timeout` (`BOHUX_DEPLOY_HEALTH_TIMEOUT`, default 5m): a choice,
-      needed so an operator (and the test) can bound how long a broken Release runs
-- [x] `fixture.BuiltRelease`: a Release whose artifact is a local image ID, the shape
-      S7's builds produce (ADR-0020 item 2)
+#### S6e — ScaleApp reaches the node ✅
+- [x] Proposed ADR-0027 (O13): replicas are not part of a Release; a workload always
+      runs the App's current replicas; ScaleApp writes the App revision and the node
+      generation in one transaction (not a deploy, no workflow)
+- [x] `agentapi.Server.ScaleAppTx` (inside the caller's transaction, under the node
+      lock; no workload or same replicas → nothing written) and `Wake`; `write` split
+      into `writeTx`
+- [x] `ScaleApp` assigns through `api.Server.Agents`; deploy activities take replicas
+      from the App's current revision. Integration-tested at all three layers
+- [x] data-model.md and api-contract.md say so
 
 ### S7 — Build and secrets ⏳
 - [ ] BuildKit Dockerfile builds, exported to the local image store, resource-limited
@@ -613,6 +602,9 @@ Split into sub-slices in S6a, one session each. Shape: ADR-0026 (O12).
 - S6d done: end-to-end deploy and rollback on Docker + Temporal, CI job `e2e`,
   recreate downtime ~0.35 s.
 - **Next:** S6e.
+- S6e done: ADR-0027 proposed (O13), ScaleApp assigns atomically, replicas follow the
+  App. **S6 done.**
+- **Next:** S7, split first.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by

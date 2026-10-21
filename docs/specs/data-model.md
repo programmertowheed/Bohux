@@ -18,7 +18,7 @@ Tenant ─▶ Project ─▶ Environment ─▶ App ─▶ Release ─▶ Deploy
 | `environments` | dev/staging/prod/preview-*. Holds provider binding and config. |
 | `apps` | A deployable unit (named App, not Service — ADR-0014). Points at a source (repo, image, static dir). |
 | `resources` | Attached dependencies: databases, caches, buckets, queues. |
-| `releases` | **Immutable.** artifact digest + config revision + provenance ref. |
+| `releases` | **Immutable.** artifact digest + config revision + provenance ref. Replicas are not part of it: a workload always runs the App's current replicas (ADR-0027). |
 | `deployments` | One attempt to reconcile a release onto an environment. |
 | `<name>_revisions` | Append-only, one table per versioned resource, full snapshots (ADR-0017). actor, timestamp, parent revision. |
 | `audit_events` | Written in the **same transaction** as the revision. |

@@ -339,3 +339,60 @@ func TestAssignApp(t *testing.T) {
 		}
 	})
 }
+
+func TestScaleAppTx(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	node := uuid.MustParse(h.register("vps-1").node)
+	app1, _ := fixture.App(t, h.st, h.tenant, "api", "prod")
+	app2, _ := fixture.App(t, h.st, h.tenant, "worker", "prod2")
+	scale := func(app uuid.UUID, replicas int32) bool {
+		t.Helper()
+		var written bool
+		if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+			var err error
+			written, err = h.srv.ScaleAppTx(ctx, tx, node, app, replicas, system)
+			return err
+		}); err != nil {
+			t.Fatalf("ScaleAppTx: %v", err)
+		}
+		return written
+	}
+	if scale(app1, 3) {
+		t.Error("scaling an app with no workload wrote a generation")
+	}
+	w1, w2 := workload(app1.String()), workload(app2.String())
+	w1.Secrets, w2.Secrets = nil, nil
+	if _, err := h.srv.Assign(ctx, h.tenant, node, []*agentv1.Workload{w1, w2}, system); err != nil {
+		t.Fatal(err)
+	}
+	if !scale(app1, 3) {
+		t.Fatal("scale wrote nothing")
+	}
+	if scale(app1, 3) {
+		t.Error("scaling to the current replicas wrote again")
+	}
+	var raw []byte
+	if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+		return tx.QueryRow(ctx, `SELECT payload FROM assignments WHERE node_id = $1
+			ORDER BY generation DESC LIMIT 1`, node).Scan(&raw)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p := &agentv1.AssignmentPayload{}
+	if err := proto.Unmarshal(raw, p); err != nil {
+		t.Fatal(err)
+	}
+	if p.GetGeneration() != 2 {
+		t.Errorf("generation = %d, want 2", p.GetGeneration())
+	}
+	for _, w := range p.GetWorkloads() {
+		want := int32(1)
+		if w.GetAppId() == app1.String() {
+			want = 3
+		}
+		if got := w.GetRuntime().GetReplicas(); got != want {
+			t.Errorf("app %s replicas = %d, want %d", w.GetAppSlug(), got, want)
+		}
+	}
+}

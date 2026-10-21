@@ -313,15 +313,16 @@ func (as *appService) UpdateApp(ctx context.Context, req *connect.Request[bohuxv
 		msg.GetExpectedRevisionId(), msg.GetIdempotencyKey(), msg, auth.RoleDeployer,
 		func(*bohuxv1.App) (*bohuxv1.Source, *bohuxv1.Runtime, []*bohuxv1.SecretRef) {
 			return msg.GetSource(), msg.GetRuntime(), msg.GetSecrets()
-		})
+		}, false)
 	if err != nil {
 		return nil, err
 	}
 	return connect.NewResponse(&bohuxv1.UpdateAppResponse{App: app}), nil
 }
 
-// ScaleApp writes a new App revision with only replicas changed. No new Release; the
-// node assignment that applies it comes with the agent (S4) and workflow (S6).
+// ScaleApp writes a new App revision with only replicas changed and, in the same
+// transaction, the node generation that runs the App's current workload at that scale
+// (ADR-0027). No new Release.
 func (as *appService) ScaleApp(ctx context.Context, req *connect.Request[bohuxv1.ScaleAppRequest]) (*connect.Response[bohuxv1.ScaleAppResponse], error) {
 	msg := req.Msg
 	app, err := as.update(ctx, bohuxv1connect.AppServiceScaleAppProcedure, msg.GetId(),
@@ -330,7 +331,7 @@ func (as *appService) ScaleApp(ctx context.Context, req *connect.Request[bohuxv1
 			rt := proto.Clone(cur.GetRuntime()).(*bohuxv1.Runtime)
 			rt.Replicas = msg.GetReplicas()
 			return cur.GetSource(), rt, cur.GetSecrets()
-		})
+		}, true)
 	if err != nil {
 		return nil, err
 	}
@@ -338,9 +339,10 @@ func (as *appService) ScaleApp(ctx context.Context, req *connect.Request[bohuxv1
 }
 
 // update is the shared body of UpdateApp and ScaleApp: next computes the new state
-// from the current one.
+// from the current one. With scale, the node's assignment follows the new replicas in
+// the same transaction.
 func (as *appService) update(ctx context.Context, rpc, rawID, rawExpected, key string, msg proto.Message, min auth.Role,
-	next func(cur *bohuxv1.App) (*bohuxv1.Source, *bohuxv1.Runtime, []*bohuxv1.SecretRef),
+	next func(cur *bohuxv1.App) (*bohuxv1.Source, *bohuxv1.Runtime, []*bohuxv1.SecretRef), scale bool,
 ) (*bohuxv1.App, error) {
 	p, _ := auth.FromContext(ctx)
 	id, err := parseID("id", rawID)
@@ -355,7 +357,10 @@ func (as *appService) update(ctx context.Context, rpc, rawID, rawExpected, key s
 	if err != nil {
 		return nil, toConnect(ctx, err)
 	}
-	var out *bohuxv1.App
+	var (
+		out  *bohuxv1.App
+		wake *uuid.UUID
+	)
 	err = as.s.Store.InTenant(ctx, p.Tenant, func(tx *store.Tx) error {
 		prior, err := idem.lookup(ctx, tx)
 		if err != nil {
@@ -386,6 +391,11 @@ func (as *appService) update(ctx context.Context, rpc, rawID, rawExpected, key s
 			if err := idem.record(ctx, tx, appType, id, rev); err != nil {
 				return err
 			}
+			if scale && as.s.Agents != nil {
+				if wake, err = as.scaleOnNode(ctx, tx, id, env, rt.GetReplicas(), p.Actor()); err != nil {
+					return err
+				}
+			}
 		}
 		out, err = getApp(ctx, tx, id, uuid.Nil, "")
 		return err
@@ -393,7 +403,28 @@ func (as *appService) update(ctx context.Context, rpc, rawID, rawExpected, key s
 	if err != nil {
 		return nil, toConnect(ctx, err)
 	}
+	if wake != nil {
+		as.s.Agents.Wake(*wake)
+	}
 	return out, nil
+}
+
+// scaleOnNode writes the scaled workload to the node of the App's environment, and
+// returns the node to wake if a generation was written.
+func (as *appService) scaleOnNode(ctx context.Context, tx *store.Tx, app, env uuid.UUID, replicas int32, actor store.Actor) (*uuid.UUID, error) {
+	var node *uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT r.node_id FROM environments_heads h
+		JOIN environments_revisions r ON r.id = h.revision_id WHERE h.id = $1`, env).Scan(&node); err != nil {
+		return nil, fmt.Errorf("find app node: %w", err)
+	}
+	if node == nil {
+		return nil, nil
+	}
+	written, err := as.s.Agents.ScaleAppTx(ctx, tx, *node, app, replicas, actor)
+	if err != nil || !written {
+		return nil, err
+	}
+	return node, nil
 }
 
 func (as *appService) DeleteApp(ctx context.Context, req *connect.Request[bohuxv1.DeleteAppRequest]) (*connect.Response[bohuxv1.DeleteAppResponse], error) {

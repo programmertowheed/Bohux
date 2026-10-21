@@ -323,3 +323,82 @@ func TestDeployRefusals(t *testing.T) {
 	_, err = deployments.GetDeployment(ctx, req(h.root, &bohuxv1.GetDeploymentRequest{Id: uuid.NewString()}))
 	wantCode(t, err, connect.CodeNotFound)
 }
+
+// TestScaleAppAssigns checks ScaleApp writes the node's next generation with the
+// running Release at the new scale, in the same transaction (ADR-0027).
+func TestScaleAppAssigns(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	agents := &agentapi.Server{Store: h.st}
+	mux := http.NewServeMux()
+	(&Server{Store: h.st, Authn: &auth.Authenticator{Store: h.st}, PKI: h.pki, Agents: agents}).Mount(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	envs := bohuxv1connect.NewEnvironmentServiceClient(srv.Client(), srv.URL)
+	apps := bohuxv1connect.NewAppServiceClient(srv.Client(), srv.URL)
+	node := h.node("vps-1")
+	e, err := envs.CreateEnvironment(ctx, req(h.root, &bohuxv1.CreateEnvironmentRequest{
+		ProjectId: h.project("one").String(), Slug: "prod", ProviderBinding: dockerOn(node), IdempotencyKey: "e"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := apps.CreateApp(ctx, req(h.root, &bohuxv1.CreateAppRequest{
+		EnvironmentId: e.Msg.GetEnvironment().GetMeta().GetId(), Slug: "api", IdempotencyKey: "a",
+		Source: &bohuxv1.Source{Kind: &bohuxv1.Source_Image{Image: &bohuxv1.ImageSource{
+			Repository: "ghcr.io/acme/api", Digest: "sha256:" + strings.Repeat("ab", 32)}}},
+		Runtime: &bohuxv1.Runtime{Replicas: 1}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := a.Msg.GetApp()
+	scale := func(replicas int32, expected, key string) *bohuxv1.App {
+		t.Helper()
+		r, err := apps.ScaleApp(ctx, req(h.root, &bohuxv1.ScaleAppRequest{Id: app.GetMeta().GetId(),
+			Replicas: replicas, ExpectedRevisionId: expected, IdempotencyKey: key}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.Msg.GetApp()
+	}
+	latest := func() (int64, int32) {
+		t.Helper()
+		var (
+			gen int64
+			raw []byte
+		)
+		err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+			return tx.QueryRow(ctx, `SELECT generation, payload FROM assignments WHERE node_id = $1
+				ORDER BY generation DESC LIMIT 1`, node).Scan(&gen, &raw)
+		})
+		if err != nil {
+			return 0, 0
+		}
+		p := &agentv1.AssignmentPayload{}
+		if err := proto.Unmarshal(raw, p); err != nil {
+			t.Fatal(err)
+		}
+		return gen, p.GetWorkloads()[0].GetRuntime().GetReplicas()
+	}
+
+	// Not deployed yet: only the App changes.
+	app = scale(2, app.GetMeta().GetRevisionId(), "s1")
+	if gen, _ := latest(); gen != 0 {
+		t.Errorf("scaling an undeployed app wrote generation %d", gen)
+	}
+	appID := uuid.MustParse(app.GetMeta().GetId())
+	if _, err := agents.AssignApp(ctx, h.tenant, node, appID, &agentv1.Workload{AppId: appID.String(),
+		ReleaseId: "r1", DeploymentId: "d1", Image: "img", Runtime: &bohuxv1.Runtime{Replicas: 2}},
+		store.Actor{ID: store.SystemActorID, Kind: store.ActorSystem}); err != nil {
+		t.Fatal(err)
+	}
+	before := app.GetMeta().GetRevisionId()
+	scale(4, before, "s2")
+	if gen, replicas := latest(); gen != 2 || replicas != 4 {
+		t.Errorf("after scale: generation %d with %d replicas, want 2 and 4", gen, replicas)
+	}
+	// A replay changes nothing more.
+	scale(4, before, "s2")
+	if gen, _ := latest(); gen != 2 {
+		t.Errorf("replayed scale wrote generation %d", gen)
+	}
+}
