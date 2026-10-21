@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/bohumix/bohux/gen/bohux/v1/bohuxv1connect"
 	"github.com/bohumix/bohux/internal/pki"
 	"github.com/bohumix/bohux/internal/store"
+	"github.com/bohumix/bohux/internal/workflow/deploy"
 )
 
 // Server holds the bohux.v1 handlers.
@@ -20,8 +22,16 @@ type Server struct {
 	Authn Authenticator
 	// PKI issues node credentials (ADR-0024). Nil disables node registration.
 	PKI *pki.Authority
+	// Deploys starts and cancels deploy workflows (ADR-0026). Nil refuses deploys.
+	Deploys Deployer
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
+}
+
+// Deployer starts and cancels deploy runs; deploy.Starter implements it.
+type Deployer interface {
+	Start(ctx context.Context, in deploy.Input) (workflowID, runID string, err error)
+	Cancel(ctx context.Context, workflowID, runID string) error
 }
 
 func (s *Server) now() time.Time {
@@ -41,10 +51,10 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.Handle(bohuxv1connect.NewEnvironmentServiceHandler(&environmentService{s}, opts))
 	mux.Handle(bohuxv1connect.NewAppServiceHandler(&appService{s}, opts))
 	mux.Handle(bohuxv1connect.NewNodeServiceHandler(&nodeService{s}, opts))
+	mux.Handle(bohuxv1connect.NewReleaseServiceHandler(&releaseService{s}, opts))
 
 	// Not written yet: mounted so every RPC is authenticated, logged, and answers
 	// Unimplemented rather than 404. Each is replaced as its slice lands.
-	mux.Handle(bohuxv1connect.NewReleaseServiceHandler(bohuxv1connect.UnimplementedReleaseServiceHandler{}, opts))
 	mux.Handle(bohuxv1connect.NewDeploymentServiceHandler(bohuxv1connect.UnimplementedDeploymentServiceHandler{}, opts))
 	mux.Handle(bohuxv1connect.NewWorkloadServiceHandler(bohuxv1connect.UnimplementedWorkloadServiceHandler{}, opts))
 	mux.Handle(bohuxv1connect.NewSecretServiceHandler(bohuxv1connect.UnimplementedSecretServiceHandler{}, opts))

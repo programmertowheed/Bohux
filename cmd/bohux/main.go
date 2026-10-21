@@ -43,11 +43,15 @@ const (
 	envDataDir         = "BOHUX_DATA_DIR"
 	envAgentStateDir   = "BOHUX_AGENT_STATE_DIR"
 	envBootstrapToken  = "BOHUX_BOOTSTRAP_TOKEN"
+	envTemporalAddress = "BOHUX_TEMPORAL_ADDRESS"
+	envTemporalNS      = "BOHUX_TEMPORAL_NAMESPACE"
 
 	defaultListenAddr      = "127.0.0.1:7400"
 	defaultAgentListenAddr = "127.0.0.1:7443"
 	defaultDataDir         = "/var/lib/bohux"
 	defaultAgentStateDir   = "/var/lib/bohux-agent"
+	defaultTemporalAddress = "127.0.0.1:7233"
+	defaultTemporalNS      = "default"
 )
 
 func main() {
@@ -194,6 +198,10 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 			"Postgres DSN (env "+envDatabaseURL+")")
 		dataDir := fs.String("data-dir", envOr(getenv, envDataDir, defaultDataDir),
 			"directory for the node CA and signing key; back it up (env "+envDataDir+")")
+		temporalAddr := fs.String("temporal-address", envOr(getenv, envTemporalAddress, defaultTemporalAddress),
+			"Temporal frontend host:port for deploys (env "+envTemporalAddress+")")
+		temporalNS := fs.String("temporal-namespace", envOr(getenv, envTemporalNS, defaultTemporalNS),
+			"Temporal namespace (env "+envTemporalNS+")")
 		if err := fs.Parse(args[1:]); err != nil {
 			return fmt.Errorf("controlplane: %w", err)
 		}
@@ -201,7 +209,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 			return fmt.Errorf("controlplane: --database-url or %s is required", envDatabaseURL)
 		}
 		cfg := controlplane.Config{ListenAddr: *listen, AgentListenAddr: *agentListen,
-			DatabaseURL: *dbURL, DataDir: *dataDir}
+			DatabaseURL: *dbURL, DataDir: *dataDir, TemporalAddress: *temporalAddr, TemporalNamespace: *temporalNS}
 		if err := d.runControlPlane(ctx, cfg); err != nil {
 			return fmt.Errorf("controlplane: %w", err)
 		}

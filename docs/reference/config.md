@@ -11,8 +11,12 @@ Adding a setting means adding it here in the same commit.
 | `--agent-listen` | `BOHUX_AGENT_LISTEN_ADDR` | `127.0.0.1:7443` | TLS address agents connect to (`bohux.agent.v1`), with a certificate from the node CA (ADR-0024). Set it to an address remote nodes can reach. |
 | `--database-url` | `BOHUX_DATABASE_URL` | none, required | Postgres DSN. |
 | `--data-dir` | `BOHUX_DATA_DIR` | `/var/lib/bohux` | Holds `pki/`: the node CA and assignment signing key, created on first start, mode 0600 (ADR-0024). **Back it up with the database**; losing it means every node re-registers. |
+| `--temporal-address` | `BOHUX_TEMPORAL_ADDRESS` | `127.0.0.1:7233` | Temporal frontend for deploy workflows (ADR-0002). The control plane also runs the deploy worker on task queue `bohux-deploy` (ADR-0026). |
+| `--temporal-namespace` | `BOHUX_TEMPORAL_NAMESPACE` | `default` | Temporal namespace for Bohux's workflows. It must exist. |
 
-On start it applies pending migrations, then serves. `SIGINT`/`SIGTERM` stop it, giving
+On start it applies pending migrations, then serves. Temporal does not have to be up: the
+API serves without it, deploys are refused with `UNAVAILABLE` until it is reachable, and
+the worker keeps retrying every 5 seconds. `SIGINT`/`SIGTERM` stop it, giving
 in-flight requests up to 10 seconds.
 
 `GET /healthz` returns `200 ok` when Postgres answers, `503` otherwise.

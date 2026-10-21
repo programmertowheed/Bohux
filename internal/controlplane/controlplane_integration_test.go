@@ -26,7 +26,9 @@ func TestServeMigratesServesAndShutsDown(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- Serve(ctx, ln, agentLn, Config{DatabaseURL: storetest.NewAppDSN(t), DataDir: t.TempDir()})
+		done <- Serve(ctx, ln, agentLn, Config{DatabaseURL: storetest.NewAppDSN(t), DataDir: t.TempDir(),
+			// Nothing listens here: the control plane must serve without Temporal.
+			TemporalAddress: "127.0.0.1:1", TemporalNamespace: "default"})
 	}()
 
 	url := "http://" + ln.Addr().String() + "/healthz"

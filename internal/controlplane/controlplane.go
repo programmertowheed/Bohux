@@ -1,5 +1,6 @@
 // Package controlplane runs the Bohux control plane: the public API (bohux.v1) over
-// ConnectRPC and, later, the agent endpoint (ADR-0006, ADR-0007).
+// ConnectRPC, the agent endpoint (ADR-0006, ADR-0007), and the deploy worker
+// (ADR-0026).
 package controlplane
 
 import (
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"go.temporal.io/sdk/client"
+	tlog "go.temporal.io/sdk/log"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
@@ -20,6 +23,7 @@ import (
 	"github.com/bohumix/bohux/internal/auth"
 	"github.com/bohumix/bohux/internal/pki"
 	"github.com/bohumix/bohux/internal/store"
+	"github.com/bohumix/bohux/internal/workflow/deploy"
 )
 
 // Config is everything the control plane needs at start. See docs/reference/config.md.
@@ -34,6 +38,11 @@ type Config struct {
 	// DataDir holds the node CA and assignment signing key (ADR-0024). It must be
 	// backed up with the database.
 	DataDir string
+	// TemporalAddress is the Temporal frontend (host:port) deploys run on (ADR-0002).
+	// The control plane starts and serves without it; deploys wait for it.
+	TemporalAddress string
+	// TemporalNamespace is the Temporal namespace for Bohux's workflows.
+	TemporalNamespace string
 }
 
 // shutdownTimeout bounds how long in-flight requests get after the context ends.
@@ -47,6 +56,9 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	if cfg.DataDir == "" {
 		return errors.New("controlplane: data directory is required")
+	}
+	if cfg.TemporalAddress == "" || cfg.TemporalNamespace == "" {
+		return errors.New("controlplane: Temporal address and namespace are required")
 	}
 	ln, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
@@ -77,15 +89,34 @@ func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 	}
 	defer st.Close()
 
+	// Lazy: Temporal being down must not stop the API from serving.
+	temporal, err := client.NewLazyClient(client.Options{
+		HostPort: cfg.TemporalAddress, Namespace: cfg.TemporalNamespace,
+		Logger: tlog.NewStructuredLogger(slog.Default()),
+	})
+	if err != nil {
+		return fmt.Errorf("temporal client: %w", err)
+	}
+	defer temporal.Close()
+
+	agents := &agentapi.Server{Store: st, PKI: authority}
+	workerCtx, stopWorker := context.WithCancel(ctx)
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		deploy.RunWorker(workerCtx, temporal, &deploy.Activities{Store: st, Agents: agents})
+	}()
+	defer func() { stopWorker(); <-workerDone }()
+
 	srv := &http.Server{
 		// ConnectRPC needs HTTP/2 for streaming; h2c serves it without TLS. TLS
 		// termination is in front of Bohux (Caddy, ADR-0019) or added with mTLS in S4.
 		Handler: h2c.NewHandler(newMux(st, (&api.Server{
 			Store: st, Authn: &auth.Authenticator{Store: st}, PKI: authority,
+			Deploys: &deploy.Starter{Client: temporal},
 		}).Mount), &http2.Server{}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	agents := &agentapi.Server{Store: st, PKI: authority}
 	agentTLS, err := agents.TLSConfig()
 	if err != nil {
 		return err
