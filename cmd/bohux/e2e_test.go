@@ -97,17 +97,26 @@ func call[T any](token string, msg *T) *connect.Request[T] {
 	return r
 }
 
-// TestDeployEndToEnd runs the real binary's modes in process: control plane, agent on
-// the local Docker daemon, deploy workflow on a Temporal dev server. A healthy Release
-// deploys, a second replaces it (recreate downtime measured, ADR-0020 item 5), and a
-// Release whose health check never passes rolls back to it (rule 5).
-func TestDeployEndToEnd(t *testing.T) {
+// stack is the real binary's modes run in process: bootstrap, control plane, and an
+// agent on the local Docker daemon, with deploys on a Temporal dev server.
+type stack struct {
+	t      *testing.T
+	ctx    context.Context
+	token  string
+	base   string
+	env    string
+	tenant uuid.UUID
+	st     *store.Store
+	hc     *http.Client
+}
+
+func startStack(t *testing.T) *stack {
+	t.Helper()
 	temporal := os.Getenv("BOHUX_TEST_TEMPORAL_ADDRESS")
 	if temporal == "" {
 		t.Skip("BOHUX_TEST_TEMPORAL_ADDRESS is not set")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	getenv := func(string) string { return "" }
 	dsn := storetest.NewAppDSN(t)
 
@@ -164,7 +173,7 @@ func TestDeployEndToEnd(t *testing.T) {
 	if err != nil || len(list.Msg.GetNodes()) != 1 {
 		t.Fatalf("ListNodes = %v, %v", list, err)
 	}
-	node := list.Msg.GetNodes()[0].GetMeta().GetId()
+	node := list.Msg.GetNodes()[0]
 	projects := bohuxv1connect.NewProjectServiceClient(hc, base)
 	pr, err := projects.CreateProject(ctx, call(token, &bohuxv1.CreateProjectRequest{Slug: "shop", IdempotencyKey: "p"}))
 	if err != nil {
@@ -173,60 +182,75 @@ func TestDeployEndToEnd(t *testing.T) {
 	envs := bohuxv1connect.NewEnvironmentServiceClient(hc, base)
 	er, err := envs.CreateEnvironment(ctx, call(token, &bohuxv1.CreateEnvironmentRequest{
 		ProjectId: pr.Msg.GetProject().GetMeta().GetId(), Slug: "prod", IdempotencyKey: "e",
-		ProviderBinding: &bohuxv1.ProviderBinding{Provider: "docker", Target: &bohuxv1.ProviderBinding_NodeId{NodeId: node}}}))
+		ProviderBinding: &bohuxv1.ProviderBinding{Provider: "docker", Target: &bohuxv1.ProviderBinding_NodeId{NodeId: node.GetMeta().GetId()}}}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := er.Msg.GetEnvironment().GetMeta().GetId()
-	hostPort := freePort(t)
-	apps := bohuxv1connect.NewAppServiceClient(hc, base)
-	ar, err := apps.CreateApp(ctx, call(token, &bohuxv1.CreateAppRequest{EnvironmentId: env, Slug: "web", IdempotencyKey: "a",
-		// The source is not used: Releases below are built images (ADR-0020 item 2).
-		Source: &bohuxv1.Source{Kind: &bohuxv1.Source_Image{Image: &bohuxv1.ImageSource{
-			Repository: "example.invalid/web", Digest: "sha256:" + strings.Repeat("0", 64)}}},
-		Runtime: &bohuxv1.Runtime{Replicas: 1, Ports: []*bohuxv1.Port{{ContainerPort: 8080, HostPort: hostPort}},
-			Health: &bohuxv1.HealthCheck{Path: "/healthz", Port: 8080, TimeoutSeconds: 2}}}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	app := ar.Msg.GetApp().GetMeta().GetId()
-
 	st, err := store.Open(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
-	tenant := uuid.MustParse(ar.Msg.GetApp().GetMeta().GetTenantId())
+	t.Cleanup(st.Close)
+	return &stack{t: t, ctx: ctx, token: token, base: base, env: er.Msg.GetEnvironment().GetMeta().GetId(),
+		tenant: uuid.MustParse(node.GetMeta().GetTenantId()), st: st, hc: hc}
+}
+
+// app creates an App serving /healthz on 8080, published on hostPort.
+func (s *stack) app(slug string, src *bohuxv1.Source, hostPort int32) string {
+	s.t.Helper()
+	apps := bohuxv1connect.NewAppServiceClient(s.hc, s.base)
+	ar, err := apps.CreateApp(s.ctx, call(s.token, &bohuxv1.CreateAppRequest{EnvironmentId: s.env, Slug: slug,
+		IdempotencyKey: "app-" + slug, Source: src,
+		Runtime: &bohuxv1.Runtime{Replicas: 1, Ports: []*bohuxv1.Port{{ContainerPort: 8080, HostPort: hostPort}},
+			Health: &bohuxv1.HealthCheck{Path: "/healthz", Port: 8080, TimeoutSeconds: 2}}}))
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return ar.Msg.GetApp().GetMeta().GetId()
+}
+
+// deploy deploys rel and waits for want.
+func (s *stack) deploy(rel, key string, want bohuxv1.DeploymentState) *bohuxv1.Deployment {
+	s.t.Helper()
+	deployments := bohuxv1connect.NewDeploymentServiceClient(s.hc, s.base)
+	r, err := deployments.CreateDeployment(s.ctx, call(s.token, &bohuxv1.CreateDeploymentRequest{
+		ReleaseId: rel, EnvironmentId: s.env, IdempotencyKey: key}))
+	if err != nil {
+		s.t.Fatalf("deploy %s: %v", key, err)
+	}
+	id := r.Msg.GetDeployment().GetMeta().GetId()
+	deadline := time.Now().Add(4 * time.Minute)
+	for {
+		g, err := deployments.GetDeployment(s.ctx, call(s.token, &bohuxv1.GetDeploymentRequest{Id: id}))
+		if err != nil {
+			s.t.Fatal(err)
+		}
+		d := g.Msg.GetDeployment()
+		if d.GetState() == want {
+			return d
+		}
+		if terminal(d) || time.Now().After(deadline) {
+			s.t.Fatalf("deploy %s ended %s (failure %v), want %s", key, d.GetState(), d.GetFailure(), want)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// TestDeployEndToEnd: a healthy Release deploys, a second replaces it (recreate
+// downtime measured, ADR-0020 item 5), and a Release whose health check never passes
+// rolls back to it (rule 5).
+func TestDeployEndToEnd(t *testing.T) {
+	s := startStack(t)
+	hostPort := freePort(t)
+	// The source is not used: these Releases are built images (ADR-0020 item 2).
+	app := s.app("web", &bohuxv1.Source{Kind: &bohuxv1.Source_Image{Image: &bohuxv1.ImageSource{
+		Repository: "example.invalid/web", Digest: "sha256:" + strings.Repeat("0", 64)}}}, hostPort)
 	release := func(version string, broken bool) string {
-		return fixture.BuiltRelease(t, st, tenant, uuid.MustParse(app), buildImage(t, version, broken), "commit-"+version).String()
+		return fixture.BuiltRelease(t, s.st, s.tenant, uuid.MustParse(app), buildImage(t, version, broken), "commit-"+version).String()
 	}
 	v1, v2, bad := release("v1", false), release("v2", false), release("bad", true)
-
-	deployments := bohuxv1connect.NewDeploymentServiceClient(hc, base)
-	deploy := func(rel, key string, want bohuxv1.DeploymentState) *bohuxv1.Deployment {
-		t.Helper()
-		r, err := deployments.CreateDeployment(ctx, call(token, &bohuxv1.CreateDeploymentRequest{
-			ReleaseId: rel, EnvironmentId: env, IdempotencyKey: key}))
-		if err != nil {
-			t.Fatalf("deploy %s: %v", key, err)
-		}
-		id := r.Msg.GetDeployment().GetMeta().GetId()
-		deadline := time.Now().Add(3 * time.Minute)
-		for {
-			g, err := deployments.GetDeployment(ctx, call(token, &bohuxv1.GetDeploymentRequest{Id: id}))
-			if err != nil {
-				t.Fatal(err)
-			}
-			d := g.Msg.GetDeployment()
-			if d.GetState() == want {
-				return d
-			}
-			if terminal(d) || time.Now().After(deadline) {
-				t.Fatalf("deploy %s ended %s (failure %v), want %s", key, d.GetState(), d.GetFailure(), want)
-			}
-			time.Sleep(200 * time.Millisecond)
-		}
-	}
+	deploy := s.deploy
+	ctx := s.ctx
 	served := fmt.Sprintf("http://127.0.0.1:%d/version", hostPort)
 
 	start := time.Now()
@@ -269,6 +293,79 @@ func TestDeployEndToEnd(t *testing.T) {
 	t.Logf("broken release rolled back after %v (%s)", time.Since(start).Round(time.Millisecond), d.GetFailure().GetReason())
 	if got, err := get(served); got != "v2" {
 		t.Fatalf("after rollback serving %q (%v), want v2", got, err)
+	}
+}
+
+// TestBuildEndToEnd: Releases created through the API from a Git repository are built
+// by the real agent with buildx (ADR-0028), deployed, and a broken build-from-Git
+// Release rolls back to the healthy one.
+func TestBuildEndToEnd(t *testing.T) {
+	s := startStack(t)
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	commit := func(version string, broken bool, tag string) {
+		t.Helper()
+		df := strings.Replace(e2eDockerfile, "ARG VERSION\nARG BROKEN\n", "", 1)
+		df = strings.ReplaceAll(df, "$VERSION", version)
+		if broken {
+			df = strings.Replace(df, `if [ -z "$BROKEN" ]`, `if false`, 1)
+		} else {
+			df = strings.Replace(df, `if [ -z "$BROKEN" ]`, `if true`, 1)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "Dockerfile"), []byte(df), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		git("add", ".")
+		git("commit", "-q", "-m", version)
+		git("tag", tag)
+	}
+	git("init", "-q")
+	commit("g1", false, "v1")
+	commit("g2", true, "v2")
+
+	hostPort := freePort(t)
+	app := s.app("built", &bohuxv1.Source{Kind: &bohuxv1.Source_Git{Git: &bohuxv1.GitSource{RepoUrl: repo, Ref: "v1"}}}, hostPort)
+	releases := bohuxv1connect.NewReleaseServiceClient(s.hc, s.base)
+	release := func(ref, key string) string {
+		t.Helper()
+		r, err := releases.CreateRelease(s.ctx, call(s.token, &bohuxv1.CreateReleaseRequest{AppId: app,
+			From: &bohuxv1.CreateReleaseRequest_GitRef{GitRef: ref}, IdempotencyKey: key}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := r.Msg.GetRelease().GetMeta().GetId()
+		t.Cleanup(func() {
+			_ = exec.Command("sh", "-c", "docker images -q --filter label=io.bohux.release="+id+" | xargs -r docker rmi -f").Run()
+		})
+		return id
+	}
+	served := fmt.Sprintf("http://127.0.0.1:%d/version", hostPort)
+
+	start := time.Now()
+	good := release("v1", "r1")
+	s.deploy(good, "b1", bohuxv1.DeploymentState_DEPLOYMENT_STATE_SUCCEEDED)
+	t.Logf("built and deployed from git in %v", time.Since(start).Round(time.Millisecond))
+	if got, err := get(served); got != "g1" {
+		t.Fatalf("serving %q (%v), want g1", got, err)
+	}
+	r, err := releases.GetRelease(s.ctx, call(s.token, &bohuxv1.GetReleaseRequest{Id: good}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel := r.Msg.GetRelease(); len(rel.GetSourceRef()) != 40 || !strings.HasPrefix(rel.GetArtifactDigest(), "sha256:") {
+		t.Errorf("built release = %v, want a commit and an image ID", rel)
+	}
+
+	d := s.deploy(release("v2", "r2"), "b2", bohuxv1.DeploymentState_DEPLOYMENT_STATE_ROLLED_BACK)
+	t.Logf("broken build rolled back (%s)", d.GetFailure().GetReason())
+	if got, err := get(served); got != "g1" {
+		t.Fatalf("after rollback serving %q (%v), want g1", got, err)
 	}
 }
 

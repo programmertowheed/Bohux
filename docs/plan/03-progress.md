@@ -38,17 +38,18 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S7c3 — build end to end (⏳, next to start)
-- **Exact next step:** extend `cmd/bohux/e2e_test.go` with a Release created from a
-  local Git repository through the API, built by the real agent, deployed, then rolled
-  back.
+- **Slice:** S8 — CLI (⏳, next to start; split it first). S7d (OpenBao auto-unseal)
+  belongs with the install bundle in S9
+- **Exact next step:** split S8; start with the CLI's shape (config file, login, how
+  it finds the control plane) and `bohux deploy`.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S7c3 (build end to end)
-> on branch `claude/relaxed-rubin-76m7dl`, following ADR-0028 and CLAUDE.md rule 5.
-> Start Postgres, Docker, Temporal and OpenBao, and the `bohux` buildx builder
-> (tracker *Known gaps*). Verify with build, vet, golangci-lint (also with the integration
+> Read CLAUDE.md and docs/plan/03-progress.md, then split slice S8 (CLI) into
+> sub-slices and do the first on branch `claude/relaxed-rubin-76m7dl`, following
+> ADR-0006, api-contract.md, and CLAUDE.md rule 8 (the CLI is a client of the public
+> API, nothing more). Start Postgres, Docker, Temporal and OpenBao (tracker *Known
+> gaps*). Verify with build, vet, golangci-lint (also with the integration
 > tag), unit and integration tests. Tick boxes, update the tracker and the next
 > session prompt, commit, push, and give me the next prompt.
 
@@ -519,7 +520,7 @@ Split into sub-slices in S6a, one session each. Shape: ADR-0026 (O12).
       from the App's current revision. Integration-tested at all three layers
 - [x] data-model.md and api-contract.md say so
 
-### S7 — Build and secrets 🔄
+### S7 — Build and secrets 🔄 (S7d left)
 Split into sub-slices, one session each.
 
 #### S7a — secret storage ✅
@@ -577,8 +578,15 @@ Split into sub-slices, one session each.
       the deploy with `BUILD_FAILED` and assigns nothing. Workflow-tested with mocks,
       activities against Postgres, and build → deploy on real Temporal
 
-#### S7c3 — build end to end ⏳
-- [ ] e2e: create a Release from a local Git repository, deploy it, roll back
+#### S7c3 — build end to end ✅
+- [x] `cmd/bohux/e2e_test.go` split into a `stack` helper and two tests.
+      `TestBuildEndToEnd`: an App with a Git source (a local repository), Releases
+      created through the API from tags, built by the real agent with buildx, deployed
+      (build + deploy 4.6 s); a broken build rolls back to the healthy one. Recreate
+      downtime measured again: 0.35–1.5 s across runs
+- **Found:** the cloud container's disk allowance makes free space read ~9.5%, under
+  the 10% threshold, so the agent correctly refused builds (`DISK_PRESSURE`). See
+  *Known gaps*
 
 #### S7d — OpenBao in the install bundle ⏳
 - [ ] Auto-unseal with a node-local key (ADR-0020 item 6), in the install bundle (S9)
@@ -657,6 +665,10 @@ Split into sub-slices, one session each.
     --driver-opt network=host --driver-opt image=moby/buildkit:v0.18.2 --buildkitd-config /tmp/bkd.toml
   ```
   CI runners need none of this: the agent creates the builder itself.
+- **Disk pressure in the cloud container:** the session's disk allowance makes
+  `statfs` report ~9.5% free, under the agent's 10% threshold, and the agent refuses
+  builds (`DISK_PRESSURE`) as designed. `go clean -cache` frees ~3 GB and lifts it
+  above.
 - **Dev stack:** `deploy/dev/postgres-init/` creates `bohux_app` only on a fresh
   `postgres` volume. An existing volume needs `docker compose down -v` first.
 - **Go 1.23 pin holds dependencies back** (goose ≤ v3.26, pgx ≤ v5.7.6; newer need Go
@@ -696,6 +708,8 @@ Split into sub-slices, one session each.
 - S7c2 done: build dispatch over the stream, build workflow, CreateRelease from Git,
   deploys wait for builds.
 - **Next:** S7c3.
+- S7c3 done: Git → agent build → deploy → rollback end to end.
+- **Next:** S8, split first.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by
