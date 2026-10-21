@@ -22,10 +22,10 @@ import (
 	agentv1 "github.com/bohumix/bohux/gen/bohux/agent/v1"
 	"github.com/bohumix/bohux/gen/bohux/agent/v1/agentv1connect"
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
-	"github.com/bohumix/bohux/internal/api"
 	"github.com/bohumix/bohux/internal/auth"
 	"github.com/bohumix/bohux/internal/pki"
 	"github.com/bohumix/bohux/internal/store"
+	"github.com/bohumix/bohux/internal/store/fixture"
 	"github.com/bohumix/bohux/internal/store/storetest"
 )
 
@@ -51,10 +51,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	t.Cleanup(st.Close)
-	tenant, _, err := api.Bootstrap(ctx, st, "acme", "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tenant := fixture.Tenant(t, st, "acme")
 	authority, err := pki.LoadOrCreate(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)

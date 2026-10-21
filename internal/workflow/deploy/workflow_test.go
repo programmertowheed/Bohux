@@ -3,6 +3,7 @@ package deploy
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -314,6 +315,22 @@ func TestFailureOf(t *testing.T) {
 	for _, tt := range tests {
 		if got := failureOf(tt.err, ReasonAssignFailed).Reason; got != tt.want {
 			t.Errorf("failureOf(%v) = %s, want %s", tt.err, got, tt.want)
+		}
+	}
+}
+
+func TestImageRef(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	tests := []struct {
+		name, sourceRef, want string
+	}{
+		{"imported image runs its pinned reference", "ghcr.io/acme/api@" + digest, "ghcr.io/acme/api@" + digest},
+		{"built image runs the local image ID", "3f2a9c1", digest},
+		{"no source ref", "", digest},
+	}
+	for _, tt := range tests {
+		if got := imageRef(tt.sourceRef, digest); got != tt.want {
+			t.Errorf("%s: imageRef = %q, want %q", tt.name, got, tt.want)
 		}
 	}
 }

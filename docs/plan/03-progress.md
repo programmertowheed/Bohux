@@ -38,20 +38,18 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S6c — worker and API (⏳, next to start)
-- **Exact next step:** Temporal client + worker in `bohux controlplane`
-  (`--temporal-address`, `--temporal-namespace`), then ReleaseService for image sources.
+- **Slice:** S6c2 — DeploymentService (⏳, next to start)
+- **Exact next step:** `internal/api/deployment.go` CreateDeployment (start the run, then
+  insert the row), then Get/List/Watch/Rollback/Cancel.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S6c (deploy worker and
-> API) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0026, the
-> `new-workflow` skill, api-contract.md, and CLAUDE.md rules 1, 8 and 10. Start
-> Postgres, Docker and Temporal (tracker *Known gaps*). Run the deploy worker inside
-> `bohux controlplane` (control plane must start even when Temporal is down), add
-> ReleaseService for image sources and DeploymentService (Create, Get, List,
-> Rollback, Cancel, Watch), with an integration test against the real Temporal dev
-> server. Verify with build, vet, golangci-lint (also with the integration
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S6c2 (DeploymentService)
+> on branch `claude/relaxed-rubin-76m7dl`, following ADR-0026, api-contract.md, and
+> CLAUDE.md rules 8 and 10. Start Postgres, Docker and Temporal (tracker *Known
+> gaps*). Write DeploymentService (Create, Get, List, Watch, Rollback, Cancel) on
+> `api.Server.Deploys`, make ScaleApp assign, and add an integration test against the
+> real Temporal dev server. Verify with build, vet, golangci-lint (also with the integration
 > tag), unit and integration tests. Tick boxes, update the tracker and the next
 > session prompt, commit, push, and give me the next prompt.
 
@@ -473,14 +471,32 @@ Split into sub-slices in S6a, one session each. Shape: ADR-0026 (O12).
   next deploy (a Release captures its App revision). Decide in S6c whether ScaleApp
   starts a deploy of the current Release
 
-#### S6c — worker and API ⏳
-- [ ] `bohux controlplane --temporal-address --temporal-namespace`; worker on
-      `bohux-deploy`; the control plane still starts when Temporal is down (API up,
-      deploys refused until it is back)
-- [ ] ReleaseService for image sources (READY at creation, digest from the App)
-- [ ] DeploymentService: Create (start, then row), Get, List, Rollback (empty target =
-      last healthy), Cancel, Watch; concurrent deploy of one App → `FAILED_PRECONDITION`
-- [ ] Integration test with a real Temporal dev server and a fake agent report
+#### S6c1 — worker and ReleaseService ✅
+- [x] `bohux controlplane --temporal-address --temporal-namespace` (default
+      `127.0.0.1:7233`, `default`); lazy Temporal client; worker on `bohux-deploy`
+      restarted every 5 s until Temporal answers. Tested: the control plane serves and
+      stops cleanly with nothing listening on the Temporal address
+- [x] `deploy.Starter` (start with "fail if running" → `ErrRunning`; cancel one run);
+      `api.Server.Deploys`
+- [x] ReleaseService: CreateRelease from an image (explicit, or the App's image source)
+      → `READY`, `source_ref` = `repository@digest`, captures the App revision; Git →
+      `Unimplemented` until S7. Get, List (newest first, paged). Integration-tested
+- [x] The workload runs the Release's `source_ref` when it is a pinned image, else the
+      artifact digest (an explicit image can differ from the App's source)
+- [x] `fixture.Tenant`; agentapi and deploy tests no longer import `api` (it imports
+      `deploy` now, which imports `agentapi`)
+
+#### S6c2 — DeploymentService ⏳
+- [ ] Create: validate, `Deploys.Start`, then `deploy.InsertDeployment` with the run
+      IDs; `ErrRunning` → `FAILED_PRECONDITION`; `ErrUnavailable` → `UNAVAILABLE`;
+      idempotent
+- [ ] Get, List (newest first, optional App filter), Watch (sends on each revision until
+      terminal), Rollback (empty target = last healthy Release), Cancel (`Deploys.Cancel`
+      with the stored run)
+- [ ] ScaleApp writes a new assignment through `AssignApp` (api-contract.md: "ScaleApp
+      writes a new App revision and a new assignment")
+- [ ] Integration test with the real Temporal dev server: deploy → succeeded on a fake
+      agent report; never healthy → rolled back; concurrent deploy refused
 
 #### S6d — end to end ⏳
 - [ ] Real Temporal + control plane + agent on Docker: healthy deploy succeeds; a
@@ -562,6 +578,9 @@ Split into sub-slices in S6a, one session each. Shape: ADR-0026 (O12).
 - S6b done: migration `00016`, real activities, `agentapi.Server.AssignApp`, fixtures,
   integration tests. Wrapped non-retryable errors were silently retryable; fixed.
 - **Next:** S6c.
+- S6c split into S6c1/S6c2. S6c1 done: Temporal client and worker in the control plane,
+  ReleaseService for images, image taken from the Release's `source_ref`.
+- **Next:** S6c2.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by

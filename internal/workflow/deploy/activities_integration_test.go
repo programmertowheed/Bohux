@@ -14,7 +14,6 @@ import (
 
 	agentv1 "github.com/bohumix/bohux/gen/bohux/agent/v1"
 	"github.com/bohumix/bohux/internal/agentapi"
-	"github.com/bohumix/bohux/internal/api"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/store/fixture"
 	"github.com/bohumix/bohux/internal/store/storetest"
@@ -43,10 +42,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	t.Cleanup(st.Close)
-	tenant, _, err := api.Bootstrap(ctx, st, "acme", "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tenant := fixture.Tenant(t, st, "acme")
 	acts := &Activities{Store: st, Agents: &agentapi.Server{Store: st}, PollInterval: 10 * time.Millisecond}
 	var ts testsuite.WorkflowTestSuite
 	env := ts.NewTestActivityEnvironment()
@@ -280,7 +276,7 @@ func TestAssignRelease(t *testing.T) {
 		t.Fatalf("workloads = %d, want 1", len(p.GetWorkloads()))
 	}
 	w := p.GetWorkloads()[0]
-	if !strings.HasPrefix(w.GetImage(), "ghcr.io/acme/api@sha256:") || w.GetProvider() != "docker" ||
+	if !strings.HasPrefix(w.GetImage(), "ghcr.io/acme/app@sha256:") || w.GetProvider() != "docker" ||
 		w.GetReleaseId() != release.String() || w.GetDeploymentId() != "d-1" ||
 		w.GetRuntime().GetHealth().GetPath() != "/healthz" || w.GetAppSlug() != "api" {
 		t.Errorf("workload = %v", w)

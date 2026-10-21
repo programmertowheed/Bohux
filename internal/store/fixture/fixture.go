@@ -123,6 +123,7 @@ func Release(t testing.TB, st *store.Store, tenant, app uuid.UUID, state string,
 		release, _, err = tx.Create(ctx, "releases",
 			[]store.Col{{Name: "app_id", Value: app}, {Name: "config_revision_id", Value: config}},
 			[]store.Col{{Name: "state", Value: state}, {Name: "artifact_digest", Value: "sha256:" + strings.Repeat("a", 64)},
+				{Name: "source_ref", Value: "ghcr.io/acme/app@sha256:" + strings.Repeat("a", 64)},
 				{Name: "artifact_available", Value: available}}, a)
 		return err
 	})
@@ -130,4 +131,24 @@ func Release(t testing.TB, st *store.Store, tenant, app uuid.UUID, state string,
 		t.Fatalf("create release fixture: %v", err)
 	}
 	return release
+}
+
+// Tenant creates a tenant with the given slug and returns its ID.
+func Tenant(t testing.TB, st *store.Store, slug string) uuid.UUID {
+	t.Helper()
+	tenant, err := store.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = st.InTenant(context.Background(), tenant, func(tx *store.Tx) error {
+		a := system
+		a.ResourceType = "bohux.v1.Tenant"
+		_, _, err := tx.Create(context.Background(), "tenants",
+			[]store.Col{{Name: "slug", Value: slug}}, []store.Col{{Name: "display_name", Value: slug}}, a)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("create tenant fixture: %v", err)
+	}
+	return tenant
 }

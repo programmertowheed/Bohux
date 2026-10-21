@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -338,11 +339,12 @@ func buildWorkload(ctx context.Context, tx *store.Tx, app uuid.UUID, in AssignIn
 	var (
 		env                     uuid.UUID
 		provider, digest, state string
+		sourceRef               string
 		available               bool
-		src, rt, secs           []byte
+		rt, secs                []byte
 	)
 	err = tx.QueryRow(ctx, `SELECT a.environment_id, er.provider, r.artifact_digest, r.state,
-		r.artifact_available, ar.source, ar.runtime, ar.secrets
+		r.artifact_available, r.source_ref, ar.runtime, ar.secrets
 		FROM releases_heads h
 		JOIN releases_revisions r ON r.id = h.revision_id
 		JOIN apps_revisions ar ON ar.id = h.config_revision_id
@@ -350,7 +352,7 @@ func buildWorkload(ctx context.Context, tx *store.Tx, app uuid.UUID, in AssignIn
 		JOIN environments_heads e ON e.id = a.environment_id
 		JOIN environments_revisions er ON er.id = e.revision_id
 		WHERE h.id = $1 AND h.app_id = $2 AND NOT h.deleted`, release, app).Scan(
-		&env, &provider, &digest, &state, &available, &src, &rt, &secs)
+		&env, &provider, &digest, &state, &available, &sourceRef, &rt, &secs)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, invalid("release does not exist for this app")
 	}
@@ -360,11 +362,7 @@ func buildWorkload(ctx context.Context, tx *store.Tx, app uuid.UUID, in AssignIn
 	if state != "ready" || !available {
 		return nil, invalid("release is not ready or its artifact is gone")
 	}
-	source := &bohuxv1.Source{}
 	runtime := &bohuxv1.Runtime{}
-	if err := loadJSON.Unmarshal(src, source); err != nil {
-		return nil, fmt.Errorf("decode app source: %w", err)
-	}
 	if err := loadJSON.Unmarshal(rt, runtime); err != nil {
 		return nil, fmt.Errorf("decode app runtime: %w", err)
 	}
@@ -374,16 +372,17 @@ func buildWorkload(ctx context.Context, tx *store.Tx, app uuid.UUID, in AssignIn
 	}
 	return &agentv1.Workload{
 		AppId: app.String(), EnvironmentId: env.String(), ReleaseId: in.ReleaseID,
-		DeploymentId: in.DeploymentID, Provider: provider, Image: imageRef(source, digest),
+		DeploymentId: in.DeploymentID, Provider: provider, Image: imageRef(sourceRef, digest),
 		Runtime: runtime, Secrets: secrets,
 	}, nil
 }
 
-// imageRef is what the provider runs: the pinned reference for an image source, or
-// the local image ID a build produced (ADR-0020 item 2).
-func imageRef(source *bohuxv1.Source, digest string) string {
-	if img := source.GetImage(); img != nil {
-		return img.GetRepository() + "@" + img.GetDigest()
+// imageRef is what the provider runs: the pinned reference an imported Release
+// records as its source_ref, or the local image ID a build produced (ADR-0020 item 2),
+// whose source_ref is a commit.
+func imageRef(sourceRef, digest string) string {
+	if strings.Contains(sourceRef, "@sha256:") {
+		return sourceRef
 	}
 	return digest
 }
