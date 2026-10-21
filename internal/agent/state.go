@@ -40,6 +40,7 @@ type identity struct {
 // State is a registered agent's identity and keys.
 type State struct {
 	identity
+	dir        string
 	cert       tls.Certificate
 	caPool     *x509.CertPool
 	sealingKey *ecdh.PrivateKey
@@ -111,7 +112,7 @@ func Load(dir string) (*State, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read identity: %w", err)
 	}
-	var st State
+	st := State{dir: dir}
 	if err := json.Unmarshal(idJSON, &st.identity); err != nil {
 		return nil, fmt.Errorf("decode identity: %w", err)
 	}

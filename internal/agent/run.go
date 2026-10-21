@@ -25,7 +25,9 @@ const (
 
 // RunOptions configure the agent's connection loop.
 type RunOptions struct {
-	State     *State
+	State *State
+	// Cache receives verified assignments and supplies Hello.applied_generation.
+	Cache     *Cache
 	Providers []*bohuxv1.ProviderDescriptor
 	// MinBackoff and MaxBackoff bound reconnect delays; zero means 1s and 1m.
 	MinBackoff, MaxBackoff time.Duration
@@ -95,10 +97,11 @@ func session(ctx context.Context, client agentv1connect.AgentServiceClient, o Ru
 
 	defer func() { _ = stream.CloseRequest() }()
 	if err := stream.Send(&agentv1.ConnectRequest{Msg: &agentv1.ConnectRequest_Hello{Hello: &agentv1.Hello{
-		NodeId:          o.State.NodeID(),
-		AgentVersion:    version.Version,
-		ProtocolVersion: version.Protocol,
-		Providers:       o.Providers,
+		NodeId:            o.State.NodeID(),
+		AgentVersion:      version.Version,
+		ProtocolVersion:   version.Protocol,
+		Providers:         o.Providers,
+		AppliedGeneration: o.Cache.Generation(),
 	}}}); err != nil {
 		return fmt.Errorf("send hello: %w", err)
 	}
@@ -145,10 +148,36 @@ func session(ctx context.Context, client agentv1connect.AgentServiceClient, o Ru
 			case *agentv1.ConnectResponse_VersionRejected:
 				return &rejectedError{m.VersionRejected}
 			case *agentv1.ConnectResponse_Ping:
+			case *agentv1.ConnectResponse_Assignment:
+				if err := accept(ctx, stream, o.Cache, m.Assignment); err != nil {
+					return err
+				}
 			default:
 				// Assignments, logs, and exec arrive from S4d on.
 				slog.DebugContext(ctx, "unhandled control-plane message", "type", fmt.Sprintf("%T", m))
 			}
 		}
 	}
+}
+
+// accept caches a verified, newer assignment and acknowledges it. A forged, foreign,
+// or stale assignment is logged and ignored: the cached one stays in force.
+func accept(ctx context.Context, stream interface {
+	Send(*agentv1.ConnectRequest) error
+}, c *Cache, a *agentv1.Assignment) error {
+	cached, err := c.Accept(a)
+	if err != nil {
+		slog.WarnContext(ctx, "assignment refused", "err", err)
+		return nil
+	}
+	if !cached {
+		return nil
+	}
+	gen := c.Generation()
+	slog.InfoContext(ctx, "assignment cached", "generation", gen)
+	if err := stream.Send(&agentv1.ConnectRequest{Msg: &agentv1.ConnectRequest_Ack{
+		Ack: &agentv1.Ack{Generation: gen}}}); err != nil {
+		return fmt.Errorf("send ack: %w", err)
+	}
+	return nil
 }

@@ -12,6 +12,8 @@ import (
 
 	"github.com/google/uuid"
 
+	agentv1 "github.com/bohumix/bohux/gen/bohux/agent/v1"
+	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/internal/agentapi"
 	"github.com/bohumix/bohux/internal/api"
 	"github.com/bohumix/bohux/internal/auth"
@@ -27,6 +29,7 @@ func (l liveRestore) LiveRestoreEnabled(context.Context) (bool, error) { return 
 // controlPlane is a real agent listener on a fresh database.
 type controlPlane struct {
 	t      *testing.T
+	srv    *agentapi.Server
 	st     *store.Store
 	pki    *pki.Authority
 	tenant uuid.UUID
@@ -61,7 +64,9 @@ func newControlPlane(t *testing.T, cpVersion string) *controlPlane {
 
 func (cp *controlPlane) serve(cpVersion, addr string) {
 	cp.t.Helper()
-	s := &agentapi.Server{Store: cp.st, PKI: cp.pki, Version: cpVersion, PingInterval: 50 * time.Millisecond}
+	s := &agentapi.Server{Store: cp.st, PKI: cp.pki, Version: cpVersion, PingInterval: 50 * time.Millisecond,
+		Secrets: fakeSecrets{"openbao:db": "postgres://u:hunter2@db/app"}}
+	cp.srv = s
 	tlsCfg, err := s.TLSConfig()
 	if err != nil {
 		cp.t.Fatal(err)
@@ -135,13 +140,33 @@ func (cp *controlPlane) register(t *testing.T, slug string) *State {
 	return st
 }
 
+type fakeSecrets map[string]string
+
+func (f fakeSecrets) Resolve(_ context.Context, _ uuid.UUID, handles []string) (map[string]string, error) {
+	out := map[string]string{}
+	for _, h := range handles {
+		out[h] = f[h]
+	}
+	return out, nil
+}
+
 // startRun runs the agent in the background; the returned func stops it and waits.
 func startRun(t *testing.T, st *State) func() {
+	t.Helper()
+	cache, err := OpenCache(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return startRunWith(t, st, cache)
+}
+
+func startRunWith(t *testing.T, st *State, cache *Cache) func() {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, RunOptions{State: st, MinBackoff: 20 * time.Millisecond, MaxBackoff: 100 * time.Millisecond})
+		done <- Run(ctx, RunOptions{State: st, Cache: cache,
+			MinBackoff: 20 * time.Millisecond, MaxBackoff: 100 * time.Millisecond})
 	}()
 	return func() {
 		cancel()
@@ -238,4 +263,73 @@ func TestRunSurvivesRejectionAndOutage(t *testing.T) {
 		cp.waitState(st.NodeID(), "online")
 		stop()
 	})
+}
+
+func TestAssignmentsReachTheCache(t *testing.T) {
+	ctx := context.Background()
+	cp := newControlPlane(t, "")
+	st := cp.register(t, "vps-1")
+	node := uuid.MustParse(st.NodeID())
+	system := store.Actor{ID: store.SystemActorID, Kind: store.ActorSystem}
+	work := []*agentv1.Workload{{AppId: "app-1", Provider: "docker",
+		Secrets: []*bohuxv1.SecretRef{{Key: "DATABASE_URL", Handle: "openbao:db"}}}}
+
+	cache, err := OpenCache(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := startRunWith(t, st, cache)
+	cp.waitState(st.NodeID(), "online")
+	if _, err := cp.srv.Assign(ctx, cp.tenant, node, work, system); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return cache.Generation() == 1 })
+	waitFor(t, func() bool { return cp.acked(node) == 1 })
+	vals, err := st.OpenSecrets(cache.Current().GetWorkloads()[0])
+	if err != nil || vals["DATABASE_URL"] != "postgres://u:hunter2@db/app" {
+		t.Fatalf("OpenSecrets = %v, %v", vals, err)
+	}
+	stop()
+
+	// Restart: the cache survives and the agent reports it, so nothing is re-sent;
+	// a newer generation still arrives.
+	again, err := OpenCache(st)
+	if err != nil || again.Generation() != 1 {
+		t.Fatalf("reopened cache: gen %d, %v", again.Generation(), err)
+	}
+	stop = startRunWith(t, st, again)
+	defer stop()
+	cp.waitState(st.NodeID(), "online")
+	if _, err := cp.srv.Assign(ctx, cp.tenant, node, work, system); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return again.Generation() == 2 })
+	waitFor(t, func() bool { return cp.acked(node) == 2 })
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met in time")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func (cp *controlPlane) acked(node uuid.UUID) int64 {
+	cp.t.Helper()
+	var acked *int64
+	err := cp.st.InTenant(context.Background(), cp.tenant, func(tx *store.Tx) error {
+		return tx.QueryRow(context.Background(), `SELECT acked_generation FROM nodes_heads WHERE id = $1`,
+			node).Scan(&acked)
+	})
+	if err != nil {
+		cp.t.Fatal(err)
+	}
+	if acked == nil {
+		return 0
+	}
+	return *acked
 }

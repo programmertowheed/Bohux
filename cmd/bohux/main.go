@@ -75,7 +75,11 @@ func runAgent(ctx context.Context, stateDir string) error {
 	if err != nil {
 		return err
 	}
-	return agent.Run(ctx, agent.RunOptions{State: st})
+	cache, err := agent.OpenCache(st)
+	if err != nil {
+		return err
+	}
+	return agent.Run(ctx, agent.RunOptions{State: st, Cache: cache})
 }
 
 // bootstrap migrates, then creates the tenant and its first token.

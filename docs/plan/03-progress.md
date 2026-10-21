@@ -38,28 +38,26 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S4d2 — agent assignment cache (⏳, next to start)
-- **Exact next step:** in `internal/agent`, verify incoming assignments (signature,
-  node id, generation), cache them atomically on disk, `Ack`, and send
-  `Hello.applied_generation` from the cache.
+- **Slice:** S4e — offline reconcile (⏳, next to start)
+- **Exact next step:** an `internal/agent` reconcile loop over the cached assignment
+  against a provider interface (Status/Apply/Destroy subset), with a fake provider.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S4d2 (agent assignment
-> cache) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0003, ADR-0008,
-> ADR-0024. In internal/agent: on Assignment, verify the signature with the stored
-> signing key (pki.VerifyAssignment) and key id, that the payload names this node, and
-> that its generation is higher than the cached one; otherwise ignore it with a
-> warning. Cache the signed Assignment atomically in the state dir (0600; secrets stay
-> sealed), re-verify it on load, Ack the generation, and send Hello.applied_generation
-> from the cache. Add a function that opens a workload's sealed secrets with the
-> sealing key, for the provider in S5, never logging values. Test against the real
-> control-plane listener on the local Postgres: assignment cached and acked, tampered
-> signature and wrong node rejected, older generation ignored, cache survives an agent
-> restart (applied_generation sent, no re-send), cache file holds no clear secret, and
-> sealed secrets open. Verify with build, vet, golangci-lint (also with the integration
-> tag) and tests. Tick boxes, update the tracker and the next session prompt, commit,
-> push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S4e (offline reconcile) on
+> branch `claude/relaxed-rubin-76m7dl`, following rule 1, ADR-0003, ADR-0007, and
+> docs/specs/provider-interface.md. Define the Go provider interface in `providers/`
+> exactly as the spec (Describe + seven verbs) with its types; do not implement Docker
+> yet. In internal/agent, add a reconcile loop that runs independently of the stream:
+> desired = cached assignment, observed = provider.Status, Apply until they match, on a
+> timer and when the cache changes; an empty cache changes nothing; a workload gone
+> from a non-empty assignment is Destroyed. Send StatusReports (generation, per-workload
+> state) on the stream when connected, and have the control plane close streams silent
+> for 3 report intervals (S4c1 note). Wire it into `bohux agent run`. Test with a fake
+> provider: converges, restarts a "crashed" workload with the control plane killed
+> (rule 1), empty cache destroys nothing, removal destroys. Verify with build, vet,
+> golangci-lint (also with the integration tag) and tests. Tick boxes, update the
+> tracker and the next session prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -336,9 +334,15 @@ Split into sub-slices, one session each.
 - [x] Pushed on `Connect` when the agent is behind and on every new generation; `Ack`
       recorded (unknown generations ignored). Tested over mTLS
 
-#### S4d2 — agent assignment cache ⏳
-- [ ] Verify (signature, key id, node, generation), cache atomically, `Ack`,
-      `Hello.applied_generation` from cache; open sealed secrets for the provider
+#### S4d2 — agent assignment cache ✅
+- [x] `agent.Cache`: verify (signature, key id, node), accept only newer generations,
+      cache atomically (0600, secrets still sealed), signal changes; `Ack`;
+      `Hello.applied_generation` from the cache; `State.OpenSecrets` for the provider
+- [x] A cache that no longer verifies is moved to `assignment.pb.corrupt` and the
+      agent starts empty and resyncs (ADR-0003). **Rule for S4e:** an empty cache means
+      "change nothing", never "remove every workload"
+- [x] Unit + integration tests: forged, foreign, stale refused; restart keeps the cache
+      and receives newer generations; secrets sealed at rest and open with the node key
 
 #### S4e — offline reconcile ⏳
 - [ ] Reconcile loop against the cached assignment with a fake provider; test with
@@ -412,7 +416,8 @@ Split into sub-slices, one session each.
 - Split S4 into S4a–S4e. S4a done: ADR-0024 proposed (O9).
 - S4c split; S4c1 done: control-plane `Connect` with skew policy and online state.
   S4c2 done: the agent process (`bohux agent register|run`).
-- S4d split; S4d1 done: assignments written, sealed, signed, pushed, acked.
+- S4d split; S4d1 done: assignments written, sealed, signed, pushed, acked. S4d2
+  done: the agent verifies, caches, and acks them.
 - S4b split into S4b1/S4b2, both done: `internal/pki`, NodeService, data dir, agent
   TLS listener, Register.
 - S3d done: `internal/secrets` redaction, access-log interceptor, rule 3 test.
