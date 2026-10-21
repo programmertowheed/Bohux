@@ -224,7 +224,7 @@ func TestResourceCommands(t *testing.T) {
 	}
 
 	// API tokens: created with the secret shown once, listed without it, revoked.
-	out = must("token", "create", "ci", "--role", "deployer", "--expires", "24h", "-o", "json")
+	out = must("token", "create", "ci", "--role", "deployer", "--expires", "24h", "-p", "shop", "-o", "json")
 	var tok struct {
 		APIToken struct {
 			Meta struct {
@@ -242,6 +242,11 @@ func TestResourceCommands(t *testing.T) {
 	}
 	if _, err := bohux("", "token", "create", "bad", "--role", "admin"); err == nil {
 		t.Error("an unknown role was accepted")
+	}
+	// BOHUX_PROJECT is set in this test's environment; without -p the token is
+	// tenant-wide all the same.
+	if out := must("token", "create", "wide", "--role", "viewer", "-o", "json"); strings.Contains(out, "project_id") {
+		t.Errorf("token create without -p was scoped by BOHUX_PROJECT:\n%s", out)
 	}
 	must("token", "revoke", tok.APIToken.Meta.ID)
 	if out := must("token", "list", "-o", "json"); !strings.Contains(out, "revoked_at") {

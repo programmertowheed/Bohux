@@ -35,7 +35,8 @@ const ResourceCommands = `  project list|create      projects
                            a project's deploy notifications; create reads the URL (or,
                            for email, mailto:a@x,b@y) from stdin
   audit list               who changed what, newest first (-p for one project)
-  token list|create|revoke API tokens; create prints the secret once (-p scopes it)`
+  token list|create|revoke API tokens; create prints the secret once; -p (not
+                           BOHUX_PROJECT) scopes it to a project`
 
 // IsResource reports whether cmd is a resource noun.
 func IsResource(cmd string) bool {
@@ -940,16 +941,6 @@ func (r *resource) channelList(ctx context.Context, args []string) error {
 	return r.emit(resp, channelHeader, rows)
 }
 
-// mailtoURL accepts "a@x, b@y" as well as "mailto:a@x,b@y".
-func mailtoURL(s string) string {
-	s = strings.TrimPrefix(strings.TrimSpace(s), "mailto:")
-	parts := strings.Split(s, ",")
-	for i := range parts {
-		parts[i] = strings.TrimSpace(parts[i])
-	}
-	return "mailto:" + strings.Join(parts, ",")
-}
-
 // channelCreate reads the URL from stdin: a chat webhook URL is a credential
 // (ADR-0038, ADR-0036 item 4). For email it is mailto:a@x,b@y (ADR-0043).
 func (r *resource) channelCreate(ctx context.Context, args []string) error {
@@ -985,9 +976,6 @@ func (r *resource) channelCreate(ctx context.Context, args []string) error {
 	u := strings.TrimSpace(string(raw))
 	if u == "" {
 		return errors.New("channel create: the URL on stdin is empty")
-	}
-	if k == bohuxv1.NotificationKind_NOTIFICATION_KIND_EMAIL {
-		u = mailtoURL(u)
 	}
 	project, err := r.projectID(ctx)
 	if err != nil {
@@ -1071,13 +1059,13 @@ func shortID(id string) string {
 	return id
 }
 
-// bytesHuman prints a byte count as KiB, MiB, or GiB.
 // --- token -----------------------------------------------------------------------
 
 var tokenHeader = []string{"ID", "NAME", "PROJECT", "ROLE", "EXPIRES", "LAST USED", "REVOKED"}
 
-func stamp(t interface{ AsTime() time.Time }, set bool) string {
-	if !set {
+// stamp prints a time in UTC, or "-" when it is unset.
+func stamp(t *timestamppb.Timestamp) string {
+	if t == nil {
 		return "-"
 	}
 	return t.AsTime().UTC().Format(time.RFC3339)
@@ -1097,8 +1085,7 @@ func tokenRow(t *bohuxv1.ApiToken, slugs map[string]string) []string {
 		}
 	}
 	return []string{t.GetMeta().GetId(), t.GetName(), project, roleName(t.GetRole()),
-		stamp(t.GetExpiresAt(), t.GetExpiresAt() != nil), stamp(t.GetLastUsedAt(), t.GetLastUsedAt() != nil),
-		stamp(t.GetRevokedAt(), t.GetRevokedAt() != nil)}
+		stamp(t.GetExpiresAt()), stamp(t.GetLastUsedAt()), stamp(t.GetRevokedAt())}
 }
 
 // projectSlugs maps the projects this token can see, by ID, to their slugs.
@@ -1158,7 +1145,11 @@ func (r *resource) tokenCreate(ctx context.Context, args []string) error {
 		return fmt.Errorf("token create: --expires must be positive: %w", ErrUsage)
 	}
 	req := &bohuxv1.CreateApiTokenRequest{Name: pos[0], Role: bohuxv1.Role(v), IdempotencyKey: r.key()}
-	if *r.t.project != "" {
+	// Only an explicit -p scopes the token: a BOHUX_PROJECT left in the environment for
+	// app commands must not quietly narrow it.
+	scoped := false
+	r.fs.Visit(func(f *flag.Flag) { scoped = scoped || f.Name == "p" })
+	if scoped && *r.t.project != "" {
 		if req.ProjectId, err = r.projectID(ctx); err != nil {
 			return err
 		}
@@ -1187,6 +1178,7 @@ func (r *resource) tokenRevoke(ctx context.Context, args []string) error {
 	return r.emit(resp.Msg, tokenHeader, [][]string{tokenRow(resp.Msg.GetApiToken(), r.projectSlugs(ctx))})
 }
 
+// bytesHuman prints a byte count as KiB, MiB, or GiB.
 func bytesHuman(n int64) string {
 	switch {
 	case n >= 1<<30:
