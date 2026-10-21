@@ -23,6 +23,11 @@ Adding a setting means adding it here in the same commit.
 | `--backup-dir` | `BOHUX_BACKUP_DIR` | `/var/lib/bohux-backups` | Where archives go, as `bohux-<UTC time>.backup`, mode 0600. Its own volume in the install. |
 | `--backup-schedule` | `BOHUX_BACKUP_SCHEDULE` | `17 3 * * *` | When, as a 5-field cron expression in UTC. |
 | `--backup-keep` | `BOHUX_BACKUP_KEEP` | `7` | How many archives stay; older ones are deleted after each successful backup, never after a failed one. |
+| `--smtp-addr` | `BOHUX_SMTP_ADDR` | empty | SMTP relay (`host:port`) for email notification channels (ADR-0043). Port 465 is implicit TLS; any other port must offer `STARTTLS`, or nothing is sent. The certificate is checked against the system roots. Empty: `EMAIL` channels are refused. |
+| `--smtp-from` | `BOHUX_SMTP_FROM` | none, required with an address | Sender address of notification mail. |
+| `--smtp-username` | `BOHUX_SMTP_USERNAME` | empty | SMTP username (`AUTH PLAIN`, only after TLS). |
+| `--smtp-password-file` | `BOHUX_SMTP_PASSWORD_FILE` | none | File holding the SMTP password, read once at start. |
+| (none) | `BOHUX_SMTP_PASSWORD` | none | The SMTP password itself, when no file is given (the control plane as an App). |
 
 On start it applies pending migrations, then serves. Temporal does not have to be up: the
 API serves without it, deploys are refused with `UNAVAILABLE` until it is reachable, and
@@ -171,8 +176,9 @@ the API's own JSON, and `--idempotency-key` for safe retries:
 - `secret list|set <KEY> [--app <app>]`: the value is read from stdin, never an argument
 - `webhook list|create|remove <app>` (`--branch`, `--flavor github|generic`): create
   prints the URL and the signing secret, once (ADR-0037)
-- `channel list|create|remove` (`--kind slack|discord|webhook`, `--state …`): the URL
-  is read from stdin (ADR-0038)
+- `channel list|create|remove` (`--kind slack|discord|webhook|email`, `--state …`): the
+  URL is read from stdin (ADR-0038); for `email`, the recipients, as `ops@example.com,
+  dev@example.com` or `mailto:…`, up to ten, through the install's relay (ADR-0043)
 
 ## `bohux mcp` (ADR-0018)
 

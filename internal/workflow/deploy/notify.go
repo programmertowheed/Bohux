@@ -139,5 +139,16 @@ func (a *Activities) NotifyChannel(ctx context.Context, in NotifyInput) error {
 			return fmt.Errorf("read channel signing secret: %w", err)
 		}
 	}
+	if kind == "email" {
+		to, err := notify.Recipients(ch.URL)
+		if err != nil {
+			return temporal.NewNonRetryableApplicationError("the channel's recipients are invalid", ErrTypeInvalid, nil)
+		}
+		if !a.Mail.Enabled() {
+			// The relay was removed after the channel was made; retrying cannot help.
+			return temporal.NewNonRetryableApplicationError("this install has no SMTP relay", ErrTypeInvalid, nil)
+		}
+		return notify.SendEmail(ctx, a.Mail, to, o)
+	}
 	return notify.Send(ctx, a.HTTP, ch, o)
 }

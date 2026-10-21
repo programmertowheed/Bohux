@@ -32,7 +32,8 @@ const ResourceCommands = `  project list|create      projects
   webhook list|create|remove
                            git push webhooks of an app; create prints the secret once
   channel list|create|remove
-                           a project's deploy notifications; create reads the URL from stdin
+                           a project's deploy notifications; create reads the URL (or,
+                           for email, mailto:a@x,b@y) from stdin
   audit list               who changed what, newest first (-p for one project)
   token list|create|revoke API tokens; create prints the secret once (-p scopes it)`
 
@@ -939,10 +940,20 @@ func (r *resource) channelList(ctx context.Context, args []string) error {
 	return r.emit(resp, channelHeader, rows)
 }
 
+// mailtoURL accepts "a@x, b@y" as well as "mailto:a@x,b@y".
+func mailtoURL(s string) string {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "mailto:")
+	parts := strings.Split(s, ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return "mailto:" + strings.Join(parts, ",")
+}
+
 // channelCreate reads the URL from stdin: a chat webhook URL is a credential
-// (ADR-0038, ADR-0036 item 4).
+// (ADR-0038, ADR-0036 item 4). For email it is mailto:a@x,b@y (ADR-0043).
 func (r *resource) channelCreate(ctx context.Context, args []string) error {
-	kind := r.fs.String("kind", "", "slack, discord, or webhook (required)")
+	kind := r.fs.String("kind", "", "slack, discord, webhook, or email (required)")
 	var states repeated
 	r.fs.Var(&states, "state", "deployment end state to post (succeeded, failed, rolled_back, cancelled); "+
 		"repeatable; default failed, rolled_back, cancelled")
@@ -951,9 +962,10 @@ func (r *resource) channelCreate(ctx context.Context, args []string) error {
 	}
 	k, ok := map[string]bohuxv1.NotificationKind{"slack": bohuxv1.NotificationKind_NOTIFICATION_KIND_SLACK,
 		"discord": bohuxv1.NotificationKind_NOTIFICATION_KIND_DISCORD,
-		"webhook": bohuxv1.NotificationKind_NOTIFICATION_KIND_WEBHOOK}[*kind]
+		"webhook": bohuxv1.NotificationKind_NOTIFICATION_KIND_WEBHOOK,
+		"email":   bohuxv1.NotificationKind_NOTIFICATION_KIND_EMAIL}[*kind]
 	if !ok {
-		return fmt.Errorf("channel create: --kind must be slack, discord, or webhook: %w", ErrUsage)
+		return fmt.Errorf("channel create: --kind must be slack, discord, webhook, or email: %w", ErrUsage)
 	}
 	var sts []bohuxv1.DeploymentState
 	for _, s := range states {
@@ -973,6 +985,9 @@ func (r *resource) channelCreate(ctx context.Context, args []string) error {
 	u := strings.TrimSpace(string(raw))
 	if u == "" {
 		return errors.New("channel create: the URL on stdin is empty")
+	}
+	if k == bohuxv1.NotificationKind_NOTIFICATION_KIND_EMAIL {
+		u = mailtoURL(u)
 	}
 	project, err := r.projectID(ctx)
 	if err != nil {

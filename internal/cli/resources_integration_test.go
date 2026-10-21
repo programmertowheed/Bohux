@@ -208,6 +208,11 @@ func TestResourceCommands(t *testing.T) {
 	if strings.Contains(out, "sekrit") || !strings.Contains(out, "hooks.slack.com") {
 		t.Errorf("channel create printed:\n%s", out)
 	}
+	// This test API has no SMTP relay: email channels are refused, naming why (ADR-0043).
+	if _, err := bohux("ops@example.com\n", "channel", "create", "--kind", "email"); err == nil ||
+		!strings.Contains(err.Error(), "SMTP") {
+		t.Errorf("email channel without a relay = %v", err)
+	}
 	if out := must("channel", "list"); !strings.Contains(out, "slack") || !strings.Contains(out, "failed") {
 		t.Errorf("channel list:\n%s", out)
 	}

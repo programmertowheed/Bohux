@@ -42,11 +42,10 @@ work is in right now*.
   (webhooks, channels, tokens, terminal not in the UI); S16 done
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** the remaining v0.2 items each need an owner decision or an ADR
-  first: Buildpacks/Nixpacks (O32), team invites (user accounts), web terminal (O29),
-  email notifications (SMTP settings), managed Postgres/Redis (a new resource type),
-  envelope encryption (per-environment keys). Next proposed: an ADR for envelope
-  encryption of secret values with OpenBao transit, the smallest of them. Buildpacks/Nixpacks needs an owner choice
+- **Exact next step:** every remaining v0.2 item needs a product call first (O35, O32,
+  O29). Until the owner answers, harden what exists: run the build e2e and the
+  self-deploy test where the disk allows (CI, via a PR: O24), and keep testing flows on
+  a live install, which found three bugs this session. Buildpacks/Nixpacks needs an owner choice
   (O32); team invites need user accounts (identity model): ask the owner first.
 
 ## Next session prompt
@@ -94,6 +93,8 @@ work is in right now*.
 | O31 | Git host keys for deploy-key fetches: trusted on first use per node and pinned in `<state>/builds/known_hosts` (now). Alternative: a known_hosts secret per environment, refusing unknown hosts | S17 |
 | O32 | Buildpacks or Nixpacks (v0.2 "auto-detect builds"): which builder, and is the extra builder image on the node acceptable (ADR-0011 item 7 lists Dockerfile only) | next v0.2 item |
 | O33 | Accept or reject ADR-0042 (refines ADR-0031: a release cancels its fallback only when healthy while the control plane accepts the agent; found when a new control plane refused its own agent) | S15 check |
+| O34 | Accept or reject ADR-0043 (email notifications: `EMAIL` channels with a `mailto:` list in OpenBao; one SMTP relay per install, TLS required). Adds a proto enum value, migration 00022, four control-plane settings | S19 |
+| O35 | Remaining v0.2 items need a product call before code: **managed Postgres/Redis** (needs app-to-app networking in an environment, which does not exist: each App is its own Compose network; plus image pinning, volume lifecycle, backups); **envelope encryption** (what threat beyond OpenBao's own barrier: crypto-shredding environments? its backups then need the keys); **team invites** (user accounts); **Buildpacks/Nixpacks** (O32); **web terminal** (O29) | next v0.2 items |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -1055,6 +1056,20 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 - [x] The binary did not build for macOS (S16 `statfs` types); fixed, and CI now
       cross-builds for macOS
 
+### S19 — Email notifications (ADR-0043) ✅
+- [x] Proposed ADR-0043 (O34): `EMAIL` channel kind, recipients as a `mailto:` URL kept
+      in OpenBao like any channel URL; one relay per install (`--smtp-*`), TLS always
+      (465 implicit, otherwise STARTTLS or nothing is sent), password from a file or the
+      control plane App's secret
+- [x] Proto enum value, migration 00022 (kind check), API (refused without a relay,
+      `mailto:` parsed: no headers, no display names, at most ten; the list shows
+      domains), deploy activity (non-retryable without a relay), control-plane flags,
+      installer variables, CLI `--kind email` (plain addresses accepted), UI kind
+- [x] Tests: a fake SMTP relay (`internal/notify/smtptest`): STARTTLS before anything,
+      AUTH only after TLS, implicit TLS, a relay without STARTTLS gets no credentials, an
+      untrusted certificate fails before auth; recipients parsing; API; the activity
+      end to end; flags; config
+
 ## Known gaps and notes
 - **CI has not run on this branch.** `ci.yml` triggers on pushes to `main` and on
   pull requests; there is no PR for `claude/relaxed-rubin-76m7dl`, so every check so
@@ -1156,6 +1171,8 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   applied).
 - S18: interactive exec (`-i`, `-t`), conformance case; found and fixed logs/exec
   missing slotted Apps, and the macOS build.
+- S19: email notifications (ADR-0043 proposed, O34). O35 lists what the rest of v0.2
+  needs decided.
 - **Next:** see Current focus.
 
 ### 2026-10-21 (auto run, S9e–S9f) — branch `claude/relaxed-rubin-76m7dl`

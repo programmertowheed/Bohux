@@ -18,6 +18,7 @@ import (
 	agentv1 "github.com/bohumix/bohux/gen/bohux/agent/v1"
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/internal/agentapi"
+	"github.com/bohumix/bohux/internal/notify"
 	"github.com/bohumix/bohux/internal/store"
 )
 
@@ -54,6 +55,8 @@ type Activities struct {
 	Secrets SecretReader
 	// HTTP posts notifications; nil means http.DefaultClient.
 	HTTP *http.Client
+	// Mail is the SMTP relay for EMAIL channels (ADR-0043); the zero value has none.
+	Mail notify.SMTP
 }
 
 // RecordStart writes the Deployment row if it is absent (ADR-0026 item 3), records the

@@ -99,6 +99,14 @@ export function Webhooks({ appId }: { appId: string }) {
   );
 }
 
+// target is what CreateNotificationChannel takes: the URL, or for email a mailto:
+// list, from "a@x, b@y" as `bohux channel create --kind email` accepts (ADR-0043).
+function target(kind: NotificationKind, raw: string): string {
+  if (kind !== NotificationKind.EMAIL) return raw.trim();
+  const list = raw.trim().replace(/^mailto:/, "").split(",").map((a) => a.trim());
+  return "mailto:" + list.join(",");
+}
+
 // The end states a channel can post, as `bohux channel create --state` names them.
 const endStates = [DeploymentState.SUCCEEDED, DeploymentState.FAILED, DeploymentState.ROLLED_BACK, DeploymentState.CANCELLED];
 
@@ -147,7 +155,7 @@ export function Channels({ projectId }: { projectId: string }) {
               e.preventDefault();
               setError(undefined);
               try {
-                const r = await create.mutateAsync({ projectId, kind, url: url.trim(), states, idempotencyKey: key() });
+                const r = await create.mutateAsync({ projectId, kind, url: target(kind, url), states, idempotencyKey: key() });
                 setURL("");
                 if (r.signingSecret) setSecret(r.signingSecret);
                 await qc.invalidateQueries();
@@ -161,10 +169,12 @@ export function Channels({ projectId }: { projectId: string }) {
                   <option value={NotificationKind.SLACK}>Slack</option>
                   <option value={NotificationKind.DISCORD}>Discord</option>
                   <option value={NotificationKind.WEBHOOK}>Webhook</option>
+                  <option value={NotificationKind.EMAIL}>Email</option>
                 </select>
               </Field>
-              <Field id="chan-url" label="URL (kept secret, never shown again)">
-                <input id="chan-url" type="password" autoComplete="off" className={input} value={url}
+              <Field id="chan-url" label={kind === NotificationKind.EMAIL
+                ? "Recipients, comma-separated (kept secret)" : "URL (kept secret, never shown again)"}>
+                <input id="chan-url" type={kind === NotificationKind.EMAIL ? "text" : "password"} autoComplete="off" className={input} value={url}
                   onChange={(e) => setURL(e.target.value)} />
               </Field>
               <fieldset className="flex gap-3 text-sm">

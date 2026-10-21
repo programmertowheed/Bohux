@@ -24,7 +24,7 @@ message NotificationChannel {
   // Terminal deployment states posted. Empty on create means FAILED, ROLLED_BACK, and
   // CANCELLED: the ones that need a human.
   repeated DeploymentState states = 4 [(google.api.field_behavior) = IMMUTABLE];
-  // The URL's host, e.g. "hooks.slack.com".
+  // The URL's host, e.g. "hooks.slack.com"; for EMAIL, the recipients' domains.
   string url_host = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
@@ -36,6 +36,8 @@ enum NotificationKind {
   NOTIFICATION_KIND_DISCORD = 2;
   // Any HTTPS endpoint: a JSON summary of the outcome, signed with X-Bohux-Signature.
   NOTIFICATION_KIND_WEBHOOK = 3;
+  // Mail through the install's SMTP relay (ADR-0043); the url is mailto:a@x,b@y.
+  NOTIFICATION_KIND_EMAIL = 4;
 }
 
 service NotificationService {
@@ -53,7 +55,8 @@ service NotificationService {
 message CreateNotificationChannelRequest {
   string project_id = 1 [(google.api.field_behavior) = REQUIRED];
   NotificationKind kind = 2 [(google.api.field_behavior) = REQUIRED];
-  // https:// only. Written to OpenBao; never returned.
+  // https:// only; for EMAIL, mailto: with one to ten plain addresses. Written to
+  // OpenBao; never returned.
   string url = 3 [
     (google.api.field_behavior) = REQUIRED,
     (google.api.field_behavior) = INPUT_ONLY,

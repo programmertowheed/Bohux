@@ -6,18 +6,21 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/bohumix/bohux/internal/notify"
+	"github.com/bohumix/bohux/internal/notify/smtptest"
 	"github.com/bohumix/bohux/internal/secrets/openbao"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/store/fixture"
@@ -137,5 +140,24 @@ func TestNotifyActivities(t *testing.T) {
 	}
 	if len(posts) != 2 {
 		t.Errorf("posted to %d channels, want 2", len(posts))
+	}
+
+	// EMAIL channels go through the install's relay (ADR-0043).
+	email := channel(project, "email", "", "", "rolled_back")
+	secrets[notify.URLPath(h.tenant, email)] = "mailto:ops@example.com,dev@example.org"
+	c := n
+	c.ChannelID = email.String()
+	if _, err := h.env.ExecuteActivity(h.acts.NotifyChannel, c); !isType(err, ErrTypeInvalid) {
+		t.Errorf("email without a relay = %v, want a non-retryable error", err)
+	}
+	relay := smtptest.Start(t, smtptest.StartTLS)
+	h.acts.Mail = notify.SMTP{Addr: relay.Addr, From: "bohux@example.com", TLS: &tls.Config{RootCAs: relay.Roots}}
+	if _, err := h.env.ExecuteActivity(h.acts.NotifyChannel, c); err != nil {
+		t.Fatalf("NotifyChannel email: %v", err)
+	}
+	seen := relay.Seen()
+	if len(seen.Rcpt) != 2 || !strings.Contains(seen.Data, "Subject: [Bohux] ") ||
+		!strings.Contains(seen.Data, "/api: deployment rolled back") || !strings.Contains(seen.Data, ReasonHealthTimeout) {
+		t.Errorf("relay saw rcpt %v, data %q", seen.Rcpt, seen.Data)
 	}
 }

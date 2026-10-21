@@ -114,3 +114,16 @@ func TestBytesHuman(t *testing.T) {
 		}
 	}
 }
+
+func TestMailtoURL(t *testing.T) {
+	tests := map[string]string{
+		"ops@example.com":                      "mailto:ops@example.com",
+		" ops@example.com, dev@example.org ":   "mailto:ops@example.com,dev@example.org",
+		"mailto:ops@example.com,dev@x.example": "mailto:ops@example.com,dev@x.example",
+	}
+	for in, want := range tests {
+		if got := mailtoURL(in); got != want {
+			t.Errorf("mailtoURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

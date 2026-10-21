@@ -32,6 +32,7 @@ var (
 		bohuxv1.NotificationKind_NOTIFICATION_KIND_SLACK:   "slack",
 		bohuxv1.NotificationKind_NOTIFICATION_KIND_DISCORD: "discord",
 		bohuxv1.NotificationKind_NOTIFICATION_KIND_WEBHOOK: "webhook",
+		bohuxv1.NotificationKind_NOTIFICATION_KIND_EMAIL:   "email",
 	}
 	terminalStates = map[bohuxv1.DeploymentState]string{
 		bohuxv1.DeploymentState_DEPLOYMENT_STATE_SUCCEEDED:   "succeeded",
@@ -43,8 +44,16 @@ var (
 )
 
 // channelURL checks the URL without ever putting it in an error (rule 3): https only,
-// so the control plane never posts to a plain-HTTP service beside it.
-func channelURL(raw string) (host string, err error) {
+// so the control plane never posts to a plain-HTTP service beside it; for email, a
+// mailto: list whose domains are shown (ADR-0043).
+func channelURL(kind, raw string) (host string, err error) {
+	if kind == "email" {
+		to, rerr := notify.Recipients(raw)
+		if rerr != nil {
+			return "", invalidArgument("url", "INVALID", "url must be mailto: with one to ten plain addresses: "+rerr.Error())
+		}
+		return notify.Domains(to), nil
+	}
 	u, perr := url.Parse(raw)
 	if perr != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
 		return "", invalidArgument("url", "INVALID", "url must be an https:// URL without credentials")
@@ -64,9 +73,13 @@ func (ns *notificationService) CreateNotificationChannel(ctx context.Context, re
 	}
 	kind, ok := channelKinds[msg.GetKind()]
 	if !ok {
-		return nil, invalidArgument("kind", "REQUIRED", "kind must be slack, discord, or webhook")
+		return nil, invalidArgument("kind", "REQUIRED", "kind must be slack, discord, webhook, or email")
 	}
-	host, err := channelURL(msg.GetUrl())
+	if kind == "email" && !ns.s.MailRelay {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			errors.New("this install has no SMTP relay; its operator sets --smtp-addr (ADR-0043)"))
+	}
+	host, err := channelURL(kind, msg.GetUrl())
 	if err != nil {
 		return nil, err
 	}

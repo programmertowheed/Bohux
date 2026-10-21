@@ -67,6 +67,11 @@ const (
 	envBackupKeep      = "BOHUX_BACKUP_KEEP"
 	envIngressSocket   = "BOHUX_INGRESS_ADMIN_SOCKET"
 	envACMEEmail       = "BOHUX_ACME_EMAIL"
+	envSMTPAddr        = "BOHUX_SMTP_ADDR"
+	envSMTPFrom        = "BOHUX_SMTP_FROM"
+	envSMTPUsername    = "BOHUX_SMTP_USERNAME"
+	envSMTPPassword    = "BOHUX_SMTP_PASSWORD_FILE"
+	envSMTPPasswordVal = "BOHUX_SMTP_PASSWORD"
 
 	defaultListenAddr      = "127.0.0.1:7400"
 	defaultAgentListenAddr = "127.0.0.1:7443"
@@ -279,6 +284,12 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 				return fmt.Errorf("controlplane: %s: %w", envBackupKeep, err)
 			}
 		}
+		smtpAddr := fs.String("smtp-addr", getenv(envSMTPAddr),
+			"SMTP relay host:port for email notifications; 465 is TLS, others need STARTTLS; empty disables email (env "+envSMTPAddr+")")
+		smtpFrom := fs.String("smtp-from", getenv(envSMTPFrom), "sender address of notification mail (env "+envSMTPFrom+")")
+		smtpUser := fs.String("smtp-username", getenv(envSMTPUsername), "SMTP username (env "+envSMTPUsername+")")
+		smtpPass := fs.String("smtp-password-file", getenv(envSMTPPassword),
+			"file holding the SMTP password (env "+envSMTPPassword+", or the value in "+envSMTPPasswordVal+")")
 		if err := fs.Parse(args[1:]); err != nil {
 			return fmt.Errorf("controlplane: %w", err)
 		}
@@ -291,6 +302,9 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 		if *backupKeep < 1 {
 			return fmt.Errorf("controlplane: --backup-keep must be at least 1")
 		}
+		if *smtpAddr != "" && *smtpFrom == "" {
+			return fmt.Errorf("controlplane: --smtp-from or %s is required with --smtp-addr", envSMTPFrom)
+		}
 		if *baoAddr != "" && *baoToken == "" && getenv(envOpenBaoTokenVal) == "" {
 			return fmt.Errorf("controlplane: --openbao-token-file, %s, or %s is required with --openbao-address",
 				envOpenBaoToken, envOpenBaoTokenVal)
@@ -300,7 +314,9 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 			DeployHealthTimeout: *healthTimeout, OpenBaoAddress: *baoAddr, OpenBaoTokenFile: *baoToken,
 			OpenBaoMount: *baoMount, OpenBaoToken: getenv(envOpenBaoTokenVal),
 			Backup: controlplane.BackupConfig{Recipient: *backupRecipient, DatabaseURL: *backupDB,
-				Dir: *backupDir, Schedule: *backupSchedule, Keep: *backupKeep}}
+				Dir: *backupDir, Schedule: *backupSchedule, Keep: *backupKeep},
+			Mail: controlplane.MailConfig{Addr: *smtpAddr, From: *smtpFrom, Username: *smtpUser,
+				PasswordFile: *smtpPass, Password: getenv(envSMTPPasswordVal)}}
 		if err := d.runControlPlane(ctx, cfg); err != nil {
 			return fmt.Errorf("controlplane: %w", err)
 		}

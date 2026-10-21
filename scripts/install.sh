@@ -27,6 +27,10 @@
 #                      its private key off this host (docs/runbooks/backup-and-restore.md).
 #                      Empty: no nightly backups. Archives land in the
 #                      bohux-backups volume (/var/lib/docker/volumes/bohux-backups/_data)
+#   BOHUX_SMTP_ADDR, BOHUX_SMTP_FROM, BOHUX_SMTP_USERNAME, BOHUX_SMTP_PASSWORD
+#                      SMTP relay for email notifications (ADR-0043): host:port (465
+#                      is TLS; others must offer STARTTLS) and the sender address.
+#                      Empty: no email channels
 #
 # It writes, all readable (rule 2): $BOHUX_ETC/infra/compose.yaml and friends, the
 # agent unit, and, through the agent, the control plane App's Compose file. Secrets go
@@ -159,6 +163,11 @@ cp_env=(-e "BOHUX_DATABASE_URL=$db_url" -e BOHUX_TEMPORAL_ADDRESS=temporal:7233
 health_timeout="${BOHUX_DEPLOY_HEALTH_TIMEOUT:-}"
 [[ -z "$health_timeout" ]] || cp_env+=(-e "BOHUX_DEPLOY_HEALTH_TIMEOUT=$health_timeout")
 backup_recipient="${BOHUX_BACKUP_RECIPIENT:-}"
+smtp_addr="${BOHUX_SMTP_ADDR:-}"
+if [[ -n "$smtp_addr" && -z "${BOHUX_SMTP_FROM:-}" ]]; then
+  echo "install: BOHUX_SMTP_FROM is required with BOHUX_SMTP_ADDR" >&2
+  exit 2
+fi
 backup_db_url="postgres://bohux_backup:${BOHUX_BACKUP_PASSWORD}@postgres:5432/bohux_app?sslmode=disable"
 
 if [[ -f "$etc/installed" ]] && curl -fsS "$api/healthz" >/dev/null 2>&1; then
@@ -245,7 +254,11 @@ $(secret BOHUX_OPENBAO_ADDR http://openbao:8200)
 $(secret BOHUX_OPENBAO_TOKEN "$BAO_TOKEN")
 $([[ -z "$health_timeout" ]] || secret BOHUX_DEPLOY_HEALTH_TIMEOUT "$health_timeout")
 $([[ -z "$backup_recipient" ]] || secret BOHUX_BACKUP_RECIPIENT "$backup_recipient")
-$([[ -z "$backup_recipient" ]] || secret BOHUX_BACKUP_DATABASE_URL "$backup_db_url")")"
+$([[ -z "$backup_recipient" ]] || secret BOHUX_BACKUP_DATABASE_URL "$backup_db_url")
+$([[ -z "$smtp_addr" ]] || secret BOHUX_SMTP_ADDR "$smtp_addr")
+$([[ -z "$smtp_addr" ]] || secret BOHUX_SMTP_FROM "$BOHUX_SMTP_FROM")
+$([[ -z "$smtp_addr" || -z "${BOHUX_SMTP_USERNAME:-}" ]] || secret BOHUX_SMTP_USERNAME "$BOHUX_SMTP_USERNAME")
+$([[ -z "$smtp_addr" || -z "${BOHUX_SMTP_PASSWORD:-}" ]] || secret BOHUX_SMTP_PASSWORD "$BOHUX_SMTP_PASSWORD")")"
 
 app="$(call AppService/GetApp "{\"slug\": {\"environmentId\": \"$env_id\", \"slug\": \"controlplane\"}}" 2>/dev/null | jq -r .app.meta.id || true)"
 if [[ -z "$app" || "$app" == null ]]; then

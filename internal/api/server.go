@@ -35,6 +35,9 @@ type Server struct {
 	Agents NodeAgents
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
+	// MailRelay reports whether the install has an SMTP relay; EMAIL channels need one
+	// (ADR-0043).
+	MailRelay bool
 }
 
 // NodeAgents is what the API needs from the agent endpoint; agentapi.Server

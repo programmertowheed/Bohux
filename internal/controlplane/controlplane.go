@@ -24,6 +24,7 @@ import (
 	"github.com/bohumix/bohux/internal/agentapi"
 	"github.com/bohumix/bohux/internal/api"
 	"github.com/bohumix/bohux/internal/auth"
+	"github.com/bohumix/bohux/internal/notify"
 	"github.com/bohumix/bohux/internal/pki"
 	"github.com/bohumix/bohux/internal/secrets/openbao"
 	"github.com/bohumix/bohux/internal/store"
@@ -66,6 +67,46 @@ type Config struct {
 	// Backup configures the nightly backup schedule (ADR-0033). An empty Recipient
 	// disables it, and removes a schedule an earlier configuration created.
 	Backup BackupConfig
+	// Mail is the SMTP relay for EMAIL notification channels (ADR-0043). An empty
+	// Addr disables email.
+	Mail MailConfig
+}
+
+// MailConfig is the install's SMTP relay (ADR-0043).
+type MailConfig struct {
+	// Addr is host:port; port 465 is implicit TLS, any other must offer STARTTLS.
+	Addr     string
+	From     string
+	Username string
+	// PasswordFile holds the relay password; Password is used when no file is given
+	// (the control plane as an App gets it as a secret env var). Never logged.
+	PasswordFile string
+	Password     string
+}
+
+// relay resolves the mail configuration, reading the password file.
+func (m MailConfig) relay() (notify.SMTP, error) {
+	if m.Addr == "" {
+		return notify.SMTP{}, nil
+	}
+	if _, _, err := net.SplitHostPort(m.Addr); err != nil {
+		return notify.SMTP{}, fmt.Errorf("SMTP address: %w", err)
+	}
+	if m.From == "" {
+		return notify.SMTP{}, errors.New("an SMTP relay needs a sender address")
+	}
+	password := m.Password
+	if m.PasswordFile != "" {
+		raw, err := os.ReadFile(m.PasswordFile)
+		if err != nil {
+			return notify.SMTP{}, fmt.Errorf("read SMTP password file: %w", err)
+		}
+		password = strings.TrimSpace(string(raw))
+	}
+	if m.Username != "" && password == "" {
+		return notify.SMTP{}, errors.New("an SMTP username needs a password")
+	}
+	return notify.SMTP{Addr: m.Addr, From: m.From, Username: m.Username, Password: password}, nil
 }
 
 // BackupConfig is the nightly backup's configuration (ADR-0033).
@@ -151,6 +192,10 @@ func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 		secretBackend = bao
 		agents.Secrets = &openbao.Resolver{Store: st, Bao: bao}
 	}
+	mail, err := cfg.Mail.relay()
+	if err != nil {
+		return fmt.Errorf("controlplane: %w", err)
+	}
 	var backups *backupwf.Activities
 	if b := cfg.Backup; b.Recipient != "" {
 		backups = &backupwf.Activities{Recipient: b.Recipient, DatabaseURL: b.DatabaseURL, Bao: bao,
@@ -161,7 +206,7 @@ func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 	workers.Add(2)
 	go func() {
 		defer workers.Done()
-		acts := &deploy.Activities{Store: st, Agents: agents, Builds: agents}
+		acts := &deploy.Activities{Store: st, Agents: agents, Builds: agents, Mail: mail}
 		if bao != nil {
 			// Notification channels' URLs live in OpenBao (ADR-0038).
 			acts.Secrets = bao
@@ -186,7 +231,7 @@ func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 		Handler: h2c.NewHandler(newMux(st, (&api.Server{
 			Store: st, Authn: &auth.Authenticator{Store: st}, PKI: authority,
 			Deploys: &deploy.Starter{Client: temporal, HealthTimeout: cfg.DeployHealthTimeout},
-			Agents:  agents, Secrets: secretBackend,
+			Agents:  agents, Secrets: secretBackend, MailRelay: mail.Enabled(),
 		}).Mount), &http2.Server{}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

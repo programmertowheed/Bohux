@@ -86,6 +86,39 @@ func TestNotificationChannels(t *testing.T) {
 		t.Errorf("the URL reached Postgres (%d, %v)", leaked, err)
 	}
 
+	// EMAIL needs the install's relay (ADR-0043).
+	_, err = create(h.root, "mail-norelay", bohuxv1.NotificationKind_NOTIFICATION_KIND_EMAIL, "mailto:ops@example.com")
+	wantCode(t, err, connect.CodeFailedPrecondition)
+	relayed := httptest.NewServer(func() http.Handler {
+		m := http.NewServeMux()
+		(&Server{Store: h.st, Authn: &auth.Authenticator{Store: h.st}, PKI: h.pki, Secrets: bao, MailRelay: true}).Mount(m)
+		return m
+	}())
+	t.Cleanup(relayed.Close)
+	mailCh := bohuxv1connect.NewNotificationServiceClient(relayed.Client(), relayed.URL)
+	mailCreate := func(key, url string) (*bohuxv1.CreateNotificationChannelResponse, error) {
+		r, err := mailCh.CreateNotificationChannel(ctx, req(h.root, &bohuxv1.CreateNotificationChannelRequest{
+			ProjectId: project.String(), Kind: bohuxv1.NotificationKind_NOTIFICATION_KIND_EMAIL, Url: url, IdempotencyKey: key}))
+		if err != nil {
+			return nil, err
+		}
+		return r.Msg, nil
+	}
+	for i, bad := range []string{"https://example.com", "mailto:ops@example.com?bcc=spy@evil.example", "mailto:Ops <ops@example.com>"} {
+		_, err := mailCreate("mail-bad"+string(rune('a'+i)), bad)
+		wantCode(t, err, connect.CodeInvalidArgument)
+		if err != nil && strings.Contains(err.Error(), "evil") {
+			t.Errorf("the error repeats the URL: %v", err)
+		}
+	}
+	mailed, err := mailCreate("mail", "mailto:ops@example.com,dev@example.org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := mailed.GetChannel(); c.GetUrlHost() != "example.com,example.org" || mailed.GetSigningSecret() != "" {
+		t.Errorf("email channel = %v", c)
+	}
+
 	c := slack.GetChannel()
 	if _, err := ch.DeleteNotificationChannel(ctx, req(h.root, &bohuxv1.DeleteNotificationChannelRequest{Id: c.GetMeta().GetId(),
 		ExpectedRevisionId: c.GetMeta().GetRevisionId(), IdempotencyKey: "del"})); err != nil {
