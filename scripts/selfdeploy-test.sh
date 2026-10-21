@@ -94,21 +94,12 @@ done
 
 # --- An App on a route, through the node's ingress (ADR-0034) ------------------------
 log "serving an App on https://hello.localhost through the ingress"
-api="$BOHUX_API_URL"
-call() {
-  curl -fsS -H "Authorization: Bearer $BOHUX_TOKEN" -H 'Content-Type: application/json' -d "$2" "$api/bohux.v1.$1"
-}
-node="$(call NodeService/ListNodes '{}' | jq -r '.nodes[0].meta.id')"
-project="$(call ProjectService/CreateProject '{"slug": "demo", "displayName": "Demo", "idempotencyKey": "selfdeploy-demo"}' |
-  jq -r .project.meta.id)"
-env_id="$(call EnvironmentService/CreateEnvironment "{\"projectId\": \"$project\", \"slug\": \"prod\",
-  \"providerBinding\": {\"provider\": \"docker\", \"nodeId\": \"$node\"}, \"idempotencyKey\": \"selfdeploy-env\"}" |
-  jq -r .environment.meta.id)"
-call AppService/CreateApp "$(jq -n --arg e "$env_id" --arg r "${hello%@*}" --arg d "${hello#*@}" '{
-  environmentId: $e, slug: "hello", idempotencyKey: "selfdeploy-hello",
-  source: {image: {repository: $r, digest: $d}},
-  runtime: {replicas: 1, ports: [{containerPort: 8080}], health: {path: "/", port: 8080}},
-  routes: [{host: "hello.localhost", port: 8080}]}')" >/dev/null
+# Set up with the CLI (ADR-0036), as a user would.
+node="$("$bin" node list -o json | jq -r '.nodes[0].slug')"
+"$bin" project create demo --name Demo >/dev/null
+BOHUX_PROJECT=demo "$bin" env create prod --node "$node" >/dev/null
+BOHUX_PROJECT=demo "$bin" app create hello -e prod --image "$hello" --port 8080 --health / \
+  --route hello.localhost >/dev/null
 BOHUX_PROJECT=demo "$bin" deploy hello -e prod --image "$hello" --reason selfdeploy || die "deploying an App with a route"
 https_port="${BOHUX_HTTPS_PORT:-443}"
 body="$(curl -fsSk --resolve "hello.localhost:$https_port:127.0.0.1" "https://hello.localhost:$https_port/")" ||

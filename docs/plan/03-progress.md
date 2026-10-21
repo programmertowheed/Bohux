@@ -38,11 +38,12 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S11 — the CLI covers the API (🔄)
+- **Slice:** S12 — next v0.2 item, not split yet (⏳)
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** switch `scripts/selfdeploy-test.sh` (and the installer where it
-  can) from `curl` to the new CLI commands; run the self-deploy test.
+- **Exact next step:** pick the next v0.2 item with the owner (candidates: Git push /
+  webhook triggers, notifications, MCP server, read-only web UI over the API) and
+  split it here.
 
 ## Next session prompt
 
@@ -855,7 +856,7 @@ Shape: ADR-0034 (O20). Split into sub-slices, one session each.
 - [x] Self-deploy test: a second deploy of `hello` while a client polls every 100 ms:
       **127 requests, none failed** (passed here, with everything before it)
 
-### S11 — The CLI covers the API (ADR-0036) 🔄
+### S11 — The CLI covers the API (ADR-0036) ✅
 Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 
 - [x] Proposed ADR-0036 (O22): `bohux <noun> <verb>`, `-o json` = the API's protojson,
@@ -863,8 +864,12 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 - [x] `project list|create`, `env list|create --node`, `app list|show|create`,
       `route list|add|remove`, `secret list|set [--app]`, `node list|token`; unit
       tests and an integration test against a real API server (OpenBao included)
-- [ ] The self-deploy test and the installer use the CLI instead of `curl` where a
-      command exists
+- [x] The self-deploy test sets up its App with the CLI (checked here against a live
+      install: project, env, app with a route, deploy, served over HTTPS). The installer
+      keeps `curl`: it runs before any CLI config exists and sets provider options and
+      secret refs, which `app create` does not take
+- Not covered yet (no command): role bindings, API tokens, app update of source and
+  runtime, environment and project update/delete, node revoke. Add with the UI work
 
 ## Known gaps and notes
 - **`buf.lock` missing.** Whoever has registry access (CI, or a local machine) runs
@@ -961,7 +966,8 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   route. ADR-0035 (zero-downtime) proposed (O21).
 - S10f done: zero-downtime deploys by slots; 127 polled requests, none failed. S10 done.
 - S11 started: ADR-0036 proposed (O22), resource commands with tests.
-- **Next:** finish S11.
+- S11 done: the CLI covers the API's main resources; the self-deploy test uses it.
+- **Next:** S12 (to be chosen and split).
 
 ### 2026-10-21 (auto run 2, S6a) — branch `claude/relaxed-rubin-76m7dl`
 - Owner asked again for an automatic run, slice after slice, until the session ends.
