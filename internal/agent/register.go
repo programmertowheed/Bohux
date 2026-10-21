@@ -27,14 +27,24 @@ import (
 	"github.com/bohumix/bohux/internal/version"
 )
 
-// LiveRestoreChecker reports whether the container runtime keeps containers running
-// across its own restarts (ADR-0020 item 9).
-type LiveRestoreChecker interface {
+// DockerChecker checks the node's Docker before registration: live-restore keeps
+// containers running across dockerd restarts (ADR-0020 item 9), and buildx builds
+// Releases (ADR-0028).
+type DockerChecker interface {
 	LiveRestoreEnabled(ctx context.Context) (bool, error)
+	BuildxAvailable(ctx context.Context) error
 }
 
-// DockerCLI checks live-restore with `docker info`.
+// DockerCLI checks Docker through its CLI.
 type DockerCLI struct{}
+
+// BuildxAvailable runs `docker buildx version`.
+func (DockerCLI) BuildxAvailable(ctx context.Context) error {
+	if err := exec.CommandContext(ctx, "docker", "buildx", "version").Run(); err != nil {
+		return fmt.Errorf("%w (%w)", ErrNoBuildx, err)
+	}
+	return nil
+}
 
 // LiveRestoreEnabled runs `docker info --format {{.LiveRestoreEnabled}}`.
 func (DockerCLI) LiveRestoreEnabled(ctx context.Context) (bool, error) {
@@ -49,6 +59,10 @@ func (DockerCLI) LiveRestoreEnabled(ctx context.Context) (bool, error) {
 var ErrLiveRestoreOff = errors.New(`docker live-restore is off: containers would stop whenever ` +
 	`dockerd restarts. Set "live-restore": true in /etc/docker/daemon.json and reload dockerd`)
 
+// ErrNoBuildx names the Docker plugin builds need.
+var ErrNoBuildx = errors.New("docker buildx is not installed: Bohux builds Releases with it. " +
+	"Install the docker-buildx-plugin package")
+
 // RegisterOptions configure a one-time registration.
 type RegisterOptions struct {
 	StateDir string
@@ -58,7 +72,7 @@ type RegisterOptions struct {
 	Token string
 	// CACertSHA256 pins the node CA (from CreateBootstrapToken).
 	CACertSHA256 string
-	Docker       LiveRestoreChecker
+	Docker       DockerChecker
 	Providers    []*bohuxv1.ProviderDescriptor
 }
 
@@ -79,6 +93,9 @@ func Register(ctx context.Context, o RegisterOptions) error {
 	}
 	if !ok {
 		return ErrLiveRestoreOff
+	}
+	if err := o.Docker.BuildxAvailable(ctx); err != nil {
+		return err
 	}
 
 	nodeKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

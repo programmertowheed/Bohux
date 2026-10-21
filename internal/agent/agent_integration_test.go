@@ -28,6 +28,13 @@ type liveRestore bool
 
 func (l liveRestore) LiveRestoreEnabled(context.Context) (bool, error) { return bool(l), nil }
 
+func (liveRestore) BuildxAvailable(context.Context) error { return nil }
+
+// noBuildx has live-restore but no buildx plugin.
+type noBuildx struct{ liveRestore }
+
+func (noBuildx) BuildxAvailable(context.Context) error { return ErrNoBuildx }
+
 // controlPlane is a real agent listener on a fresh database.
 type controlPlane struct {
 	t      *testing.T
@@ -199,6 +206,10 @@ func TestRegisterRefusals(t *testing.T) {
 			return RegisterOptions{StateDir: dir, ControlPlane: cp.addr, Token: cp.bootstrapToken("b"),
 				CACertSHA256: cp.pki.CACertSHA256(), Docker: liveRestore(false)}
 		}, ErrLiveRestoreOff},
+		{"no buildx", func(dir string) RegisterOptions {
+			return RegisterOptions{StateDir: dir, ControlPlane: cp.addr, Token: cp.bootstrapToken("d"),
+				CACertSHA256: cp.pki.CACertSHA256(), Docker: noBuildx{true}}
+		}, ErrNoBuildx},
 		{"malformed pin", func(dir string) RegisterOptions {
 			return RegisterOptions{StateDir: dir, ControlPlane: cp.addr, Token: cp.bootstrapToken("c"),
 				CACertSHA256: "zz", Docker: liveRestore(true)}

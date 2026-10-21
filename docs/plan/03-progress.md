@@ -38,18 +38,17 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S7c — BuildKit builds (⏳, next to start)
-- **Exact next step:** get BuildKit running in the cloud container (the `buildkitd`
-  binary from GitHub releases, or the `moby/buildkit` image), then decide where builds
-  run: the agent (it owns the node's image store) through a build assignment, or the
-  control plane talking to the node's BuildKit. That is an ADR.
+- **Slice:** S7c2 — build workflow and CreateRelease from Git (⏳, next to start)
+- **Exact next step:** agentapi build dispatch over the node's stream (pending builds
+  keyed by Release ID, answered by `BuildResult`), then the build workflow.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S7c (BuildKit builds) on
-> branch `claude/relaxed-rubin-76m7dl`, following ADR-0011 item 7, ADR-0020 items 2-4,
-> ADR-0007, and CLAUDE.md rules 1, 3 and 6. Start Postgres, Docker, Temporal and
-> OpenBao (tracker *Known gaps*). Write the ADR for where builds run first. Verify with build, vet, golangci-lint (also with the integration
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S7c2 (build workflow and
+> CreateRelease from Git) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0028,
+> ADR-0026, the `new-workflow` skill, and CLAUDE.md rules 6 and 9. Start Postgres,
+> Docker, Temporal and OpenBao, and the `bohux` buildx builder (tracker *Known gaps*).
+> Verify with build, vet, golangci-lint (also with the integration
 > tag), unit and integration tests. Tick boxes, update the tracker and the next
 > session prompt, commit, push, and give me the next prompt.
 
@@ -69,6 +68,7 @@ work is in right now*.
 | O11 | Accept or reject ADR-0025 (Docker provider drives `docker compose` on its own artifact; agent-side HTTP health checks; layout and labels). Owner allowed building on it | S5c onward |
 | O12 | Accept or reject ADR-0026 (deploy workflow shape: worker in the control plane, workflow ID per App, row written by API and workflow, per-App assign, polling health activity, compensation by reassignment). Built on already | S6b onward |
 | O13 | Accept or reject ADR-0027 (replicas are not part of a Release; ScaleApp writes the App revision and the assignment in one transaction). Built on already | S6e onward |
+| O14 | Accept or reject ADR-0028 (builds run in the agent over its stream, on a resource-limited buildx `docker-container` builder named `bohux`, `--load` into dockerd; public Git only in v0.1). Built on already | S7c onward |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -547,12 +547,32 @@ Split into sub-slices, one session each.
 - [x] Tested over mTLS (the node receives generation 2 whose sealed values open to the
       new value; a node without the secret stays at 1) and through SetSecret
 
-#### S7c — BuildKit builds ⏳
-- [ ] CreateRelease from Git starts a build workflow (BuildKit, Dockerfile, exported to
-      the node's local image store, resource-limited, cache capped, ADR-0020 items 2-3);
-      Release `BUILDING` → `READY`/`FAILED`; the deploy waits for the build
-- [ ] Builds refused while the node reports disk pressure (`Degraded()`, ADR-0020 item 4)
-- [ ] Build secrets resolved only inside activities, never in workflow history
+#### S7c1 — where builds run, and the agent's builder ✅
+- [x] Proposed ADR-0028 (O14): the agent builds, over its stream, with a buildx
+      `docker-container` builder named `bohux` (memory 1 GB, one CPU, 10 GB cache cap;
+      an operator-made `bohux` builder is used as is), `--load` into dockerd; public
+      Git over `git fetch --depth 1`; a build workflow per Release
+- [x] `BuildRequest` / `BuildResult` in agent.proto (additive)
+- [x] `agent.Builder`: disk pressure → `DISK_PRESSURE`, request validation (no
+      `..`, no option-looking ref or URL), fetch by branch/tag/SHA, labelled image,
+      recent results answered without rebuilding; one build at a time. The stream
+      runs builds beside its loop and sends results; `bohux agent run` wires it
+- [x] `agent register` refuses a node without buildx (`ErrNoBuildx`)
+- [x] Tested against the real daemon: build by tag and by SHA, labels, cached repeat,
+      unknown ref, failing Dockerfile, bad subpath/ref, disk pressure
+
+#### S7c2 — build workflow and CreateRelease from Git ⏳
+- [ ] agentapi: send a `BuildRequest` to a node's open stream and wait for its
+      `BuildResult` (not connected → retryable error)
+- [ ] Build workflow `build/<release id>`: activity sends and waits (heartbeat),
+      writes the Release `READY` (image ID, commit) or `FAILED` (reason)
+- [ ] CreateRelease from a Git ref or the App's Git source: Release `BUILDING` with
+      `build_workflow_id`, workflow started
+- [ ] Deploy of a `BUILDING` Release waits in `BUILDING` until ready; fails if the build
+      fails
+
+#### S7c3 — build end to end ⏳
+- [ ] e2e: create a Release from a local Git repository, deploy it, roll back
 
 #### S7d — OpenBao in the install bundle ⏳
 - [ ] Auto-unseal with a node-local key (ADR-0020 item 6), in the install bundle (S9)
@@ -619,6 +639,18 @@ Split into sub-slices, one session each.
   export BOHUX_TEST_OPENBAO_ADDR=http://127.0.0.1:8200 BOHUX_TEST_OPENBAO_TOKEN=bohux-dev-root
   ```
   The dev server has KV v2 at `secret/` and keeps everything in memory.
+- **BuildKit in the cloud container:** the `docker-container` builder cannot reach the
+  egress proxy from its own network and Docker Hub rate-limits it, so builds here use a
+  local registry as a `docker.io` mirror and a host-network builder the agent then
+  finds as is (ADR-0028):
+  ```
+  docker run -d --name bohux-mirror --restart=always -p 127.0.0.1:5000:5000 registry:2
+  docker tag busybox:1.36 localhost:5000/library/busybox:1.36 && docker push localhost:5000/library/busybox:1.36
+  printf '[worker.oci]\n  gc = true\n  gckeepstorage = 10000000000\n[registry."docker.io"]\n  mirrors = ["localhost:5000"]\n[registry."localhost:5000"]\n  http = true\n' > /tmp/bkd.toml
+  docker buildx create --name bohux --driver docker-container --driver-opt memory=1g \
+    --driver-opt network=host --driver-opt image=moby/buildkit:v0.18.2 --buildkitd-config /tmp/bkd.toml
+  ```
+  CI runners need none of this: the agent creates the builder itself.
 - **Dev stack:** `deploy/dev/postgres-init/` creates `bohux_app` only on a fresh
   `postgres` volume. An existing volume needs `docker compose down -v` first.
 - **Go 1.23 pin holds dependencies back** (goose ≤ v3.26, pgx ≤ v5.7.6; newer need Go
@@ -652,6 +684,9 @@ Split into sub-slices, one session each.
 - **Next:** S7b.
 - S7b done: rotated secrets reach the nodes that use them.
 - **Next:** S7c.
+- S7c split into S7c1–S7c3. S7c1 done: ADR-0028 proposed (O14), build messages in the
+  agent protocol, the agent's buildx builder, buildx required at registration.
+- **Next:** S7c2.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by

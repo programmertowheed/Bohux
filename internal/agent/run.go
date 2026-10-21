@@ -48,8 +48,16 @@ type RunOptions struct {
 	// Disk, if set, marks every report degraded while the node is under disk pressure
 	// (ADR-0020 item 4), and a change is sent at once.
 	Disk *DiskMonitor
+	// Builder, if set, answers build requests (ADR-0028); without it every request
+	// fails with BUILDER_UNAVAILABLE.
+	Builder BuildRunner
 	// MinBackoff and MaxBackoff bound reconnect delays; zero means 1s and 1m.
 	MinBackoff, MaxBackoff time.Duration
+}
+
+// BuildRunner builds a Release; Builder implements it.
+type BuildRunner interface {
+	Build(ctx context.Context, req *agentv1.BuildRequest) *agentv1.BuildResult
 }
 
 // report is what to send now: the reconciler's latest, or a heartbeat that carries
@@ -180,9 +188,17 @@ func session(ctx context.Context, client agentv1connect.AgentServiceClient, o Ru
 	if err := sendReport(); err != nil {
 		return err
 	}
+	// Builds run beside the loop; their results come back here, the stream's only
+	// sender. A result for a stream that ended is dropped: the control plane asks
+	// again, and the Builder answers from its recent results.
+	builds := make(chan *agentv1.BuildResult, 4)
 	first := true
 	for {
 		select {
+		case r := <-builds:
+			if err := stream.Send(&agentv1.ConnectRequest{Msg: &agentv1.ConnectRequest_BuildResult{BuildResult: r}}); err != nil {
+				return fmt.Errorf("send build result: %w", err)
+			}
 		case <-ticker.C:
 			if err := sendReport(); err != nil {
 				return err
@@ -222,6 +238,18 @@ func session(ctx context.Context, client agentv1connect.AgentServiceClient, o Ru
 				if err := accept(ctx, stream, o.Cache, m.Assignment); err != nil {
 					return err
 				}
+			case *agentv1.ConnectResponse_BuildRequest:
+				go func(req *agentv1.BuildRequest) {
+					res := &agentv1.BuildResult{ReleaseId: req.GetReleaseId(),
+						Failure: &bohuxv1.ErrorDetail{Reason: BuildNoBuilder}}
+					if o.Builder != nil {
+						res = o.Builder.Build(ctx, req)
+					}
+					select {
+					case builds <- res:
+					case <-streamCtx.Done():
+					}
+				}(m.BuildRequest)
 			default:
 				// Assignments, logs, and exec arrive from S4d on.
 				slog.DebugContext(ctx, "unhandled control-plane message", "type", fmt.Sprintf("%T", m))

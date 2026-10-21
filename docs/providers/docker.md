@@ -62,6 +62,19 @@ These run in the agent, not in `Apply` (ADR-0025).
   `degraded` with reason `DISK_PRESSURE` in every StatusReport and new builds are
   refused. Running workloads are never stopped because of it.
 
+## Builds (ADR-0028)
+
+The agent builds Releases from Git on its own node: `git fetch --depth 1` of the ref,
+then `docker buildx build --load` on a buildx builder named `bohux` (`docker-container`
+driver, `moby/buildkit`), so the image lands in the local daemon with labels
+`io.bohux.app` and `io.bohux.release`. The agent creates the builder on first use with
+a 1 GB memory limit, one CPU, and a 10 GB cache cap (`gckeepstorage`). To use a proxy,
+a registry mirror, a CA, or other limits, create the builder yourself first, e.g.
+`docker buildx create --name bohux --driver docker-container --driver-opt memory=2g
+--buildkitd-config /etc/bohux/buildkitd.toml`; the agent uses an existing `bohux`
+builder as it is. Builds are refused while the node reports disk pressure.
+`bohux agent register` refuses a node without the buildx plugin.
+
 ## Known gaps (v0.1)
 
 - **Deploys have downtime.** Compose recreates containers stop-old/start-new; a
@@ -75,6 +88,7 @@ These run in the agent, not in `Apply` (ADR-0025).
   pseudo-terminal on the agent, planned later.
 - **Logs do not separate stdout from stderr** (`LogLine.Stderr` is always false).
 - Secret values cannot contain newlines (env-file format).
+- Builds fetch public repositories only; build logs stay in the agent's log.
 
 ## `Spec.Raw`
 

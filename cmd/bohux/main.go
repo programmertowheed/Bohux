@@ -100,7 +100,8 @@ func agentProviders(root string) (*provider.Registry, error) {
 }
 
 // runAgent loads the agent's state, then runs the reconcile loop, the control-plane
-// stream, the disk-pressure monitor, and image retention side by side until ctx ends.
+// stream (which also carries build requests, ADR-0028), the disk-pressure monitor, and
+// image retention side by side until ctx ends.
 // The loop and the stream share only the cache: the stream fills it, the reconciler
 // acts on it, and either works without the other (rule 1).
 func runAgent(ctx context.Context, stateDir string) error {
@@ -137,7 +138,8 @@ func runAgent(ctx context.Context, stateDir string) error {
 	}
 	rec := &agent.Reconciler{State: st, Cache: cache, Provider: p}
 	opts := agent.RunOptions{State: st, Cache: cache, Reports: rec, Disk: disk,
-		Providers: []*bohuxv1.ProviderDescriptor{descriptorProto(desc)}}
+		Providers: []*bohuxv1.ProviderDescriptor{descriptorProto(desc)},
+		Builder:   &agent.Builder{Disk: disk, WorkDir: filepath.Join(stateDir, "builds")}}
 
 	tasks := []func(context.Context) error{
 		rec.Run,
