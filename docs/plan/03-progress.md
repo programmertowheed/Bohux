@@ -38,16 +38,18 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S10d — the agent's ingress (⏳, next to start)
+- **Slice:** S10e — Caddy in the install bundle (⏳, next to start)
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** `internal/agent/ingress`: render the node's Caddy JSON from
-  every workload's routes and endpoints, write `ingress/caddy.json`, `POST /load` over
-  the admin Unix socket when it changed; then status and the health gate.
+- **Exact next step:** `caddy` service in `deploy/install/compose.yaml` (ports 80/443,
+  `bohux-ingress`, socket dir `/run/bohux-caddy`, config from the agent's
+  `ingress/caddy.json`), installer writes the first config and passes the socket and
+  `BOHUX_ACME_EMAIL` to the agent; self-deploy test serves an App on a route.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S10d (the agent's ingress) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S10e (Caddy in the install
+> bundle) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
 > and ADR-0034. Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*).
 > Verify with build, vet, golangci-lint (also with the integration tag), unit and
 > integration tests. Tick boxes, update the tracker and the next session prompt,
@@ -808,11 +810,24 @@ Shape: ADR-0034 (O20). Split into sub-slices, one session each.
       `Reach`: Docker dials from a container on the ingress network) and a broken
       provider it catches; Docker conformance green on a real daemon
 
-#### S10d — the agent's ingress ⏳
-- [ ] Render the node's Caddy JSON from every workload's routes; write
-      `ingress/caddy.json`; `POST /load` over the Unix socket when it changed;
-      `INGRESS_FAILED` on refusal; `ingress_loaded` in status; health gate waits on it
-- [ ] Real-Caddy integration test (`.localhost` hosts, internal CA)
+#### S10d — the agent's ingress ✅
+- [x] `internal/ingress`: `Caddy.Render` (deterministic; admin listener kept on the
+      socket with origin `localhost`; `.localhost` hosts on Caddy's internal CA, others
+      ACME with `--acme-email`) and `Load` (skips an unchanged config, `POST /load`
+      over the Unix socket, then writes `ingress/caddy.json`, so the file Caddy starts
+      from only holds accepted configs)
+- [x] Reconciler: routed workloads' endpoints (remembered across a replica restart)
+      → one load per pass; `ingress_loaded` once all its routes are served;
+      `INGRESS_FAILED` when the load fails or the node has no ingress; hosts removed
+      with their routes. `agent run --ingress-admin-socket --acme-email`
+- [x] Health gate: a routed workload is healthy only with `ingress_loaded`
+      (`Assigned.Routed` → `WaitInput.Routed`)
+- [x] Real-Caddy test (`caddy:2.8.4-alpine`): serves a `.localhost` host from a Docker
+      alias, a failed load writes nothing and is retried, a restarted Caddy serves from
+      the file alone. CI pulls the image
+- [x] Found on the way: Docker's restart path never ran (a stopped container reports no
+      hash) and `--force-recreate` broke an interrupted apply; a restart now removes
+      stopped containers and runs `up`
 
 #### S10e — Caddy in the install bundle ⏳
 - [ ] `caddy` service (pinned), ports 80/443, `bohux-ingress` network, admin socket
@@ -911,7 +926,8 @@ Shape: ADR-0034 (O20). Split into sub-slices, one session each.
 - S10b done: routes in the store and API, hosts unique across tenants, routes follow
   the running workload and survive rollbacks.
 - S10c done: provider endpoints, Docker on `bohux-ingress`, conformance case.
-- **Next:** S10d.
+- S10d done: the agent programs Caddy; health includes the route; real-Caddy test.
+- **Next:** S10e.
 
 ### 2026-10-21 (auto run 2, S6a) — branch `claude/relaxed-rubin-76m7dl`
 - Owner asked again for an automatic run, slice after slice, until the session ends.

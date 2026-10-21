@@ -20,6 +20,7 @@ import (
 	"github.com/bohumix/bohux/internal/api"
 	"github.com/bohumix/bohux/internal/cli"
 	"github.com/bohumix/bohux/internal/controlplane"
+	"github.com/bohumix/bohux/internal/ingress"
 	"github.com/bohumix/bohux/internal/provider"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/version"
@@ -61,6 +62,8 @@ const (
 	envBackupDir       = "BOHUX_BACKUP_DIR"
 	envBackupSchedule  = "BOHUX_BACKUP_SCHEDULE"
 	envBackupKeep      = "BOHUX_BACKUP_KEEP"
+	envIngressSocket   = "BOHUX_INGRESS_ADMIN_SOCKET"
+	envACMEEmail       = "BOHUX_ACME_EMAIL"
 
 	defaultListenAddr      = "127.0.0.1:7400"
 	defaultAgentListenAddr = "127.0.0.1:7443"
@@ -91,7 +94,7 @@ type deps struct {
 	migrate         func(context.Context, string) error
 	bootstrap       func(ctx context.Context, dsn, slug, displayName string) (token string, err error)
 	agentRegister   func(context.Context, agent.RegisterOptions) error
-	agentRun        func(ctx context.Context, stateDir string) error
+	agentRun        func(ctx context.Context, cfg agentConfig) error
 }
 
 var defaultDeps = deps{
@@ -115,12 +118,21 @@ func agentProviders(root string) (*provider.Registry, error) {
 	return r, nil
 }
 
+// agentConfig is `bohux agent run`'s configuration.
+type agentConfig struct {
+	StateDir string
+	// IngressSocket is the node's Caddy admin socket (ADR-0034); empty: no ingress.
+	IngressSocket string
+	ACMEEmail     string
+}
+
 // runAgent loads the agent's state, then runs the reconcile loop, the control-plane
 // stream (which also carries build requests, ADR-0028), the disk-pressure monitor, and
 // image retention side by side until ctx ends.
 // The loop and the stream share only the cache: the stream fills it, the reconciler
 // acts on it, and either works without the other (rule 1).
-func runAgent(ctx context.Context, stateDir string) error {
+func runAgent(ctx context.Context, cfg agentConfig) error {
+	stateDir := cfg.StateDir
 	st, err := agent.Load(stateDir)
 	if err != nil {
 		return err
@@ -153,6 +165,10 @@ func runAgent(ctx context.Context, stateDir string) error {
 		disk.Paths = append(disk.Paths, root)
 	}
 	rec := &agent.Reconciler{State: st, Cache: cache, Provider: p}
+	if cfg.IngressSocket != "" {
+		rec.Ingress = &ingress.Caddy{AdminSocket: cfg.IngressSocket, ACMEEmail: cfg.ACMEEmail,
+			Dir: filepath.Join(stateDir, "ingress")}
+	}
 	opts := agent.RunOptions{State: st, Cache: cache, Reports: rec, Disk: disk,
 		Providers: []*bohuxv1.ProviderDescriptor{descriptorProto(desc)},
 		Builder:   &agent.Builder{Disk: disk, WorkDir: filepath.Join(stateDir, "builds")},
@@ -351,10 +367,14 @@ func agentCommand(ctx context.Context, args []string, getenv func(string) string
 		}
 		return nil
 	case "run":
+		socket := fs.String("ingress-admin-socket", getenv(envIngressSocket),
+			"Caddy admin API Unix socket of this node's ingress; empty: no ingress (env "+envIngressSocket+")")
+		email := fs.String("acme-email", getenv(envACMEEmail),
+			"ACME account e-mail for the ingress's certificates (env "+envACMEEmail+")")
 		if err := fs.Parse(args[1:]); err != nil {
 			return fmt.Errorf("agent run: %w", err)
 		}
-		if err := d.agentRun(ctx, *stateDir); err != nil {
+		if err := d.agentRun(ctx, agentConfig{StateDir: *stateDir, IngressSocket: *socket, ACMEEmail: *email}); err != nil {
 			return fmt.Errorf("agent run: %w", err)
 		}
 		return nil

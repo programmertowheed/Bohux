@@ -90,7 +90,11 @@ func TestRun(t *testing.T) {
 			args: []string{"agent", "register", "--control-plane", "cp:7443", "--ca-cert-sha256", "ab"},
 			env:  map[string]string{envBootstrapToken: "bxb_x"}, wantArg: "cp:7443|bxb_x|ab|" + defaultAgentStateDir},
 		{name: "agent run uses the state dir", wantErr: errCalled,
-			args: []string{"agent", "run", "--state-dir", "/s"}, wantArg: "/s"},
+			args: []string{"agent", "run", "--state-dir", "/s"}, wantArg: "/s||"},
+		{name: "agent run with an ingress", wantErr: errCalled,
+			args:    []string{"agent", "run", "--state-dir", "/s", "--acme-email", "ops@example.com"},
+			env:     map[string]string{envIngressSocket: "/run/bohux-caddy/admin.sock"},
+			wantArg: "/s|/run/bohux-caddy/admin.sock|ops@example.com"},
 		{name: "agent unknown subcommand", args: []string{"agent", "nope"}, wantErr: errUsage},
 		{name: "admin bootstrap prints the token once", want: bootstrapOut,
 			args:    []string{"admin", "bootstrap", "--database-url", "postgres://b", "--slug", "acme"},
@@ -117,8 +121,8 @@ func TestRun(t *testing.T) {
 					gotArg = o.ControlPlane + "|" + o.Token + "|" + o.CACertSHA256 + "|" + o.StateDir
 					return errCalled
 				},
-				agentRun: func(_ context.Context, dir string) error {
-					gotArg = dir
+				agentRun: func(_ context.Context, c agentConfig) error {
+					gotArg = c.StateDir + "|" + c.IngressSocket + "|" + c.ACMEEmail
 					return errCalled
 				},
 			}

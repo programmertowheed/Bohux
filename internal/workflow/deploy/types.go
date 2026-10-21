@@ -124,6 +124,9 @@ type Assigned struct {
 	Generation uint64
 	// Replicas the Release runs with; zero for a removal.
 	Replicas int32
+	// Routed is true when the workload has routes, so health includes the node's
+	// ingress serving them (ADR-0034).
+	Routed bool
 }
 
 // WaitInput waits for Generation on NodeID to run AppID at ReleaseID, healthy.
@@ -135,6 +138,8 @@ type WaitInput struct {
 	ReleaseID  string
 	// Replicas that must be ready.
 	Replicas int32
+	// Routed workloads are healthy only once the ingress serves them (ADR-0034).
+	Routed bool
 	// Deadline is when the health gate fails with ErrTypeHealthTimeout. Set by the
 	// workflow so activity retries do not extend it.
 	Deadline time.Time

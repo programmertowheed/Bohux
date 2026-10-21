@@ -347,10 +347,11 @@ func TestAssignRelease(t *testing.T) {
 func TestWaitHealthy(t *testing.T) {
 	h := newHarness(t)
 	app := uuid.Must(uuid.NewV7()).String()
+	routed := false
 	wait := func(gen uint64, replicas int32, within time.Duration) error {
 		_, err := h.env.ExecuteActivity(h.acts.WaitHealthy, WaitInput{
 			TenantID: h.tenant.String(), NodeID: h.node.String(), Generation: gen, AppID: app,
-			ReleaseID: "r2", Replicas: replicas, Deadline: time.Now().Add(within)})
+			ReleaseID: "r2", Replicas: replicas, Routed: routed, Deadline: time.Now().Add(within)})
 		return err
 	}
 	status := func(gen uint64, release string, state agentv1.WorkloadState, ready int32) *agentv1.StatusReport {
@@ -367,24 +368,35 @@ func TestWaitHealthy(t *testing.T) {
 	if err := wait(3, 1, 50*time.Millisecond); !isType(err, ErrTypeHealthTimeout) {
 		t.Errorf("no report: %v, want %s", err, ErrTypeHealthTimeout)
 	}
+	routedHealthy := func(loaded bool) *agentv1.StatusReport {
+		r := status(3, "r2", healthy, 2)
+		r.Workloads[0].IngressLoaded = loaded
+		return r
+	}
 	tests := []struct {
 		name   string
 		report *agentv1.StatusReport
+		routed bool
 		want   string // "" = healthy
 	}{
-		{"healthy", status(3, "r2", healthy, 2), ""},
-		{"newer generation, healthy", status(4, "r2", healthy, 2), ""},
-		{"older generation", status(2, "r2", healthy, 2), ErrTypeHealthTimeout},
-		{"previous release still running", status(3, "r1", healthy, 2), ErrTypeHealthTimeout},
-		{"not all replicas ready", status(3, "r2", healthy, 1), ErrTypeHealthTimeout},
-		{"unhealthy", status(3, "r2", agentv1.WorkloadState_WORKLOAD_STATE_UNHEALTHY, 2), ErrTypeHealthTimeout},
-		{"spec invalid", failed(3, "r2", "SPEC_INVALID"), ErrTypeWorkloadFailed},
-		{"provider missing", failed(3, "r2", "PROVIDER_MISSING"), ErrTypeWorkloadFailed},
-		{"apply failed is retried by the agent", failed(3, "r2", "APPLY_FAILED"), ErrTypeHealthTimeout},
+		{"healthy", status(3, "r2", healthy, 2), false, ""},
+		{"routed, served by the ingress", routedHealthy(true), true, ""},
+		{"routed, not yet in the ingress", routedHealthy(false), true, ErrTypeHealthTimeout},
+		{"routed, ingress refused", failed(3, "r2", "INGRESS_FAILED"), true, ErrTypeHealthTimeout},
+		{"newer generation, healthy", status(4, "r2", healthy, 2), false, ""},
+		{"older generation", status(2, "r2", healthy, 2), false, ErrTypeHealthTimeout},
+		{"previous release still running", status(3, "r1", healthy, 2), false, ErrTypeHealthTimeout},
+		{"not all replicas ready", status(3, "r2", healthy, 1), false, ErrTypeHealthTimeout},
+		{"unhealthy", status(3, "r2", agentv1.WorkloadState_WORKLOAD_STATE_UNHEALTHY, 2), false, ErrTypeHealthTimeout},
+		{"spec invalid", failed(3, "r2", "SPEC_INVALID"), false, ErrTypeWorkloadFailed},
+		{"provider missing", failed(3, "r2", "PROVIDER_MISSING"), false, ErrTypeWorkloadFailed},
+		{"apply failed is retried by the agent", failed(3, "r2", "APPLY_FAILED"), false, ErrTypeHealthTimeout},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h.report(tt.report)
+			routed = tt.routed
+			defer func() { routed = false }()
 			err := wait(3, 2, 80*time.Millisecond)
 			if tt.want == "" && err != nil {
 				t.Errorf("WaitHealthy = %v, want healthy", err)

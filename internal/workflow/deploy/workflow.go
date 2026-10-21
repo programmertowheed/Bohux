@@ -193,7 +193,8 @@ func (d *run) wait(ctx workflow.Context, assigned Assigned, release string) erro
 	opts.HeartbeatTimeout = 2 * healthHeartbeat
 	return workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, opts), a.WaitHealthy, WaitInput{
 		TenantID: d.in.TenantID, NodeID: assigned.NodeID, Generation: assigned.Generation,
-		AppID: d.in.AppID, ReleaseID: release, Replicas: assigned.Replicas, Deadline: deadline,
+		AppID: d.in.AppID, ReleaseID: release, Replicas: assigned.Replicas, Routed: assigned.Routed,
+		Deadline: deadline,
 	}).Get(ctx, nil)
 }
 

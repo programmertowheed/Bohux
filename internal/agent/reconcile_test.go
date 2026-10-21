@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"iter"
 	"sync"
 	"testing"
@@ -52,8 +53,15 @@ func (f *fakeProvider) Apply(_ context.Context, req provider.ApplyRequest) (prov
 		}
 		f.secrets[req.Spec.Ref] = vals
 	}
-	f.running[req.Spec.Ref] = provider.Status{Exists: true, Hash: req.Spec.Hash, Running: true,
+	st := provider.Status{Exists: true, Hash: req.Spec.Hash, Running: true,
 		Healthy: !f.broken[req.Spec.Release], ReadyReplicas: req.Spec.Runtime.GetReplicas()}
+	if req.Spec.Ingress {
+		st.Endpoints = map[int32]string{}
+		for _, p := range req.Spec.Runtime.GetPorts() {
+			st.Endpoints[p.GetContainerPort()] = fmt.Sprintf("%s:%d", req.Spec.Ref.App, p.GetContainerPort())
+		}
+	}
+	f.running[req.Spec.Ref] = st
 	return provider.ApplyResult{Changed: true}, nil
 }
 
@@ -86,7 +94,7 @@ func (f *fakeProvider) crash(ref provider.ResourceRef) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.running[ref]
-	st.Running, st.Healthy, st.ReadyReplicas = false, false, 0
+	st.Running, st.Healthy, st.ReadyReplicas, st.Endpoints = false, false, 0, nil
 	f.running[ref] = st
 }
 

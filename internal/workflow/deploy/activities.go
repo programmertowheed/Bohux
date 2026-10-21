@@ -314,7 +314,7 @@ func (a *Activities) AssignRelease(ctx context.Context, in AssignInput) (Assigne
 	}
 	out := Assigned{NodeID: node.String(), Generation: gen}
 	if w != nil {
-		out.Replicas = w.GetRuntime().GetReplicas()
+		out.Replicas, out.Routed = w.GetRuntime().GetReplicas(), len(w.GetRoutes()) > 0
 	}
 	return out, nil
 }
@@ -510,7 +510,7 @@ func (a *Activities) healthy(ctx context.Context, tenant, node uuid.UUID, in Wai
 					"workload failed: "+w.GetFailure().GetReason(), ErrTypeWorkloadFailed, nil)
 			}
 		case agentv1.WorkloadState_WORKLOAD_STATE_HEALTHY:
-			return w.GetReadyReplicas() >= in.Replicas, nil
+			return w.GetReadyReplicas() >= in.Replicas && (!in.Routed || w.GetIngressLoaded()), nil
 		}
 	}
 	return false, nil

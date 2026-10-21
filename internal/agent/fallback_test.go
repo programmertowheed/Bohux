@@ -143,7 +143,7 @@ func TestRouteChangeDoesNotReapply(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake := newFake()
-	r := &Reconciler{State: st, Cache: c, Provider: fake}
+	r := &Reconciler{State: st, Cache: c, Provider: fake, Ingress: &fakeIngress{}}
 	cacheWorkloads(t, signer, st, c, 1, deployed("r1", "d1"))
 	r.Once(ctx)
 	routed := func(gen uint64, hosts ...string) {

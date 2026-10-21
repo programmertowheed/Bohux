@@ -118,6 +118,9 @@ jobs:
           nohup /tmp/bao server -dev -dev-root-token-id=bohux-ci-root -dev-listen-address=127.0.0.1:8200 > /tmp/bao.log 2>&1 &
           for i in $(seq 30); do curl -sf http://127.0.0.1:8200/v1/sys/health && exit 0; sleep 1; done
           cat /tmp/bao.log; exit 1
+      - name: Pull the ingress image
+        # The real-Caddy test skips without it (ADR-0034).
+        run: docker pull caddy:2.8.4-alpine
       - name: Integration tests
         run: go test -tags=integration -race -count=1 ./internal/... ./cmd/... ./providers/docker/...
 

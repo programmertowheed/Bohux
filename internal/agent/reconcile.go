@@ -20,6 +20,7 @@ import (
 
 	agentv1 "github.com/bohumix/bohux/gen/bohux/agent/v1"
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
+	"github.com/bohumix/bohux/internal/ingress"
 	"github.com/bohumix/bohux/internal/provider"
 )
 
@@ -48,10 +49,22 @@ type Reconciler struct {
 	Interval time.Duration
 	// Now is the clock for fallback deadlines; nil means time.Now.
 	Now func() time.Time
+	// Ingress is the node's ingress (ADR-0034); nil when the node has none, and then
+	// workloads with routes report INGRESS_FAILED.
+	Ingress Ingress
+
+	// endpoints remembers each routed port's last reported endpoint, so a replica
+	// restarting does not drop its host from the ingress for a pass.
+	endpoints map[string]string
 
 	mu      sync.Mutex
 	latest  *agentv1.StatusReport
 	updated chan struct{}
+}
+
+// Ingress serves hosts from endpoints; ingress.Caddy implements it.
+type Ingress interface {
+	Load(ctx context.Context, sites []ingress.Site) error
 }
 
 // Latest is the most recent pass's report, or nil before the first one. It satisfies
@@ -134,6 +147,7 @@ func (r *Reconciler) Once(ctx context.Context) *agentv1.StatusReport {
 	report := &agentv1.StatusReport{Generation: a.GetGeneration()}
 	desired := map[provider.ResourceRef]bool{}
 	seen := map[string]bool{}
+	var routed []routedWorkload
 	for _, w := range a.GetWorkloads() {
 		ref := provider.ResourceRef{Environment: w.GetEnvironmentId(), App: w.GetAppId(),
 			EnvironmentSlug: w.GetEnvironmentSlug(), AppSlug: w.GetAppSlug()}
@@ -158,7 +172,10 @@ func (r *Reconciler) Once(ctx context.Context) *agentv1.StatusReport {
 				continue
 			}
 		}
-		r.converge(ctx, ref, w, ws)
+		st := r.converge(ctx, ref, w, ws)
+		if len(w.GetRoutes()) > 0 {
+			routed = append(routed, routedWorkload{w: w, ws: ws, endpoints: st.Endpoints})
+		}
 		if fellBack {
 			if ws.Failure == nil {
 				ws.Failure = &bohuxv1.ErrorDetail{Reason: "FALLBACK_APPLIED"}
@@ -169,6 +186,7 @@ func (r *Reconciler) Once(ctx context.Context) *agentv1.StatusReport {
 		}
 	}
 	r.saveFallbacks(ctx, fallbacks, seen)
+	r.serve(ctx, routed)
 
 	for ref := range applied {
 		if desired[ref] {
@@ -185,6 +203,65 @@ func (r *Reconciler) Once(ctx context.Context) *agentv1.StatusReport {
 		slog.InfoContext(ctx, "workload removed", "app", ref.App)
 	}
 	return report
+}
+
+type routedWorkload struct {
+	w         *agentv1.Workload
+	ws        *agentv1.WorkloadStatus
+	endpoints map[int32]string
+}
+
+// serve loads the node's ingress with every routed workload's hosts (ADR-0034). A
+// workload is marked ingress_loaded once the loaded config serves all its routes; a
+// refused or impossible load marks the routed workloads INGRESS_FAILED, retried next
+// pass, while the ingress keeps serving what it had.
+func (r *Reconciler) serve(ctx context.Context, routed []routedWorkload) {
+	if r.Ingress == nil {
+		for _, rw := range routed {
+			failIfOK(rw.ws, "INGRESS_FAILED")
+		}
+		if len(routed) > 0 {
+			slog.ErrorContext(ctx, "workloads have routes but this node runs no ingress", "workloads", len(routed))
+		}
+		return
+	}
+	// Only routed ports carry over to the next pass.
+	known := r.endpoints
+	r.endpoints = map[string]string{}
+	var sites []ingress.Site
+	complete := make([]bool, len(routed))
+	for i, rw := range routed {
+		complete[i] = true
+		for _, rt := range rw.w.GetRoutes() {
+			key := fmt.Sprintf("%s/%d", rw.w.GetAppId(), rt.GetPort())
+			ep := rw.endpoints[rt.GetPort()]
+			if ep == "" {
+				complete[i] = false
+				if ep = known[key]; ep == "" {
+					continue
+				}
+			}
+			r.endpoints[key] = ep
+			sites = append(sites, ingress.Site{Host: rt.GetHost(), Upstreams: []string{ep}})
+		}
+	}
+	if err := r.Ingress.Load(ctx, sites); err != nil {
+		for _, rw := range routed {
+			failIfOK(rw.ws, "INGRESS_FAILED")
+		}
+		slog.ErrorContext(ctx, "load ingress config; will retry", "err", err)
+		return
+	}
+	for i, rw := range routed {
+		rw.ws.IngressLoaded = complete[i]
+	}
+}
+
+// failIfOK marks ws failed with reason unless it already failed for another one.
+func failIfOK(ws *agentv1.WorkloadStatus, reason string) {
+	if ws.GetState() != agentv1.WorkloadState_WORKLOAD_STATE_FAILED {
+		fail(ws, reason)
+	}
 }
 
 // effective returns the workload to converge to: w, or the workload it replaced once
@@ -250,30 +327,30 @@ func (r *Reconciler) saveFallbacks(ctx context.Context, fallbacks map[string]str
 }
 
 // converge applies w if the target does not match it or is not running, then fills
-// ws from the observed state.
-func (r *Reconciler) converge(ctx context.Context, ref provider.ResourceRef, w *agentv1.Workload, ws *agentv1.WorkloadStatus) {
+// ws from the observed state, which it returns (zero when it could not observe it).
+func (r *Reconciler) converge(ctx context.Context, ref provider.ResourceRef, w *agentv1.Workload, ws *agentv1.WorkloadStatus) provider.Status {
 	spec, err := r.spec(ref, w)
 	if err != nil {
 		fail(ws, "SPEC_INVALID")
 		slog.ErrorContext(ctx, "build spec", "app", w.GetAppId(), "err", err)
-		return
+		return provider.Status{}
 	}
 	st, err := r.Provider.Status(ctx, ref)
 	if err != nil {
 		fail(ws, "STATUS_FAILED")
 		slog.ErrorContext(ctx, "provider status", "app", w.GetAppId(), "err", err)
-		return
+		return provider.Status{}
 	}
 	if !st.Exists || st.Hash != spec.Hash || !st.Running {
 		if _, err := r.Provider.Apply(ctx, provider.ApplyRequest{Spec: spec}); err != nil {
 			fail(ws, "APPLY_FAILED")
 			slog.ErrorContext(ctx, "provider apply; will retry", "app", w.GetAppId(), "err", err)
-			return
+			return provider.Status{}
 		}
 		if st, err = r.Provider.Status(ctx, ref); err != nil {
 			fail(ws, "STATUS_FAILED")
 			slog.ErrorContext(ctx, "provider status", "app", w.GetAppId(), "err", err)
-			return
+			return provider.Status{}
 		}
 	}
 	ws.ReadyReplicas = st.ReadyReplicas
@@ -285,6 +362,7 @@ func (r *Reconciler) converge(ctx context.Context, ref provider.ResourceRef, w *
 	default:
 		ws.State = agentv1.WorkloadState_WORKLOAD_STATE_APPLYING
 	}
+	return st
 }
 
 // fail marks the workload failed with a stable reason; details go to the agent's log.
