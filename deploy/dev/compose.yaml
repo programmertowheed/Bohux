@@ -15,7 +15,10 @@ services:
       POSTGRES_PASSWORD: bohux-dev
       POSTGRES_DB: bohux
     ports: ["5432:5432"]
-    volumes: [postgres:/var/lib/postgresql/data]
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      # Creates the unprivileged bohux_app role and database (first start only).
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U bohux"]
       interval: 5s
