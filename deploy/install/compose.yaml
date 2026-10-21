@@ -1,0 +1,65 @@
+# Bohux infra on one VPS (ADR-0030): Postgres, Temporal, OpenBao on the bohux-infra
+# network. Written to /etc/bohux/infra by scripts/install.sh, which also writes .env
+# (passwords) next to it. Without Bohux, this file still runs:
+#   docker compose -f /etc/bohux/infra/compose.yaml up -d
+# The control plane is not here: it is a Bohux App (bohux/system/controlplane).
+name: bohux-infra
+
+networks:
+  bohux-infra:
+    name: bohux-infra
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      BOHUX_APP_PASSWORD: ${BOHUX_APP_PASSWORD:?}
+      TEMPORAL_PASSWORD: ${TEMPORAL_PASSWORD:?}
+    # Host access for `bohux admin backup | restore` only, never public.
+    ports: ["127.0.0.1:${BOHUX_POSTGRES_PORT:-5432}:5432"]
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    networks: [bohux-infra]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+
+  temporal:
+    image: temporalio/auto-setup:1.25.2
+    restart: unless-stopped
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_SEEDS: postgres
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: ${TEMPORAL_PASSWORD:?}
+      # Postgres' init script made both databases; auto-setup only applies schemas.
+      SKIP_DB_CREATE: "true"
+    networks: [bohux-infra]
+    logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+
+  openbao:
+    image: openbao/openbao:2.4.1
+    restart: unless-stopped
+    command: ["server", "-config=/openbao/config/bao.hcl"]
+    volumes:
+      - ./openbao.hcl:/openbao/config/bao.hcl:ro
+      # The static unseal key (ADR-0020 item 6): OpenBao unseals itself on restart.
+      # Owned by the container's openbao user, mode 0400 (install.sh).
+      - ${BOHUX_UNSEAL_KEY:?}:/openbao/unseal/unseal.key:ro
+      - openbao:/openbao/file
+    networks: [bohux-infra]
+    logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+
+volumes:
+  postgres:
+  openbao:

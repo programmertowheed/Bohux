@@ -38,18 +38,16 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S9d — install bundle (⏳, next to start)
-- **Exact next step:** `deploy/install/compose.yaml` (Postgres, Temporal, OpenBao on the
-  `bohux-infra` network) and the OpenBao auto-unseal choice (ADR-0020 item 6): check what
-  OpenBao 2.4 offers for unattended unseal (static key seal or file storage + init), an
-  ADR if it is a hard-to-reverse choice.
+- **Slice:** S9e — Bohux deploys Bohux, in CI (⏳, next to start)
+- **Exact next step:** `scripts/selfdeploy-test.sh` (what S9d did by hand) and a CI job
+  running it on a GitHub runner with systemd; installer option for the control plane's
+  health timeout.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S9d (install bundle) on
-> branch `claude/relaxed-rubin-76m7dl`, following ADR-0030, ADR-0032, ADR-0020 items
-> 6 and 9, and CLAUDE.md rule 2. Start Postgres, Docker, Temporal and OpenBao (tracker
-> *Known gaps*). Verify with build, vet, golangci-lint (also with the integration
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S9e (Bohux deploys Bohux,
+> in CI) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0030 and ADR-0031.
+> Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*). Verify with build, vet, golangci-lint (also with the integration
 > tag), unit and integration tests. Tick boxes, update the tracker and the next
 > session prompt, commit, push, and give me the next prompt.
 
@@ -705,13 +703,37 @@ Split into sub-slices, one session each. Includes S7d (OpenBao auto-unseal).
 - **Cloud container note:** build containers cannot reach the Go module proxy here (the
   egress proxy's CA is not in them); build from a copy with `go mod vendor` and `gen/`
 
-#### S9d — install bundle ⏳
-- [ ] `deploy/install/`: infra Compose (Postgres, Temporal, OpenBao with auto-unseal,
-      ADR-0020 item 6 / S7d), agent systemd unit, `scripts/install.sh` (idempotent)
+#### S9d — install bundle ✅ (also S7d)
+- [x] `deploy/install/compose.yaml`: Postgres (unprivileged `bohux_app`; `temporal`
+      owning its two databases, auto-setup told to skip creating them), Temporal,
+      OpenBao 2.4 with **file storage and the static seal** (ADR-0020 item 6 / S7d:
+      verified it comes back unsealed after a restart), on the `bohux-infra` network;
+      Postgres published on 127.0.0.1 only, for admin backups
+- [x] `deploy/install/bohux-agent.service`; `scripts/install.sh` (idempotent; secrets
+      0600 under `/etc/bohux`; OpenBao init with one recovery key and KV v2 at
+      `secret`; tenant bootstrap; seed control plane; agent registration and unit;
+      project `bohux`, environment `system`, config as secrets, the `controlplane` App
+      with provider options; first deploy handed over from the seed to the App
+      mid-run)
+- [x] Docker option `publish_address` (ADR-0032 amended while proposed): the control
+      plane's ports bind to 127.0.0.1, since v0.1 has no TLS ingress
+- [x] Health gate: only `SPEC_INVALID` / `PROVIDER_MISSING` end it at once; failures the
+      agent retries (a port still held) wait for the deadline (ADR-0026 amended while
+      proposed). This is what lets the seed hand over
+- [x] `bohux deploy|rollback` keep following through a control-plane restart (reconnect
+      for up to 10 minutes)
+- [x] **Run here end to end (`BOHUX_SYSTEMD=0`)**: install from nothing → the control
+      plane runs as `bohux/system/controlplane`; `bohux deploy controlplane --image v2`
+      → succeeded (the new control plane's worker finished the run); `bohux rollback`
+      → v1; a version that cannot start → the agent fell back at 7 min (5 min gate +
+      2 min margin, ADR-0031), the control plane came back and finished the run as
+      `rolled_back`. **The v0.1 exit criterion works by hand.**
 
-#### S9e — Bohux deploys Bohux ⏳
-- [ ] End to end on a CI VM: install, deploy a new control-plane version, roll it back,
-      deploy a broken one (falls back); downtime of the control plane measured
+#### S9e — Bohux deploys Bohux, in CI ⏳
+- [ ] A CI job (systemd, real runner) that does what S9d did by hand: local registry,
+      image, `scripts/install.sh`, deploy v2, rollback, broken version → fallback.
+      Shorten the gate with an installer option that sets the control plane's
+      `BOHUX_DEPLOY_HEALTH_TIMEOUT` (as a secret, like the rest of its config)
 - [ ] Footprint re-measured and published (with O2)
 
 #### S9f — schedules and runbooks ⏳
@@ -849,6 +871,9 @@ Split into sub-slices, one session each. Includes S7d (OpenBao auto-unseal).
 - **Next:** S9c2.
 - S9c2 done: the control-plane image, smoke-run, CI builds it.
 - **Next:** S9d.
+- S9d done (and S7d): the install bundle, run end to end here: install, self-deploy,
+  self-rollback, and agent fallback from a control plane that cannot start.
+- **Next:** S9e.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by
