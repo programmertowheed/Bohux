@@ -136,6 +136,11 @@ message Workload {
   // Human-readable names for the artifacts the provider writes (ADR-0025).
   string app_slug = 10;
   string environment_slug = 11;
+  // The workload this one replaced, as it ran (without its own fallback). If this
+  // workload has not been healthy by fallback_after and no newer assignment changed it,
+  // the agent applies the fallback on its own (ADR-0031). Unset for compensation.
+  Workload fallback = 12;
+  google.protobuf.Timestamp fallback_after = 13;
 }
 
 // The plaintext of Workload.sealed_secrets before sealing (ADR-0008, ADR-0024): the
