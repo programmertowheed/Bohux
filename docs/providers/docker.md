@@ -75,6 +75,27 @@ a registry mirror, a CA, or other limits, create the builder yourself first, e.g
 builder as it is. Builds are refused while the node reports disk pressure.
 `bohux agent register` refuses a node without the buildx plugin.
 
+## Private images (ADR-0041)
+
+An App names an environment secret that holds a Docker `config.json` (the
+`{"auths": {...}}` document `docker login` writes):
+
+```sh
+docker login ghcr.io                     # or write the JSON by hand
+bohux secret set REGISTRY -e prod < ~/.docker/config.json
+bohux app create api -e prod --image ghcr.io/acme/api@sha256:… --image-pull-secret REGISTRY
+bohux app pull-secret api -e prod --secret REGISTRY   # or --clear; used by the next deploy
+```
+
+The control plane seals the value to the node apart from the App's environment
+variables, so the container never sees it. For each `docker compose up`, the provider
+writes it to a fresh `0700` directory, points `DOCKER_CONFIG` at it (per-user CLI
+plugins are linked in), and removes the directory when the command ends. Nothing is
+written to root's or the daemon's Docker config, and `compose.yaml` names only the
+image. A rotated credential is used by the next pull; it does not restart anything,
+since the image is pinned by digest. Short-lived registry tokens (ECR, GCR) are not
+refreshed on the node yet.
+
 ## Known gaps (v0.1)
 
 - **Deploys have downtime.** Compose recreates containers stop-old/start-new; a

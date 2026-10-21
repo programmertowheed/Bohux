@@ -143,6 +143,23 @@ func TestResourceCommands(t *testing.T) {
 		t.Error("an empty value on stdin was accepted")
 	}
 
+	// A private registry credential is an environment secret the app names (ADR-0041).
+	if _, err := bohux("", "app", "pull-secret", "api", "--secret", "NO_SUCH", "-e", "prod"); err == nil ||
+		!strings.Contains(err.Error(), "NO_SUCH") {
+		t.Errorf("pull-secret naming a missing secret: %v", err)
+	}
+	if _, err := bohux(`{"auths":{"r.example":{"auth":"eDpzZWtyaXQ="}}}`+"\n", "secret", "set", "REGISTRY", "-e", "prod"); err != nil {
+		t.Fatal(err)
+	}
+	must("app", "pull-secret", "api", "--secret", "REGISTRY", "-e", "prod")
+	if out := must("app", "show", "api", "-e", "prod"); !strings.Contains(out, "REGISTRY") || strings.Contains(out, "eDpzZWtyaXQ") {
+		t.Errorf("app show after pull-secret:\n%s", out)
+	}
+	must("app", "pull-secret", "api", "--clear", "-e", "prod")
+	if out := must("app", "show", "api", "-e", "prod", "-o", "json"); strings.Contains(out, "REGISTRY") {
+		t.Errorf("app show after pull-secret --clear:\n%s", out)
+	}
+
 	must("app", "create", "site", "-e", "prod", "--git", "https://example.com/acme/site.git", "--port", "8080")
 	out = must("webhook", "create", "site", "-e", "prod", "--branch", "main", "-o", "json")
 	var created struct {

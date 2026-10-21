@@ -100,6 +100,12 @@ type SecretSource interface {
 	Open() (map[string]string, error)
 }
 
+// PullConfigSource yields a registry credential (a Docker config.json) when the
+// provider pulls. Like SecretSource, it is opened late and never logged (rule 3).
+type PullConfigSource interface {
+	Open() (string, error)
+}
+
 // Spec is the resolved desired state for one workload.
 type Spec struct {
 	Ref     ResourceRef
@@ -115,6 +121,9 @@ type Spec struct {
 	Hash string
 	// Raw is the target-specific passthrough (provider-interface.md rule 5).
 	Raw []byte
+	// PullConfig is the Docker config.json to pull Image with, nil for a public image
+	// (ADR-0041). Providers open it only for the pull and keep it nowhere.
+	PullConfig PullConfigSource
 	// Ingress is true when the node's ingress serves this workload (it has routes,
 	// ADR-0034): the provider makes every container port reachable from the ingress
 	// and reports how in Status.Endpoints.

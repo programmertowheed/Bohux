@@ -22,7 +22,9 @@ import (
 // ResourceCommands lists the resource commands for the binary's usage text.
 const ResourceCommands = `  project list|create      projects
   env list|create          environments of a project (-p)
-  app list|show|create     apps of an environment (-p, -e)
+  app list|show|create|pull-secret
+                           apps of an environment (-p, -e); pull-secret names the
+                           secret with a registry credential (next deploy on)
   route list|add|remove    an app's hosts on the node's ingress
   secret list|set          an environment's secrets; set reads the value from stdin
   node list|token          nodes, and bootstrap tokens to register one
@@ -132,6 +134,8 @@ func (c *command) runResource(ctx context.Context, noun string, args []string, s
 		return r.appShow(ctx, rest)
 	case "app create":
 		return r.appCreate(ctx, rest)
+	case "app pull-secret":
+		return r.appPullSecret(ctx, rest)
 	case "route list":
 		return r.routeList(ctx, rest)
 	case "route add":
@@ -458,7 +462,7 @@ func (r *resource) updateApp(ctx context.Context, slug string, change func(*bohu
 	}
 	_, err = r.apps.UpdateApp(ctx, call(r.token, &bohuxv1.UpdateAppRequest{Id: a.GetMeta().GetId(),
 		Source: a.GetSource(), Runtime: a.GetRuntime(), Secrets: a.GetSecrets(),
-		ProviderOptions: a.GetProviderOptions(), Routes: a.GetRoutes(),
+		ProviderOptions: a.GetProviderOptions(), Routes: a.GetRoutes(), ImagePullSecret: a.GetImagePullSecret(),
 		ExpectedRevisionId: a.GetMeta().GetRevisionId(), IdempotencyKey: r.key()}))
 	if err != nil {
 		return fmt.Errorf("update app %q: %w", slug, err)
@@ -531,8 +535,33 @@ func (r *resource) appShow(ctx context.Context, args []string) error {
 		cpu = fmt.Sprintf("%dm", u.Msg.GetUsage().GetCpuMillicores())
 		mem = bytesHuman(u.Msg.GetUsage().GetMemoryBytes())
 	}
-	return r.emit(&bohuxv1.GetAppResponse{App: a}, append(append([]string{}, appHeader...), "CPU", "MEMORY"),
-		[][]string{append(appRow(a), cpu, mem)})
+	pull := a.GetImagePullSecret()
+	if pull == "" {
+		pull = "-"
+	}
+	return r.emit(&bohuxv1.GetAppResponse{App: a}, append(append([]string{}, appHeader...), "CPU", "MEMORY", "PULL SECRET"),
+		[][]string{append(appRow(a), cpu, mem, pull)})
+}
+
+// appPullSecret sets or clears the secret the App's image is pulled with (ADR-0041).
+// It is part of the App's spec: the next deploy uses it.
+func (r *resource) appPullSecret(ctx context.Context, args []string) error {
+	key := r.fs.String("secret", "", "environment secret holding a Docker config.json")
+	none := r.fs.Bool("clear", false, "pull without a credential")
+	pos, err := r.positional(args, 1, "an app slug")
+	if err != nil {
+		return err
+	}
+	if (*key == "") == !*none {
+		return fmt.Errorf("app pull-secret: give --secret KEY or --clear: %w", ErrUsage)
+	}
+	return r.updateApp(ctx, pos[0], func(a *bohuxv1.App) bool {
+		if a.GetImagePullSecret() == *key {
+			return false
+		}
+		a.ImagePullSecret = *key
+		return true
+	})
 }
 
 // repeated is a flag that may be given more than once.
@@ -547,6 +576,7 @@ func (r *resource) appCreate(ctx context.Context, args []string) error {
 	ref := r.fs.String("ref", "", "default branch, tag, or commit to build")
 	replicas := r.fs.Int("replicas", 1, "replicas")
 	health := r.fs.String("health", "", "HTTP health check, PATH or PATH:PORT (default port: the first)")
+	pull := r.fs.String("image-pull-secret", "", "environment secret holding a Docker config.json for a private registry")
 	var ports, routes repeated
 	r.fs.Var(&ports, "port", "container port, or CONTAINER:HOST to publish on the host; repeatable")
 	r.fs.Var(&routes, "route", "host the node's ingress serves, HOST or HOST:PORT; repeatable")
@@ -578,7 +608,7 @@ func (r *resource) appCreate(ctx context.Context, args []string) error {
 		return err
 	}
 	resp, err := r.apps.CreateApp(ctx, call(r.token, &bohuxv1.CreateAppRequest{EnvironmentId: env, Slug: pos[0],
-		Source: src, Runtime: rt, Routes: rs, IdempotencyKey: r.key()}))
+		Source: src, Runtime: rt, Routes: rs, ImagePullSecret: *pull, IdempotencyKey: r.key()}))
 	if err != nil {
 		return fmt.Errorf("create app: %w", err)
 	}

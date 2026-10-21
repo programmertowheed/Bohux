@@ -106,7 +106,13 @@ func (p *Provider) cmd(ctx context.Context, dir string, args ...string) *exec.Cm
 // never holds secret values: they live only in secrets.env, which the CLI does not
 // echo (rule 3).
 func (p *Provider) run(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	return p.runEnv(ctx, dir, nil, args...)
+}
+
+// runEnv is run with extra environment variables.
+func (p *Provider) runEnv(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
 	c := p.cmd(ctx, dir, args...)
+	c.Env = append(c.Env, env...)
 	var stderr bytes.Buffer
 	c.Stderr = &stderr
 	out, err := c.Output()

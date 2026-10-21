@@ -38,17 +38,19 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S15 — web UI (🔄: read-only views, live deployments, logs, deploy and
-  rollback, activity, usage done); S16 done
+- **Slice:** S17 — private images and Git credentials (ADR-0041): 🔄 registry half
+  done; S15 web UI 🔄 (webhooks, channels, tokens, terminal not in the UI); S16 done
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** the next v0.2 item (Buildpacks/Nixpacks, or registry and Git
-  credentials). Team invites need user accounts: ask the owner first (identity model).
+- **Exact next step:** S17's Git half: `GitSource.ssh_key_secret`, sealed as
+  `SecretValues.ssh_key`, the agent's build fetches with it and passes it to
+  `buildx --ssh`. Then the next v0.2 item. Team invites need user accounts: ask the
+  owner first (identity model).
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then continue slice S15 (web UI, ADR-0012,
-> ADR-0013, ADR-0039) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
+> Read CLAUDE.md and docs/plan/03-progress.md, then continue slice S17 (private images
+> and Git credentials, ADR-0041: the Git SSH key half) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
 > and ADR-0034. Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*).
 > Verify with build, vet, golangci-lint (also with the integration tag), unit and
 > integration tests. Tick boxes, update the tracker and the next session prompt,
@@ -86,6 +88,7 @@ work is in right now*.
 | O27 | Logs in the UI: keep the plain `<pre>` (no ANSI colors) or allow xterm.js, which needs `style-src 'unsafe-inline'` or nonces in the CSP (ADR-0013 vs ADR-0039) | S15 log view |
 | O28 | Accept or reject ADR-0040 (resource view: agents sample node and workloads every 30 s, carried in status reports, no history) | S16 |
 | O29 | Web terminal (v0.2): `Exec` is bidirectional; browsers cannot stream both ways over Connect on HTTP/1.1. Options: a WebSocket bridge on the control plane (a UI-only path, rule 8), or HTTP/2 end to end via the ingress | S15 |
+| O30 | Accept or reject ADR-0041 (registry credentials and Git deploy keys are environment secrets the App names; sealed apart from its env vars; on the node only for the one command). Adds `App.image_pull_secret`, migration 00021 | S17 |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -986,6 +989,28 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       (self-deploy, rollback, fallback, backup, route, 128 polled requests without a
       failure, samples)
 
+### S17 — Private images and Git credentials (ADR-0041) 🔄
+- [x] Proposed ADR-0041 (O30): a credential is an environment secret the App names by
+      key; it is sealed to the node in its own `SecretValues` field, never among the
+      environment variables; it exists on the node only for the command that uses it
+- [x] Registry: proto `App.image_pull_secret`, `Workload.image_pull_secret`,
+      `SecretValues.image_pull_config`; migration 00021; the API checks the key is a
+      secret of the environment (`UNKNOWN_SECRET`); the deploy resolves its handle
+      (a deleted secret fails the deploy with a clear reason); assignment seals it and
+      a rotation re-sends it; the agent hands it to the provider (`Spec.PullConfig`,
+      opened only on use, not in the spec hash); Docker runs `compose up` with a
+      throwaway `DOCKER_CONFIG`
+- [x] Tests: `pullEnv` (modes, cleanup, plugin link), agent reconcile (the provider
+      gets it, not as an env var; rotation does not restart), assignment sealing and
+      rotation, CLI end to end (`--image-pull-secret`, `app pull-secret`, validation),
+      and a **real registry with htpasswd auth**: the pull fails without the
+      credential, succeeds with it, no credential on disk afterwards
+- [x] CLI `app create --image-pull-secret`, `app pull-secret --secret|--clear`,
+      `app show` column; UI fields in New app and app settings; docs in
+      `docs/providers/docker.md`
+- [ ] Git: `GitSource.ssh_key_secret`, `SecretValues.ssh_key`, the agent's fetch and
+      `buildx --ssh` with a throwaway key file
+
 ## Known gaps and notes
 - **CI has not run on this branch.** `ci.yml` triggers on pushes to `main` and on
   pull requests; there is no PR for `claude/relaxed-rubin-76m7dl`, so every check so
@@ -1068,6 +1093,12 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   1.24–1.26). Raising the `go` directive is cheap and its own commit when wanted.
 
 ## Session log (newest first)
+
+### 2026-10-21 (auto run, S17) — branch `claude/relaxed-rubin-76m7dl`
+- S15 forms and App page done (checked in Chromium).
+- S17 started: ADR-0041 proposed (O30). Private registry images work end to end
+  against a real authenticated registry; CLI, UI, docs. Full integration suite green.
+- **Next:** S17 Git deploy keys.
 
 ### 2026-10-21 (auto run, S9e–S9f) — branch `claude/relaxed-rubin-76m7dl`
 - S9e done: `scripts/selfdeploy-test.sh` and the CI `selfdeploy` job; passed here. The

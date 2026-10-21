@@ -34,6 +34,9 @@ message App {
   // Release state: changing them takes effect without a deploy, and a rollback never
   // moves them.
   repeated Route routes = 8;
+  // Key of an environment secret holding a Docker config.json (`{"auths": …}`) used
+  // to pull the image from a private registry (ADR-0041). Empty for public images.
+  string image_pull_secret = 9;
 }
 
 // One host served by the node's ingress (Caddy, ADR-0019) with automatic HTTPS.
@@ -147,6 +150,7 @@ message CreateAppRequest {
   // Owner role required when non-empty (ADR-0032).
   google.protobuf.Struct provider_options = 7;
   repeated Route routes = 8;
+  string image_pull_secret = 9;
 }
 
 message CreateAppResponse {
@@ -193,6 +197,7 @@ message UpdateAppRequest {
   // Replaces the App's provider options; owner role required to change them (ADR-0032).
   google.protobuf.Struct provider_options = 7;
   repeated Route routes = 8;
+  string image_pull_secret = 9;
 }
 
 message UpdateAppResponse {

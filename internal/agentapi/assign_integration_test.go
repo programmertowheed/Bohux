@@ -527,3 +527,78 @@ func TestRotateTx(t *testing.T) {
 		t.Errorf("node without the secret is at generation %d, %v; want 1", gen2, err)
 	}
 }
+
+// A registry credential travels sealed in its own field, never among the App's
+// environment variables, and rotating it re-sends the assignment (ADR-0041).
+func TestImagePullSecret(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	const first, second = `{"auths":{"r.example":{"auth":"Zmlyc3Q="}}}`, `{"auths":{"r.example":{"auth":"c2Vjb25k"}}}`
+	secrets := fakeSecrets{"openbao:db": secretValue, "openbao:reg": first}
+	h.srv.Secrets = secrets
+	a := h.register("vps-1")
+	node := uuid.MustParse(a.node)
+	app, _ := fixture.App(t, h.st, h.tenant, "api", "prod")
+	w := workload(app.String())
+	w.ImagePullSecret = &bohuxv1.SecretRef{Key: "REGISTRY", Handle: "openbao:reg"}
+	if _, err := h.srv.Assign(ctx, h.tenant, node, []*agentv1.Workload{w}, system); err != nil {
+		t.Fatal(err)
+	}
+
+	sctx, cancel := context.WithCancel(ctx)
+	stream, firstMsg, err := open(sctx, a.client, hello(a.node, "0.3.0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStream(stream, cancel)
+	got := firstMsg.GetAssignment()
+	if got == nil {
+		got = nextAssignment(t, stream)
+	}
+	opened := func(asg *agentv1.Assignment) *agentv1.SecretValues {
+		t.Helper()
+		p := &agentv1.AssignmentPayload{}
+		if err := proto.Unmarshal(asg.GetPayload(), p); err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(asg.GetPayload(), []byte("Zmlyc3Q")) || bytes.Contains(asg.GetPayload(), []byte("c2Vjb25k")) {
+			t.Error("registry credential in clear in the payload")
+		}
+		var pub, priv [32]byte
+		copy(pub[:], a.sealing.PublicKey().Bytes())
+		copy(priv[:], a.sealing.Bytes())
+		plain, ok := box.OpenAnonymous(nil, p.GetWorkloads()[0].GetSealedSecrets(), &pub, &priv)
+		if !ok {
+			t.Fatal("sealed secrets do not open with the node's key")
+		}
+		vals := &agentv1.SecretValues{}
+		if err := proto.Unmarshal(plain, vals); err != nil {
+			t.Fatal(err)
+		}
+		return vals
+	}
+	vals := opened(got)
+	if vals.GetImagePullConfig() != first {
+		t.Errorf("image_pull_config = %q, want the credential", vals.GetImagePullConfig())
+	}
+	if _, leaked := vals.GetValues()["REGISTRY"]; leaked || len(vals.GetValues()) != 1 {
+		t.Errorf("environment values = %v, want only DATABASE_URL", vals.GetValues())
+	}
+
+	secrets["openbao:reg"] = second
+	var woken []uuid.UUID
+	if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+		var err error
+		woken, err = h.srv.RotateTx(ctx, tx, "openbao:reg", system)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(woken) != 1 || woken[0] != node {
+		t.Fatalf("woken = %v, want %s", woken, node)
+	}
+	h.srv.Wake(node)
+	if vals := opened(nextAssignment(t, stream)); vals.GetImagePullConfig() != second {
+		t.Errorf("after rotation image_pull_config = %q, want the new credential", vals.GetImagePullConfig())
+	}
+}

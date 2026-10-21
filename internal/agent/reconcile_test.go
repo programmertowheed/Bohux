@@ -27,6 +27,7 @@ type fakeProvider struct {
 	secrets   map[provider.ResourceRef]map[string]string
 	applies   int
 	destroyed []provider.ResourceRef
+	pulls     map[provider.ResourceRef]string
 }
 
 func newFake() *fakeProvider {
@@ -52,6 +53,16 @@ func (f *fakeProvider) Apply(_ context.Context, req provider.ApplyRequest) (prov
 			return provider.ApplyResult{}, err
 		}
 		f.secrets[req.Spec.Ref] = vals
+	}
+	if req.Spec.PullConfig != nil {
+		cfg, err := req.Spec.PullConfig.Open()
+		if err != nil {
+			return provider.ApplyResult{}, err
+		}
+		if f.pulls == nil {
+			f.pulls = map[provider.ResourceRef]string{}
+		}
+		f.pulls[req.Spec.Ref] = cfg
 	}
 	st := provider.Status{Exists: true, Hash: req.Spec.Hash, Running: true,
 		Healthy: !f.broken[req.Spec.Release], ReadyReplicas: req.Spec.Runtime.GetReplicas()}
@@ -295,5 +306,60 @@ func waitUntil(t *testing.T, cond func() bool) {
 			t.Fatal("condition not met in time")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestReconcilePullConfig(t *testing.T) {
+	ctx := context.Background()
+	signer, err := pki.LoadOrCreate(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := testState(t, signer)
+	c, err := OpenCache(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := newFake()
+	r := &Reconciler{State: st, Cache: c, Provider: fake}
+	send := func(gen uint64, cfg string) {
+		t.Helper()
+		plain, err := proto.Marshal(&agentv1.SecretValues{ImagePullConfig: cfg})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var pub [32]byte
+		copy(pub[:], st.sealingKey.PublicKey().Bytes())
+		w := &agentv1.Workload{AppId: "api", EnvironmentId: "env", Provider: "fake", ReleaseId: "r1",
+			Image: "r.example/api@sha256:1", Runtime: &bohuxv1.Runtime{Replicas: 1},
+			ImagePullSecret: &bohuxv1.SecretRef{Key: "REGISTRY", Handle: "openbao:reg"}}
+		if w.SealedSecrets, err = box.SealAnonymous(nil, plain, &pub, rand.Reader); err != nil {
+			t.Fatal(err)
+		}
+		payload, err := proto.Marshal(&agentv1.AssignmentPayload{NodeId: st.NodeID(), Generation: gen,
+			Workloads: []*agentv1.Workload{w}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sig, keyID := signer.SignAssignment(payload)
+		if ok, err := c.Accept(&agentv1.Assignment{Payload: payload, Signature: sig, KeyId: keyID}); err != nil || !ok {
+			t.Fatalf("Accept gen %d: %v %v", gen, ok, err)
+		}
+	}
+
+	send(1, `{"auths":{"r.example":{"auth":"Zmlyc3Q="}}}`)
+	r.Once(ctx)
+	if got := fake.pulls[ref("api")]; got != `{"auths":{"r.example":{"auth":"Zmlyc3Q="}}}` {
+		t.Fatalf("provider pulled with %q", got)
+	}
+	if len(fake.secrets[ref("api")]) != 0 {
+		t.Errorf("credential reached the environment: %v", fake.secrets[ref("api")])
+	}
+
+	send(2, `{"auths":{"r.example":{"auth":"c2Vjb25k"}}}`)
+	before, _ := fake.counts()
+	r.Once(ctx)
+	if after, _ := fake.counts(); after != before {
+		t.Errorf("a rotated credential restarted the workload (%d applies)", after-before)
 	}
 }

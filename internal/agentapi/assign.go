@@ -299,8 +299,10 @@ func (s *Server) RotateTx(ctx context.Context, tx *store.Tx, handle string, acto
 
 func references(workloads []*agentv1.Workload, handle string) bool {
 	for _, w := range workloads {
-		for _, ref := range append(w.GetSecrets(), w.GetFallback().GetSecrets()...) {
-			if ref.GetHandle() == handle {
+		refs := append(w.GetSecrets(), w.GetFallback().GetSecrets()...)
+		refs = append(refs, w.GetImagePullSecret(), w.GetFallback().GetImagePullSecret())
+		for _, ref := range refs {
+			if ref != nil && ref.GetHandle() == handle {
 				return true
 			}
 		}
@@ -391,15 +393,19 @@ func (s *Server) signedLatest(ctx context.Context, tenant, node uuid.UUID, after
 
 // seal resolves w's secret handles and seals the values to the node's key.
 func (s *Server) seal(ctx context.Context, tenant uuid.UUID, w *agentv1.Workload, recipient *[32]byte) error {
-	if len(w.GetSecrets()) == 0 {
+	pull := w.GetImagePullSecret()
+	if len(w.GetSecrets()) == 0 && pull == nil {
 		return nil
 	}
 	if s.Secrets == nil {
 		return errNoResolver
 	}
-	handles := make([]string, len(w.GetSecrets()))
-	for i, ref := range w.GetSecrets() {
-		handles[i] = ref.GetHandle()
+	handles := make([]string, 0, len(w.GetSecrets())+1)
+	for _, ref := range w.GetSecrets() {
+		handles = append(handles, ref.GetHandle())
+	}
+	if pull != nil {
+		handles = append(handles, pull.GetHandle())
 	}
 	byHandle, err := s.Secrets.Resolve(ctx, tenant, handles)
 	if err != nil {
@@ -412,6 +418,14 @@ func (s *Server) seal(ctx context.Context, tenant uuid.UUID, w *agentv1.Workload
 			return fmt.Errorf("secret %s for app %s did not resolve", ref.GetKey(), w.GetAppId())
 		}
 		values.Values[ref.GetKey()] = v
+	}
+	if pull != nil {
+		// Apart from the environment variables: only the pull uses it (ADR-0041).
+		v, ok := byHandle[pull.GetHandle()]
+		if !ok {
+			return fmt.Errorf("image pull secret for app %s did not resolve", w.GetAppId())
+		}
+		values.ImagePullConfig = v
 	}
 	plain, err := proto.Marshal(values)
 	if err != nil {

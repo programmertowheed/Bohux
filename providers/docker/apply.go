@@ -59,7 +59,12 @@ func (p *Provider) Apply(ctx context.Context, req provider.ApplyRequest) (provid
 			return provider.ApplyResult{}, err
 		}
 	}
-	if _, err := p.run(ctx, dir, "compose", "-p", project(spec.Ref), "-f", composeFile,
+	env, done, err := pullEnv(spec.PullConfig)
+	if err != nil {
+		return provider.ApplyResult{}, err
+	}
+	defer done()
+	if _, err := p.runEnv(ctx, dir, env, "compose", "-p", project(spec.Ref), "-f", composeFile,
 		"up", "--detach", "--remove-orphans", "--quiet-pull"); err != nil {
 		return provider.ApplyResult{}, err
 	}
@@ -79,6 +84,39 @@ func (p *Provider) ensureIngressNetwork(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// pullEnv puts a registry credential where `docker compose` reads it for this one
+// command: a fresh 0700 DOCKER_CONFIG directory, removed by done (ADR-0041). The
+// daemon's and root's own Docker config are never touched. Per-user CLI plugins
+// (compose itself, possibly) are linked in so the command still finds them.
+func pullEnv(src provider.PullConfigSource) (env []string, done func(), err error) {
+	if src == nil {
+		return nil, func() {}, nil
+	}
+	cfg, err := src.Open()
+	if err != nil {
+		return nil, nil, fmt.Errorf("open image pull secret: %w", err)
+	}
+	dir, err := os.MkdirTemp("", "bohux-pull-")
+	if err != nil {
+		return nil, nil, fmt.Errorf("create pull config directory: %w", err)
+	}
+	done = func() { _ = os.RemoveAll(dir) }
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(cfg), 0o600); err != nil {
+		done()
+		return nil, nil, fmt.Errorf("write pull config: %w", err)
+	}
+	plugins := os.Getenv("DOCKER_CONFIG")
+	if plugins == "" {
+		if home, herr := os.UserHomeDir(); herr == nil {
+			plugins = filepath.Join(home, ".docker")
+		}
+	}
+	if st, serr := os.Stat(filepath.Join(plugins, "cli-plugins")); serr == nil && st.IsDir() {
+		_ = os.Symlink(filepath.Join(plugins, "cli-plugins"), filepath.Join(dir, "cli-plugins"))
+	}
+	return []string{"DOCKER_CONFIG=" + dir}, done, nil
 }
 
 func writeAtomic(path string, data []byte, mode os.FileMode) error {

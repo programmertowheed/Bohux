@@ -147,6 +147,10 @@ message Workload {
   // Hosts the node's ingress serves this workload on (ADR-0034). Not part of the
   // provider spec: changing them reloads the ingress, never the containers.
   repeated bohux.v1.Route routes = 15;
+  // The secret holding a Docker config.json for pulling the image (ADR-0041). Its value
+  // is sealed in `sealed_secrets` as SecretValues.image_pull_config, never among the
+  // container's environment variables.
+  bohux.v1.SecretRef image_pull_secret = 16;
 }
 
 // The plaintext of Workload.sealed_secrets before sealing (ADR-0008, ADR-0024): the
@@ -154,6 +158,8 @@ message Workload {
 // plane memory while sealing and in agent memory while rendering the secret file.
 message SecretValues {
   map<string, string> values = 1 [debug_redact = true];
+  // The Docker config.json to pull the image with (ADR-0041); used only for the pull.
+  string image_pull_config = 2 [debug_redact = true];
 }
 
 message StatusReport {

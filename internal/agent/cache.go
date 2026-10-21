@@ -138,8 +138,26 @@ func (c *Cache) verify(a *agentv1.Assignment) (*agentv1.AssignmentPayload, error
 // (ADR-0008). Only the provider calls it, to render its secret file; the values must
 // never be logged or written anywhere else (rule 3).
 func (s *State) OpenSecrets(w *agentv1.Workload) (map[string]string, error) {
+	vals, err := s.openSealed(w)
+	if err != nil {
+		return nil, err
+	}
+	return vals.GetValues(), nil
+}
+
+// OpenPullConfig returns the workload's sealed registry credential, empty if it has
+// none (ADR-0041).
+func (s *State) OpenPullConfig(w *agentv1.Workload) (string, error) {
+	vals, err := s.openSealed(w)
+	if err != nil {
+		return "", err
+	}
+	return vals.GetImagePullConfig(), nil
+}
+
+func (s *State) openSealed(w *agentv1.Workload) (*agentv1.SecretValues, error) {
 	if len(w.GetSealedSecrets()) == 0 {
-		return map[string]string{}, nil
+		return &agentv1.SecretValues{Values: map[string]string{}}, nil
 	}
 	var pub, priv [32]byte
 	copy(pub[:], s.sealingKey.PublicKey().Bytes())
@@ -152,5 +170,8 @@ func (s *State) OpenSecrets(w *agentv1.Workload) (map[string]string, error) {
 	if err := proto.Unmarshal(plain, vals); err != nil {
 		return nil, fmt.Errorf("decode secret values: %w", err)
 	}
-	return vals.GetValues(), nil
+	if vals.Values == nil {
+		vals.Values = map[string]string{}
+	}
+	return vals, nil
 }

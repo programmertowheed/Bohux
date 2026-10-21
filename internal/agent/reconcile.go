@@ -442,6 +442,15 @@ type workloadSecrets struct {
 
 func (s workloadSecrets) Open() (map[string]string, error) { return s.st.OpenSecrets(s.w) }
 
+// workloadPullConfig opens the sealed registry credential only when the provider
+// pulls (ADR-0041).
+type workloadPullConfig struct {
+	st *State
+	w  *agentv1.Workload
+}
+
+func (p workloadPullConfig) Open() (string, error) { return p.st.OpenPullConfig(p.w) }
+
 // spec builds the provider Spec. Its hash covers the workload minus fields that do
 // not change what runs (the per-send seal, the deployment id, the fallback, the routes)
 // plus a keyed digest of
@@ -475,6 +484,11 @@ func (r *Reconciler) spec(ref provider.ResourceRef, w *agentv1.Workload) (provid
 	}
 	if len(w.GetSealedSecrets()) > 0 {
 		spec.Secrets = workloadSecrets{st: r.State, w: w}
+	}
+	// The credential's value is not in the hash: the image is pinned by digest, so a
+	// rotated credential is used by the next pull without restarting anything.
+	if w.GetImagePullSecret() != nil {
+		spec.PullConfig = workloadPullConfig{st: r.State, w: w}
 	}
 	return spec, nil
 }

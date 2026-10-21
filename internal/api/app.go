@@ -44,10 +44,13 @@ type appState struct {
 	secrets []*bohuxv1.SecretRef
 	options *structpb.Struct
 	routes  []*bohuxv1.Route
+	// pullSecret is the key of an environment secret (ADR-0041).
+	pullSecret string
 }
 
 func stateOf(app *bohuxv1.App) appState {
-	return appState{app.GetSource(), app.GetRuntime(), app.GetSecrets(), app.GetProviderOptions(), app.GetRoutes()}
+	return appState{app.GetSource(), app.GetRuntime(), app.GetSecrets(), app.GetProviderOptions(), app.GetRoutes(),
+		app.GetImagePullSecret()}
 }
 
 // appSpec validates an App's mutable state and returns its revision columns.
@@ -62,6 +65,9 @@ func appSpec(ctx context.Context, tx *store.Tx, env uuid.UUID, st appState) ([]s
 		return nil, err
 	}
 	if err := validRoutes(st.routes, st.runtime); err != nil {
+		return nil, err
+	}
+	if err := validPullSecret(ctx, tx, env, st.pullSecret); err != nil {
 		return nil, err
 	}
 	srcJSON, err := storeJSON.Marshal(st.source)
@@ -89,6 +95,7 @@ func appSpec(ctx context.Context, tx *store.Tx, env uuid.UUID, st appState) ([]s
 	return []store.Col{
 		{Name: "source", Value: srcJSON}, {Name: "runtime", Value: rtJSON}, {Name: "secrets", Value: secJSON},
 		{Name: "provider_options", Value: optJSON}, {Name: "routes", Value: routesJSON},
+		{Name: "image_pull_secret", Value: st.pullSecret},
 	}, nil
 }
 
@@ -211,6 +218,26 @@ func validSecretRefs(ctx context.Context, tx *store.Tx, env uuid.UUID, refs []*b
 	return nil
 }
 
+// validPullSecret checks the key names a live secret of the environment. Only the key
+// is stored; the value is resolved and sealed for the node (ADR-0041).
+func validPullSecret(ctx context.Context, tx *store.Tx, env uuid.UUID, key string) error {
+	if key == "" {
+		return nil
+	}
+	if !envVarName.MatchString(key) {
+		return invalidArgument("image_pull_secret", "INVALID", "image_pull_secret must be a secret key")
+	}
+	var ok bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM secret_refs_heads
+		WHERE environment_id = $1 AND key = $2 AND NOT deleted)`, env, key).Scan(&ok); err != nil {
+		return fmt.Errorf("check image pull secret: %w", err)
+	}
+	if !ok {
+		return invalidArgument("image_pull_secret", "UNKNOWN_SECRET", fmt.Sprintf("no secret %q in this environment", key))
+	}
+	return nil
+}
+
 // hostName is a lowercase DNS name: dot-separated labels of letters, digits and
 // inner hyphens, at least two labels (ADR-0034: no wildcard, port, or path).
 var hostName = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
@@ -301,7 +328,7 @@ func (as *appService) CreateApp(ctx context.Context, req *connect.Request[bohuxv
 			return err
 		}
 		cols, err := appSpec(ctx, tx, env, appState{msg.GetSource(), msg.GetRuntime(), msg.GetSecrets(),
-			msg.GetProviderOptions(), msg.GetRoutes()})
+			msg.GetProviderOptions(), msg.GetRoutes(), msg.GetImagePullSecret()})
 		if err != nil {
 			return err
 		}
@@ -423,7 +450,8 @@ func (as *appService) UpdateApp(ctx context.Context, req *connect.Request[bohuxv
 	app, err := as.update(ctx, bohuxv1connect.AppServiceUpdateAppProcedure, msg.GetId(),
 		msg.GetExpectedRevisionId(), msg.GetIdempotencyKey(), msg, auth.RoleDeployer,
 		func(*bohuxv1.App) appState {
-			return appState{msg.GetSource(), msg.GetRuntime(), msg.GetSecrets(), msg.GetProviderOptions(), msg.GetRoutes()}
+			return appState{msg.GetSource(), msg.GetRuntime(), msg.GetSecrets(), msg.GetProviderOptions(), msg.GetRoutes(),
+				msg.GetImagePullSecret()}
 		})
 	if err != nil {
 		return nil, err
@@ -596,7 +624,7 @@ func (as *appService) DeleteApp(ctx context.Context, req *connect.Request[bohuxv
 }
 
 const appSelect = `SELECT ` + metaColumns + `, h.environment_id, h.slug, r.source, r.runtime, r.secrets,
-	r.provider_options, r.routes FROM apps_heads h JOIN apps_revisions r ON r.id = h.revision_id`
+	r.provider_options, r.routes, r.image_pull_secret FROM apps_heads h JOIN apps_revisions r ON r.id = h.revision_id`
 
 // getApp reads a live app by id, or by (environment, slug) if id is nil.
 func getApp(ctx context.Context, tx *store.Tx, id, env uuid.UUID, slug string) (*bohuxv1.App, error) {
@@ -621,15 +649,16 @@ func scanApp(row pgx.Row) (*bohuxv1.App, error) {
 		slug          string
 		src, rt, secs []byte
 		opts, routes  []byte
+		pull          string
 	)
-	if err := row.Scan(append(m.dest(), &env, &slug, &src, &rt, &secs, &opts, &routes)...); err != nil {
+	if err := row.Scan(append(m.dest(), &env, &slug, &src, &rt, &secs, &opts, &routes, &pull)...); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("read app: %w", err)
 	}
 	app := &bohuxv1.App{Meta: m.proto(), EnvironmentId: env.String(), Slug: slug,
-		Source: &bohuxv1.Source{}, Runtime: &bohuxv1.Runtime{}}
+		Source: &bohuxv1.Source{}, Runtime: &bohuxv1.Runtime{}, ImagePullSecret: pull}
 	if err := loadJSON.Unmarshal(src, app.Source); err != nil {
 		return nil, fmt.Errorf("decode app source: %w", err)
 	}

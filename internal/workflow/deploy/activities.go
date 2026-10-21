@@ -358,10 +358,11 @@ func buildWorkload(ctx context.Context, tx *store.Tx, app uuid.UUID, in AssignIn
 		available               bool
 		rt, secs, currentRT     []byte
 		opts, routes            []byte
+		pullKey                 string
 	)
 	err = tx.QueryRow(ctx, `SELECT a.environment_id, er.provider, r.artifact_digest, r.state,
 		r.artifact_available, r.source_ref, ar.runtime, ar.secrets, cur.runtime, ar.provider_options,
-		cur.routes
+		cur.routes, cur.image_pull_secret
 		FROM releases_heads h
 		JOIN releases_revisions r ON r.id = h.revision_id
 		JOIN apps_revisions ar ON ar.id = h.config_revision_id
@@ -370,7 +371,7 @@ func buildWorkload(ctx context.Context, tx *store.Tx, app uuid.UUID, in AssignIn
 		JOIN environments_heads e ON e.id = a.environment_id
 		JOIN environments_revisions er ON er.id = e.revision_id
 		WHERE h.id = $1 AND h.app_id = $2 AND NOT h.deleted`, release, app).Scan(
-		&env, &provider, &digest, &state, &available, &sourceRef, &rt, &secs, &currentRT, &opts, &routes)
+		&env, &provider, &digest, &state, &available, &sourceRef, &rt, &secs, &currentRT, &opts, &routes, &pullKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, invalid("release does not exist for this app")
 	}
@@ -402,6 +403,20 @@ func buildWorkload(ctx context.Context, tx *store.Tx, app uuid.UUID, in AssignIn
 		AppId: app.String(), EnvironmentId: env.String(), ReleaseId: in.ReleaseID,
 		DeploymentId: in.DeploymentID, Provider: provider, Image: imageRef(sourceRef, digest),
 		Runtime: runtime, Secrets: secrets, Routes: rs,
+	}
+	// The pull credential is the App's current one, like its routes: a rollback pulls an
+	// old image with today's credential (ADR-0041).
+	if pullKey != "" {
+		var handle string
+		err := tx.QueryRow(ctx, `SELECT handle FROM secret_refs_heads
+			WHERE environment_id = $1 AND key = $2 AND NOT deleted`, env, pullKey).Scan(&handle)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, invalid("the app's image pull secret " + pullKey + " no longer exists")
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read image pull secret: %w", err)
+		}
+		w.ImagePullSecret = &bohuxv1.SecretRef{Key: pullKey, Handle: handle}
 	}
 	// Provider options travel as the Release's App revision had them (ADR-0032).
 	if string(opts) != "{}" {
