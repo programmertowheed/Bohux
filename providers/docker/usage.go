@@ -118,4 +118,3 @@ func byteSize(s string) int64 {
 	}
 	return 0
 }
-
