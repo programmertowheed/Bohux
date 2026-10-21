@@ -14,6 +14,7 @@ import (
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/gen/bohux/v1/bohuxv1connect"
 	"github.com/bohumix/bohux/internal/auth"
+	"github.com/bohumix/bohux/internal/notify"
 	"github.com/bohumix/bohux/internal/store"
 )
 
@@ -111,12 +112,18 @@ func TestNotificationChannels(t *testing.T) {
 			t.Errorf("the error repeats the URL: %v", err)
 		}
 	}
-	mailed, err := mailCreate("mail", "mailto:ops@example.com,dev@example.org")
+	mailed, err := mailCreate("mail", " ops@example.com, dev@example.org")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c := mailed.GetChannel(); c.GetUrlHost() != "example.com,example.org" || mailed.GetSigningSecret() != "" {
 		t.Errorf("email channel = %v", c)
+	}
+	bao.mu.Lock()
+	stored := bao.vals[notify.URLPath(h.tenant, mustUUID(t, mailed.GetChannel().GetMeta().GetId()))]
+	bao.mu.Unlock()
+	if len(stored) != 1 || stored[0] != "mailto:ops@example.com,dev@example.org" {
+		t.Errorf("stored recipients %q, want the canonical mailto: form", stored)
 	}
 
 	c := slack.GetChannel()

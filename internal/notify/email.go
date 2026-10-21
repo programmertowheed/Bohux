@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
 	"net/url"
 	"strings"
 	"time"
@@ -16,6 +17,18 @@ import (
 
 // MaxRecipients bounds an EMAIL channel's mailto: list (ADR-0043).
 const MaxRecipients = 10
+
+// ErrPermanent marks a refusal that retrying cannot change: the relay answered 5xx.
+var ErrPermanent = errors.New("permanent SMTP refusal")
+
+// classify wraps a relay's 5xx reply as ErrPermanent.
+func classify(step string, err error) error {
+	var te *textproto.Error
+	if errors.As(err, &te) && te.Code >= 500 {
+		return fmt.Errorf("send email: %s: %w: %w", step, ErrPermanent, err)
+	}
+	return fmt.Errorf("send email: %s: %w", step, err)
+}
 
 // SMTP is the install's mail relay (ADR-0043). The zero value sends no mail.
 type SMTP struct {
@@ -34,17 +47,23 @@ type SMTP struct {
 // Enabled reports whether a relay is configured.
 func (s SMTP) Enabled() bool { return s.Addr != "" }
 
-// Recipients parses a channel's mailto: URL: one to MaxRecipients plain addresses, no
-// display names and no headers. Its errors never quote the input.
+// Recipients parses a channel's recipients: a mailto: URL, or the same addresses as a
+// plain comma-separated list. One to MaxRecipients plain addresses, no display names
+// and no headers. Its errors never quote the input.
 func Recipients(raw string) ([]string, error) {
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "mailto" || u.Opaque == "" || u.RawQuery != "" || u.Fragment != "" {
-		return nil, errors.New("want mailto:address[,address…] without headers")
+	bad := errors.New("want mailto:address[,address…] or address[,address…], without headers")
+	raw = strings.TrimSpace(raw)
+	if len(raw) >= len("mailto:") && strings.EqualFold(raw[:len("mailto:")], "mailto:") {
+		raw = raw[len("mailto:"):]
 	}
-	list, err := url.PathUnescape(u.Opaque)
+	if raw == "" || strings.ContainsAny(raw, "?#") {
+		return nil, bad
+	}
+	list, err := url.PathUnescape(raw)
 	if err != nil {
-		return nil, errors.New("want mailto:address[,address…] without headers")
+		return nil, bad
 	}
+	list = strings.TrimSuffix(strings.TrimSpace(list), ",")
 	parts := strings.Split(list, ",")
 	if len(parts) > MaxRecipients {
 		return nil, fmt.Errorf("at most %d recipients", MaxRecipients)
@@ -60,6 +79,9 @@ func Recipients(raw string) ([]string, error) {
 	}
 	return out, nil
 }
+
+// MailtoURL is the canonical form of a recipient list, as the API stores it.
+func MailtoURL(addrs []string) string { return "mailto:" + strings.Join(addrs, ",") }
 
 // Domains is what the API shows of a mailto: URL: its recipients' domains.
 func Domains(addrs []string) string {
@@ -167,30 +189,29 @@ func SendEmail(ctx context.Context, s SMTP, to []string, o Outcome) error {
 	}
 	if s.Username != "" {
 		if err := c.Auth(smtp.PlainAuth("", s.Username, s.Password, host)); err != nil {
-			return fmt.Errorf("send email: authenticate: %w", err)
+			return classify("authenticate", err)
 		}
 	}
 	if err := c.Mail(s.From); err != nil {
-		return fmt.Errorf("send email: sender: %w", err)
+		return classify("sender", err)
 	}
 	for i := range to {
 		if err := c.Rcpt(to[i]); err != nil {
-			return fmt.Errorf("send email: recipient %d of %d refused: %w", i+1, len(to), err)
+			return classify(fmt.Sprintf("recipient %d of %d refused", i+1, len(to)), err)
 		}
 	}
 	w, err := c.Data()
 	if err != nil {
-		return fmt.Errorf("send email: data: %w", err)
+		return classify("data", err)
 	}
 	if _, err := w.Write(s.message(to, o, time.Now())); err != nil {
 		_ = w.Close()
 		return fmt.Errorf("send email: write: %w", err)
 	}
 	if err := w.Close(); err != nil {
-		return fmt.Errorf("send email: relay refused the message: %w", err)
+		return classify("relay refused the message", err)
 	}
-	if err := c.Quit(); err != nil {
-		return fmt.Errorf("send email: quit: %w", err)
-	}
+	// The relay has the message; a failed goodbye must not send it again.
+	_ = c.Quit()
 	return nil
 }

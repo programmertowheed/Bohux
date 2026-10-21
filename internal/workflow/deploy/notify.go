@@ -148,7 +148,13 @@ func (a *Activities) NotifyChannel(ctx context.Context, in NotifyInput) error {
 			// The relay was removed after the channel was made; retrying cannot help.
 			return temporal.NewNonRetryableApplicationError("this install has no SMTP relay", ErrTypeInvalid, nil)
 		}
-		return notify.SendEmail(ctx, a.Mail, to, o)
+		if err := notify.SendEmail(ctx, a.Mail, to, o); err != nil {
+			if errors.Is(err, notify.ErrPermanent) {
+				return temporal.NewNonRetryableApplicationError(err.Error(), ErrTypeInvalid, nil)
+			}
+			return err
+		}
+		return nil
 	}
 	return notify.Send(ctx, a.HTTP, ch, o)
 }

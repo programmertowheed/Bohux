@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 
@@ -19,6 +20,8 @@ func TestRecipients(t *testing.T) {
 	}{
 		{raw: "mailto:ops@example.com", want: "ops@example.com"},
 		{raw: "mailto:ops@example.com,dev@example.org", want: "ops@example.com dev@example.org"},
+		{raw: " ops@example.com, dev@example.org, ", want: "ops@example.com dev@example.org"},
+		{raw: "MAILTO:ops@example.com", want: "ops@example.com"},
 		{raw: "mailto:ops@example.com?subject=x", wantErr: true},
 		{raw: "mailto:Ops%20%3Cops@example.com%3E", wantErr: true},
 		{raw: "mailto:ops@example.com%0D%0ABcc:x@evil.example", wantErr: true},
@@ -35,6 +38,9 @@ func TestRecipients(t *testing.T) {
 			strings.Contains(err.Error(), "subject")) {
 			t.Errorf("error quotes the input: %v", err)
 		}
+	}
+	if got := notify.MailtoURL([]string{"a@x.example", "b@y.example"}); got != "mailto:a@x.example,b@y.example" {
+		t.Errorf("MailtoURL = %q", got)
 	}
 	if d := notify.Domains([]string{"a@x.example", "b@x.example", "c@y.example"}); d != "x.example,y.example" {
 		t.Errorf("Domains = %q", d)
@@ -106,6 +112,24 @@ func TestSendEmail(t *testing.T) {
 		}
 		if r.Seen().Auth != "" {
 			t.Error("authenticated to an untrusted relay")
+		}
+	})
+
+	t.Run("a dropped goodbye after the relay took the message is a success", func(t *testing.T) {
+		r := smtptest.StartWith(t, smtptest.StartTLS, smtptest.Options{DropOnQuit: true})
+		if err := notify.SendEmail(context.Background(), relay(r), to, o); err != nil {
+			t.Fatalf("err = %v; a retry would send the message twice", err)
+		}
+		if r.Seen().Data == "" {
+			t.Error("the relay did not get the message")
+		}
+	})
+
+	t.Run("a 5xx refusal is permanent", func(t *testing.T) {
+		r := smtptest.StartWith(t, smtptest.StartTLS, smtptest.Options{RefuseRcpt: true})
+		err := notify.SendEmail(context.Background(), relay(r), to, o)
+		if !errors.Is(err, notify.ErrPermanent) || strings.Contains(err.Error(), "ops@example.com") {
+			t.Fatalf("err = %v, want ErrPermanent without the address", err)
 		}
 	})
 

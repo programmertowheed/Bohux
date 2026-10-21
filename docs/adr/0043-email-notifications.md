@@ -17,10 +17,12 @@ installs configure them:
 
 ## Decision
 1. **A new channel kind, `EMAIL`, whose `url` is a `mailto:` URL** (RFC 6068) with one to
-   ten plain addresses: `mailto:ops@example.com,dev@example.com`. No display names, no
-   `?subject=` or other headers. It is stored and shown like any channel URL: in
-   OpenBao, write-only; the API shows the recipients' domains. Addresses are personal
-   data, so keeping them out of Postgres is the right default anyway.
+   ten plain addresses: `mailto:ops@example.com,dev@example.com`. The API also takes the
+   bare list (`ops@example.com, dev@example.com`), so no client has to build the URL,
+   and stores the canonical `mailto:` form. No display names, no `?subject=` or other
+   headers. It is stored and shown like any channel URL: in OpenBao, write-only; the
+   API shows the recipients' domains. Addresses are personal data, so keeping them out
+   of Postgres is the right default anyway.
 2. **One relay per install, set by the operator, not per project**: control-plane flags
    `--smtp-addr host:port`, `--smtp-from`, `--smtp-username`, and the password from
    `--smtp-password-file` or `BOHUX_SMTP_PASSWORD` (as for OpenBao's token). The

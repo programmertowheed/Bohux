@@ -46,19 +46,19 @@ var (
 // channelURL checks the URL without ever putting it in an error (rule 3): https only,
 // so the control plane never posts to a plain-HTTP service beside it; for email, a
 // mailto: list whose domains are shown (ADR-0043).
-func channelURL(kind, raw string) (host string, err error) {
+func channelURL(kind, raw string) (host, canonical string, err error) {
 	if kind == "email" {
 		to, rerr := notify.Recipients(raw)
 		if rerr != nil {
-			return "", invalidArgument("url", "INVALID", "url must be mailto: with one to ten plain addresses: "+rerr.Error())
+			return "", "", invalidArgument("url", "INVALID", "url must be one to ten plain addresses (mailto: optional): "+rerr.Error())
 		}
-		return notify.Domains(to), nil
+		return notify.Domains(to), notify.MailtoURL(to), nil
 	}
 	u, perr := url.Parse(raw)
 	if perr != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
-		return "", invalidArgument("url", "INVALID", "url must be an https:// URL without credentials")
+		return "", "", invalidArgument("url", "INVALID", "url must be an https:// URL without credentials")
 	}
-	return u.Hostname(), nil
+	return u.Hostname(), raw, nil
 }
 
 func (ns *notificationService) CreateNotificationChannel(ctx context.Context, req *connect.Request[bohuxv1.CreateNotificationChannelRequest]) (*connect.Response[bohuxv1.CreateNotificationChannelResponse], error) {
@@ -79,7 +79,7 @@ func (ns *notificationService) CreateNotificationChannel(ctx context.Context, re
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			errors.New("this install has no SMTP relay; its operator sets --smtp-addr (ADR-0043)"))
 	}
-	host, err := channelURL(kind, msg.GetUrl())
+	host, target, err := channelURL(kind, msg.GetUrl())
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +124,7 @@ func (ns *notificationService) CreateNotificationChannel(ctx context.Context, re
 	if err != nil {
 		return nil, toConnect(ctx, err)
 	}
-	if _, err := ns.s.Secrets.Put(ctx, notify.URLPath(p.Tenant, id), msg.GetUrl()); err != nil {
+	if _, err := ns.s.Secrets.Put(ctx, notify.URLPath(p.Tenant, id), target); err != nil {
 		slog.ErrorContext(ctx, "store notification url", "channel", id.String(), "err", err)
 		return nil, errNoSecrets
 	}

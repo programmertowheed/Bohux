@@ -27,6 +27,14 @@ const (
 	Plain // offers no TLS at all
 )
 
+// Options change how the relay answers.
+type Options struct {
+	// RefuseRcpt answers every RCPT with 550.
+	RefuseRcpt bool
+	// DropOnQuit closes the connection instead of answering QUIT.
+	DropOnQuit bool
+}
+
 // Relay records what one client did.
 type Relay struct {
 	// Addr is host:port; Roots trusts the relay's certificate.
@@ -69,7 +77,10 @@ func (r *Relay) Wait(d time.Duration) {
 }
 
 // Start serves one SMTP session on 127.0.0.1 until the test ends.
-func Start(t testing.TB, mode Mode) *Relay {
+func Start(t testing.TB, mode Mode) *Relay { return StartWith(t, mode, Options{}) }
+
+// StartWith is Start with answers changed by opts.
+func StartWith(t testing.TB, mode Mode, opts Options) *Relay {
 	t.Helper()
 	cert, roots := certificate(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -86,12 +97,12 @@ func Start(t testing.TB, mode Mode) *Relay {
 			return
 		}
 		defer func() { _ = conn.Close() }()
-		r.serve(conn, cfg, mode)
+		r.serve(conn, cfg, mode, opts)
 	}()
 	return r
 }
 
-func (r *Relay) serve(conn net.Conn, cfg *tls.Config, mode Mode) {
+func (r *Relay) serve(conn net.Conn, cfg *tls.Config, mode Mode, opts Options) {
 	secure := mode == Implicit
 	if secure {
 		conn = tls.Server(conn, cfg)
@@ -132,6 +143,10 @@ func (r *Relay) serve(conn net.Conn, cfg *tls.Config, mode Mode) {
 			r.set(func() { r.from = line })
 			say("250 ok")
 		case "RCPT":
+			if opts.RefuseRcpt {
+				say("550 no such mailbox")
+				continue
+			}
 			r.set(func() { r.rcpt = append(r.rcpt, line) })
 			say("250 ok")
 		case "DATA":
@@ -147,7 +162,9 @@ func (r *Relay) serve(conn net.Conn, cfg *tls.Config, mode Mode) {
 			r.set(func() { r.data = b.String() })
 			say("250 queued")
 		case "QUIT":
-			say("221 bye")
+			if !opts.DropOnQuit {
+				say("221 bye")
+			}
 			return
 		default:
 			say("500 what")

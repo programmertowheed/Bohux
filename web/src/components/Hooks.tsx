@@ -99,14 +99,6 @@ export function Webhooks({ appId }: { appId: string }) {
   );
 }
 
-// target is what CreateNotificationChannel takes: the URL, or for email a mailto:
-// list, from "a@x, b@y" as `bohux channel create --kind email` accepts (ADR-0043).
-function target(kind: NotificationKind, raw: string): string {
-  if (kind !== NotificationKind.EMAIL) return raw.trim();
-  const list = raw.trim().replace(/^mailto:/, "").split(",").map((a) => a.trim());
-  return "mailto:" + list.join(",");
-}
-
 // The end states a channel can post, as `bohux channel create --state` names them.
 const endStates = [DeploymentState.SUCCEEDED, DeploymentState.FAILED, DeploymentState.ROLLED_BACK, DeploymentState.CANCELLED];
 
@@ -155,7 +147,7 @@ export function Channels({ projectId }: { projectId: string }) {
               e.preventDefault();
               setError(undefined);
               try {
-                const r = await create.mutateAsync({ projectId, kind, url: target(kind, url), states, idempotencyKey: key() });
+                const r = await create.mutateAsync({ projectId, kind, url: url.trim(), states, idempotencyKey: key() });
                 setURL("");
                 if (r.signingSecret) setSecret(r.signingSecret);
                 await qc.invalidateQueries();
