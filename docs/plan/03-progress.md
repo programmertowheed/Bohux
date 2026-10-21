@@ -38,21 +38,21 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S3a — access design ADR (⏳, next to start)
-- **Exact next step:** write a *proposed* ADR for credential format and lookup (API and
-  bootstrap tokens, found before the tenant is known under row-level security), hashing,
-  and idempotency-key storage.
+- **Slice:** S3b — control plane mode (⏳, next to start)
+- **Exact next step:** add a `controlplane` command to `cmd/bohux` that opens the store,
+  runs `store.Migrate`, and serves ConnectRPC over h2c with a health endpoint.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S3a (access design ADR) on
-> branch `claude/relaxed-rubin-76m7dl`. Write a *proposed* ADR with
-> .claude/skills/write-adr/ covering: API token and bootstrap token format, how the
-> control plane finds a token's tenant before row-level security allows any read (see
-> the S2b "Open for S3" note), hash algorithm, and where idempotency keys and their
-> results are stored without ever storing a secret (CreateApiToken returns one). Add it
-> to *Waiting on the owner*, tick the S3a box, update the tracker and the next session
-> prompt, commit, push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S3b (control plane mode) on
+> branch `claude/relaxed-rubin-76m7dl`. Add `bohux controlplane` (opens the store, runs
+> store.Migrate, serves ConnectRPC over h2c with a health check, shuts down cleanly on
+> SIGTERM) and `bohux admin migrate`, in `internal/` packages with `cmd/` kept thin.
+> Keep configuration minimal (listen address and Postgres DSN), from flags with env
+> fallbacks, documented in one place; do not invent other keys. Test startup and
+> shutdown, and run build, vet, golangci-lint (also with the integration tag) and tests
+> (integration on the local Postgres, see the tracker). Tick the S3b box, update the
+> tracker and the next session prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -63,6 +63,7 @@ work is in right now*.
 | O3 | Create the `bohumix` GitHub org and move the repo (ADR-0015). Code already uses `github.com/bohumix/bohux` | Public `go get`, not local work |
 | O4 | Confirm the vision change: parity is demand-driven, not the goal | Nothing technical |
 | O6 | Accept or reject ADR-0021 (migrations: goose on pgx). Owner allowed building on it before acceptance | S2b onward is built on it |
+| O7 | Accept or reject ADR-0022 (token format `bxa_<tenant>_<id>_<secret>`, tenant-first lookup, SHA-256, idempotency records). Owner allowed building on it before acceptance | S3c onward is built on it |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -188,8 +189,8 @@ Split into sub-slices, one session each.
 ### S3 — API and access ⏳
 Split into sub-slices, one session each.
 
-#### S3a — access design ⏳
-- [ ] Proposed ADR: token formats, pre-tenant lookup, hashing, idempotency storage
+#### S3a — access design ✅
+- [x] Proposed ADR-0022: token formats, pre-tenant lookup, hashing, idempotency storage
 
 #### S3b — control plane mode ⏳
 - [ ] `bohux controlplane` serves ConnectRPC (h2c) with health; runs `store.Migrate` at
@@ -281,6 +282,7 @@ Split into sub-slices, one session each.
   rule for gates: write the ADR as *proposed*, build on it, list it under *Waiting on
   the owner* (O6 onward).
 - S2a done: ADR-0021 (goose on pgx).
+- S3a done: ADR-0022 proposed (O7).
 - S2c done: store write path (Open, InTenant, Create/Update/Delete with head CAS and
   audit event), integration tests green locally.
 - Split S3 into S3a–S3e.
