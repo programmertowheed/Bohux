@@ -41,8 +41,8 @@ work is in right now*.
 - **Slice:** S15 — web UI (🔄, read-only first cut done)
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** deploy and rollback from the UI (a confirm step; same RPCs as
-  the CLI), then release detail.
+- **Exact next step:** release history per App in the UI, then create/scale/route
+  forms mirroring the CLI.
 
 ## Next session prompt
 
@@ -942,7 +942,12 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       lines, stderr marked), checked live against the control plane App. **Deviation
       from ADR-0013:** a plain `<pre>` with ANSI stripped instead of xterm.js, which
       injects `<style>` elements the CSP refuses (ADR-0039); owner to decide (O27)
-- [ ] Next: release detail, then mutations (deploy, rollback) mirroring the CLI
+- [x] Deploy an image and roll back from an App's row, each behind a confirm step,
+      through the CLI's RPCs, then following the new deployment. Checked in Chromium
+      against the live install: a UI deploy and a UI rollback both succeeded and the
+      route served each release
+- [ ] Next: release history per App, environment and App creation (mirroring `bohux
+      env|app create`), routes and scale, an audit view once `AuditService` exists
 
 ## Known gaps and notes
 - **CI has not run on this branch.** `ci.yml` triggers on pushes to `main` and on

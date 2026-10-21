@@ -5,6 +5,7 @@ import { EnvironmentService } from "../gen/bohux/v1/environment_pb";
 import { AppService } from "../gen/bohux/v1/app_pb";
 import { DeploymentService, DeploymentState } from "../gen/bohux/v1/deployment_pb";
 import { Failed, Loading, Table } from "../components/Table";
+import { AppActions } from "../components/Actions";
 import { enumName, short, when } from "../format";
 
 const stateColor: Partial<Record<DeploymentState, string>> = {
@@ -42,9 +43,12 @@ export function Environment() {
             a.source?.kind.case === "image"
               ? `${a.source.kind.value.repository}@${a.source.kind.value.digest.slice(0, 19)}…`
               : a.source?.kind.case === "git" ? a.source.kind.value.repoUrl : "",
-            <Link to="/p/$project/e/$env/a/$app/logs" params={{ project, env, app: a.slug }} className="text-accent">
-              logs
-            </Link>,
+            <span className="flex gap-3">
+              <Link to="/p/$project/e/$env/a/$app/logs" params={{ project, env, app: a.slug }} className="text-accent">
+                logs
+              </Link>
+              <AppActions app={a} project={project} env={env} />
+            </span>,
           ])}
         />
       </div>
