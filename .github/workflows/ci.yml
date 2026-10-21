@@ -135,6 +135,57 @@ jobs:
       - name: Docker conformance
         run: go test -count=1 -v -timeout 20m ./providers/_conformance -provider=docker
 
+  # Control plane + agent + Docker + Temporal in one process tree: deploy, recreate,
+  # and roll back a broken Release (S6d, CLAUDE.md rule 5).
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      BOHUX_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+      BOHUX_TEST_TEMPORAL_ADDRESS: 127.0.0.1:7233
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.47.2
+          setup_only: true
+      - name: Install code generators
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6
+          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.17.0
+      - name: Generate
+        run: |
+          test -f buf.lock || buf dep update
+          buf generate
+      - name: Enable Docker live-restore (the agent requires it, ADR-0020)
+        run: |
+          f=/etc/docker/daemon.json
+          { sudo cat "$f" 2>/dev/null || echo '{}'; } | jq '. + {"live-restore": true}' > /tmp/daemon.json
+          sudo mv /tmp/daemon.json "$f"
+          sudo systemctl restart docker
+          test "$(docker info --format '{{.LiveRestoreEnabled}}')" = true
+      - name: Start a Temporal dev server
+        run: |
+          curl -sSL https://github.com/temporalio/cli/releases/download/v1.4.1/temporal_cli_1.4.1_linux_amd64.tar.gz | tar xz -C /tmp temporal
+          nohup /tmp/temporal server start-dev --headless --ip 127.0.0.1 --port 7233 > /tmp/temporal.log 2>&1 &
+          for i in $(seq 60); do /tmp/temporal operator cluster health --address 127.0.0.1:7233 && exit 0; sleep 1; done
+          cat /tmp/temporal.log; exit 1
+      - name: End-to-end deploy
+        run: go test -tags=integration,e2e -count=1 -v -timeout 15m -run TestDeployEndToEnd ./cmd/bohux
+
   compose:
     runs-on: ubuntu-latest
     steps:

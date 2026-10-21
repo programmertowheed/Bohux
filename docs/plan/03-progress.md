@@ -38,19 +38,18 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S6d — end to end on Docker (⏳, next to start); S6e after it
-- **Exact next step:** an integration test (`integration` tag, needs Docker, Postgres,
-  Temporal) that runs the control plane, a real agent with the Docker provider, and
-  deploys a busybox httpd Release, then a broken one that rolls back.
+- **Slice:** S6e — ScaleApp reaches the node (⏳, next to start)
+- **Exact next step:** decide how ScaleApp changes the running workload (a small
+  workflow on the App's workflow ID is the proposal), then make `AssignApp` compare the
+  whole workload for idempotency.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S6d (deploy end to end on
-> Docker) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0020 item 5, ADR-0025,
-> ADR-0026 and CLAUDE.md rules 1 and 5. Start Postgres, Docker and Temporal (tracker
-> *Known gaps*). Write an integration test that runs the control plane, a real agent
-> with the Docker provider, deploys a healthy Release, then one whose health check
-> never passes and must roll back; measure the recreate downtime. Verify with build, vet, golangci-lint (also with the integration
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S6e (ScaleApp reaches the
+> node) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0026, api-contract.md
+> ("ScaleApp writes a new App revision and a new assignment"), and CLAUDE.md rules 5,
+> 6 and 10. Start Postgres, Docker and Temporal (tracker *Known gaps*). Make the
+> running workload follow ScaleApp through Temporal, not an API side effect. Verify with build, vet, golangci-lint (also with the integration
 > tag), unit and integration tests. Tick boxes, update the tracker and the next
 > session prompt, commit, push, and give me the next prompt.
 
@@ -517,10 +516,18 @@ Split into sub-slices in S6a, one session each. Shape: ADR-0026 (O12).
       changed. `AssignApp` must then compare the whole workload, not only
       Deployment + Release, for idempotency
 
-#### S6d — end to end ⏳
-- [ ] Real Temporal + control plane + agent on Docker: healthy deploy succeeds; a
-      Release whose health check never passes rolls back to the previous one; downtime
-      of the recreate measured (ADR-0020 item 5)
+#### S6d — end to end ✅
+- [x] `cmd/bohux/e2e_test.go` (`integration,e2e` tags; CI job `e2e` enables Docker
+      live-restore and starts Temporal): the real binary's modes in process — bootstrap,
+      control plane, agent register and run on the local Docker daemon, deploy workflow
+      on Temporal. v1 deploys healthy (2.3 s); v2 replaces it (12.4 s, the busybox stop
+      timeout); a Release with no `/healthz` rolls back to v2 after the health timeout.
+      Host-port downtime of the recreate: **~0.35 s** (ADR-0020 item 5), recorded in
+      `docs/providers/docker.md`. No leftovers afterwards
+- [x] `--deploy-health-timeout` (`BOHUX_DEPLOY_HEALTH_TIMEOUT`, default 5m): a choice,
+      needed so an operator (and the test) can bound how long a broken Release runs
+- [x] `fixture.BuiltRelease`: a Release whose artifact is a local image ID, the shape
+      S7's builds produce (ADR-0020 item 2)
 
 ### S7 — Build and secrets ⏳
 - [ ] BuildKit Dockerfile builds, exported to the local image store, resource-limited
@@ -603,6 +610,9 @@ Split into sub-slices in S6a, one session each. Shape: ADR-0026 (O12).
 - S6c2 done: DeploymentService on real Temporal, CI starts a Temporal dev server.
   ScaleApp's assignment split out as S6e (needs a workflow, not an API side effect).
 - **Next:** S6d.
+- S6d done: end-to-end deploy and rollback on Docker + Temporal, CI job `e2e`,
+  recreate downtime ~0.35 s.
+- **Next:** S6e.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by

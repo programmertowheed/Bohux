@@ -65,7 +65,11 @@ These run in the agent, not in `Apply` (ADR-0025).
 ## Known gaps (v0.1)
 
 - **Deploys have downtime.** Compose recreates containers stop-old/start-new; a
-  published host port cannot be held by two containers (ADR-0020 item 5).
+  published host port cannot be held by two containers (ADR-0020 item 5). Measured in
+  the end-to-end test (`cmd/bohux/e2e_test.go`, busybox httpd, local daemon): the host
+  port refused connections for about 0.35 s. The old container keeps serving through
+  its stop timeout, so a process that ignores SIGTERM makes the deploy slower (10 s),
+  not the outage longer.
 - **Replicas above 1 cannot publish a host port.** Docker refuses the second bind.
 - **Exec has no TTY yet.** Non-interactive commands work; an interactive shell needs a
   pseudo-terminal on the agent, planned later.

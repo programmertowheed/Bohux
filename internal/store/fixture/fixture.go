@@ -152,3 +152,29 @@ func Tenant(t testing.TB, st *store.Store, slug string) uuid.UUID {
 	}
 	return tenant
 }
+
+// BuiltRelease creates a ready Release of app whose artifact is a local image ID, as a
+// single-node build produces (ADR-0020 item 2), and returns its ID.
+func BuiltRelease(t testing.TB, st *store.Store, tenant, app uuid.UUID, imageID, commit string) uuid.UUID {
+	t.Helper()
+	ctx := context.Background()
+	var release uuid.UUID
+	err := st.InTenant(ctx, tenant, func(tx *store.Tx) error {
+		var config uuid.UUID
+		if err := tx.QueryRow(ctx, `SELECT revision_id FROM apps_heads WHERE id = $1`, app).Scan(&config); err != nil {
+			return err
+		}
+		a := system
+		a.ResourceType = "bohux.v1.Release"
+		var err error
+		release, _, err = tx.Create(ctx, "releases",
+			[]store.Col{{Name: "app_id", Value: app}, {Name: "config_revision_id", Value: config}},
+			[]store.Col{{Name: "state", Value: "ready"}, {Name: "artifact_digest", Value: imageID},
+				{Name: "source_ref", Value: commit}, {Name: "artifact_available", Value: true}}, a)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("create built release fixture: %v", err)
+	}
+	return release
+}
