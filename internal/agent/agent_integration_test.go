@@ -180,10 +180,15 @@ func startRun(t *testing.T, st *State) func() {
 
 func startRunWith(t *testing.T, st *State, cache *Cache) func() {
 	t.Helper()
+	return startRunLinked(t, st, cache, nil)
+}
+
+func startRunLinked(t *testing.T, st *State, cache *Cache, link *Link) func() {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, RunOptions{State: st, Cache: cache,
+		done <- Run(ctx, RunOptions{State: st, Cache: cache, Link: link,
 			MinBackoff: 20 * time.Millisecond, MaxBackoff: 100 * time.Millisecond})
 	}()
 	return func() {
@@ -266,11 +271,47 @@ func TestRunLifecycle(t *testing.T) {
 }
 
 func TestRunSurvivesRejectionAndOutage(t *testing.T) {
-	t.Run("rejected version keeps running", func(t *testing.T) {
+	t.Run("rejected version keeps running, and its link is down", func(t *testing.T) {
 		cp := newControlPlane(t, "0.3.0") // this test binary's agent version is "dev"
 		st := cp.register(t, "vps-old")
-		stop := startRun(t, st)
+		cache, err := OpenCache(st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		link := &Link{}
+		stop := startRunLinked(t, st, cache, link)
 		cp.waitState(st.NodeID(), "rejected")
+		time.Sleep(200 * time.Millisecond) // several rejected attempts
+		if link.Up() {
+			t.Error("link is up while the control plane rejects the agent (ADR-0042)")
+		}
+		stop()
+	})
+
+	t.Run("an accepted stream raises the link; its end drops it", func(t *testing.T) {
+		cp := newControlPlane(t, "")
+		st := cp.register(t, "vps-link")
+		cache, err := OpenCache(st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		link := &Link{}
+		stop := startRunLinked(t, st, cache, link)
+		cp.waitState(st.NodeID(), "online")
+		deadline := time.Now().Add(5 * time.Second)
+		for !link.Up() && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if !link.Up() {
+			t.Fatal("link never came up on an accepted stream")
+		}
+		cp.stop()
+		for link.Up() && time.Now().Before(deadline.Add(5*time.Second)) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if link.Up() {
+			t.Error("link stayed up after the control plane went away")
+		}
 		stop()
 	})
 

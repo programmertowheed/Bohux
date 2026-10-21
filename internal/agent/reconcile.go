@@ -56,6 +56,11 @@ type Reconciler struct {
 	// Usage supplies the latest resource sample for reports (ADR-0040); nil reports
 	// none.
 	Usage UsageSource
+	// Link, if set, says whether the control plane accepts this agent now. A new
+	// release counts as healthy, which cancels its fallback, only while it does: a
+	// release the control plane cannot see healthy, such as a control plane that
+	// refuses its own agent, still falls back (ADR-0042). Nil: always accepted.
+	Link interface{ Up() bool }
 
 	// endpoints remembers each routed port's last reported endpoint, so a replica
 	// restarting does not drop its host from the ingress for a pass.
@@ -210,7 +215,7 @@ func (r *Reconciler) Once(ctx context.Context) *agentv1.StatusReport {
 				ws.Failure = &bohuxv1.ErrorDetail{Reason: "FALLBACK_APPLIED"}
 			}
 		} else if w.GetFallback() != nil && ws.GetState() == agentv1.WorkloadState_WORKLOAD_STATE_HEALTHY &&
-			fallbacks[w.GetDeploymentId()] == "" {
+			fallbacks[w.GetDeploymentId()] == "" && (r.Link == nil || r.Link.Up()) {
 			fallbacks[w.GetDeploymentId()] = fallbackHealthy
 		}
 	}
@@ -329,8 +334,9 @@ func failIfOK(ws *agentv1.WorkloadStatus, reason string) {
 
 // effective returns the workload to converge to: w, or the workload it replaced once
 // the agent has fallen back (ADR-0031). It falls back when w carries a fallback whose
-// deadline has passed and w was never seen healthy; a newer assignment (another
-// deployment) is a different key and starts clean.
+// deadline has passed and w was never seen healthy while the control plane accepted
+// this agent (ADR-0042); a newer assignment (another deployment) is a different key
+// and starts clean.
 func (r *Reconciler) effective(ctx context.Context, w *agentv1.Workload, fallbacks map[string]string) (*agentv1.Workload, bool) {
 	fb := w.GetFallback()
 	if fb == nil || w.GetDeploymentId() == "" {

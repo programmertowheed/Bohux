@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -56,6 +57,23 @@ type RunOptions struct {
 	Workloads WorkloadAccess
 	// MinBackoff and MaxBackoff bound reconnect delays; zero means 1s and 1m.
 	MinBackoff, MaxBackoff time.Duration
+	// Link, if set, tracks whether the control plane currently accepts this agent.
+	Link *Link
+}
+
+// Link reports whether the agent has a stream the control plane accepted: a first
+// message arrived and was not a version rejection. The reconciler counts a new
+// release as healthy only while it is up, since only then can the control plane see
+// it healthy (ADR-0042).
+type Link struct{ up atomic.Bool }
+
+// Up reports whether the control plane accepts this agent now.
+func (l *Link) Up() bool { return l != nil && l.up.Load() }
+
+func (l *Link) set(v bool) {
+	if l != nil {
+		l.up.Store(v)
+	}
 }
 
 // BuildRunner builds a Release; Builder implements it.
@@ -199,6 +217,7 @@ func session(ctx context.Context, client agentv1connect.AgentServiceClient, o Ru
 	outbox := make(chan *agentv1.ConnectRequest, 16)
 	rl := newRelays(streamCtx, o.Workloads, outbox)
 	defer rl.closeAll()
+	defer o.Link.set(false)
 	first := true
 	for {
 		select {
@@ -241,8 +260,12 @@ func session(ctx context.Context, client agentv1connect.AgentServiceClient, o Ru
 				slog.InfoContext(ctx, "connected to control plane", "node", o.State.NodeID())
 				first = false
 			}
+			if _, rejected := msg.GetMsg().(*agentv1.ConnectResponse_VersionRejected); !rejected {
+				o.Link.set(true)
+			}
 			switch m := msg.GetMsg().(type) {
 			case *agentv1.ConnectResponse_VersionRejected:
+				o.Link.set(false)
 				return &rejectedError{m.VersionRejected}
 			case *agentv1.ConnectResponse_Ping:
 			case *agentv1.ConnectResponse_Assignment:

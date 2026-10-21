@@ -16,6 +16,12 @@ it is a deploy; rolling it back is a rollback.
 - Routine: a new Bohux release.
 - Bad upgrade: `bohux deploy controlplane …` reports `control plane unavailable … still
   following` for minutes, or ends `rolled_back`.
+- Bad upgrade, API up: the deploy ends `failed` with `COMPENSATION_FAILED`, and the
+  agent's log shows `control plane rejected this agent version`. The new version
+  refuses this node's agent (version skew, ADR-0021). The agent falls back to the
+  previous version by itself at the deadline (health timeout + 2 minutes, ADR-0042);
+  wait for `falling back` in its log, then upgrade the agent before the control
+  plane, or pick a control plane version that accepts it.
 
 ## Decision tree
 - Upgrading → **Section U**.

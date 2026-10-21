@@ -170,12 +170,13 @@ func runAgent(ctx context.Context, cfg agentConfig) error {
 		disk.Paths = append(disk.Paths, root)
 	}
 	sampler := &agent.Sampler{Paths: disk.Paths, Provider: p}
-	rec := &agent.Reconciler{State: st, Cache: cache, Provider: p, Usage: sampler}
+	link := &agent.Link{}
+	rec := &agent.Reconciler{State: st, Cache: cache, Provider: p, Usage: sampler, Link: link}
 	if cfg.IngressSocket != "" {
 		rec.Ingress = &ingress.Caddy{AdminSocket: cfg.IngressSocket, ACMEEmail: cfg.ACMEEmail,
 			Dir: filepath.Join(stateDir, "ingress")}
 	}
-	opts := agent.RunOptions{State: st, Cache: cache, Reports: rec, Disk: disk,
+	opts := agent.RunOptions{State: st, Cache: cache, Reports: rec, Disk: disk, Link: link,
 		Providers: []*bohuxv1.ProviderDescriptor{descriptorProto(desc)},
 		Builder:   &agent.Builder{Disk: disk, WorkDir: filepath.Join(stateDir, "builds"), Secrets: st},
 		Workloads: rec}
