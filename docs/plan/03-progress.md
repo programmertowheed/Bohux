@@ -38,27 +38,25 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S5b — conformance suite (⏳, next to start)
-- **Exact next step:** `providers/_conformance` with the spec's lifecycle cases, run
-  against any `internal/provider.Provider` through a registry, `-provider`/`-target`
-  flags.
+- **Slice:** S5c — Docker provider lifecycle (⏳, next to start)
+- **Exact next step:** `providers/docker` Describe (CLI version checks), Compose
+  rendering (artifact + 0600 secrets.env, labels, logging), Apply, Status, Destroy.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S5b (conformance suite) on
-> branch `claude/relaxed-rubin-76m7dl`, following docs/specs/provider-interface.md,
-> .claude/skills/new-provider/, ADR-0010, and ADR-0025. Add internal/provider/registry.go
-> (name → constructor taking a target string) and providers/_conformance: a test binary
-> run as `go test ./providers/_conformance -provider=<name> -target=<t>` covering every
-> case the spec lists (apply from empty → healthy; unchanged re-apply is a no-op; a
-> changed spec converges; kill mid-apply then re-apply converges without duplicates;
-> rollback = apply the previous release again, nothing orphaned; destroy leaves
-> nothing; logs and exec stream and end cleanly; secrets never in artifacts or logs and
-> only in the declared secret file; secret rotation re-renders and restarts), with
-> provider-specific checks (enumerating the target, reading artifacts) behind a small
-> Inspector interface each provider supplies. Prove the suite itself with an in-memory
-> provider that passes, and a deliberately broken one that fails the right cases. Do
-> not implement Docker yet. Verify with build, vet, golangci-lint (also with the
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S5c (Docker provider
+> lifecycle) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0025, ADR-0008,
+> ADR-0020, docs/specs/provider-interface.md, and .claude/skills/new-provider/ (one file
+> per verb). Start the local Docker daemon (tracker *Known gaps*). In providers/docker:
+> Describe (checks the docker CLI and Compose versions), Plan, Apply (render
+> compose.yaml + 0600 secrets.env with env_file, labels including the spec hash,
+> json-file log rotation, then `docker compose up -d --remove-orphans`), Status (compose
+> ps JSON + labels + an agent-side HTTP health check), Destroy (`down --volumes`, remove
+> the directory); Logs/Exec/Scale may return ErrUnsupported until S5d but must be
+> declared honestly. Add an Inspector and a busybox-httpd fixture, register "docker" in
+> providers/_conformance, and make every lifecycle case green against the local daemon
+> (the logs/exec/scale cases may wait for S5d: mark that in the tracker). Add a CI job
+> that runs Docker conformance. Verify with build, vet, golangci-lint (also with the
 > integration tag) and tests. Tick boxes, update the tracker and the next session
 > prompt, commit, push, and give me the next prompt.
 
@@ -386,9 +384,17 @@ Split into sub-slices, one session each.
       new-provider skill says it lives (not a public contract; third-party providers
       are gRPC plugins, ADR-0016)
 
-#### S5b — conformance suite ⏳
-- [ ] `internal/provider/registry.go`; `providers/_conformance` with every spec case,
-      proven against an in-memory provider (passes) and a broken one (fails)
+#### S5b — conformance suite ✅
+- [x] `internal/provider/registry.go` (explicit `Registry`, no init-time globals)
+- [x] `internal/provider/conformance`: 13 ordered cases covering every case in the
+      spec (plan does not mutate, apply → healthy, no-op re-apply without churn,
+      secrets only in the secret file and seen by the workload, rotation, changed spec,
+      interrupted applies without duplicates, rollback without orphans, scale, logs
+      and follow ending cleanly, exec output and exit code, destroy complete and
+      repeatable), with an `Inspector` per provider
+- [x] `internal/provider/memory`: a full in-memory provider that passes; four broken
+      variants each fail exactly the case meant to catch them (runs in `go test ./...`)
+- [x] `providers/_conformance`: `go test ./providers/_conformance -provider=memory`
 
 #### S5c — Docker: Describe, Plan, Apply, Status, Destroy ⏳
 - [ ] Compose artifact + 0600 `secrets.env` (rule 2, ADR-0008), labels, spec hash,
@@ -476,6 +482,7 @@ Split into sub-slices, one session each.
   done: the agent verifies, caches, and acks them.
 - S4e split; S4e1 done: provider interface (O10) and the offline reconcile loop. S4e2
   done: status reports and silent-stream detection. **S4 done.**
+- S5b done: conformance suite, memory provider, runner.
 - S5 split into S5a–S5e. S5a done: ADR-0025 proposed (O11), Docker runs locally,
   provider interface moved to `internal/provider`.
 - S4b split into S4b1/S4b2, both done: `internal/pki`, NodeService, data dir, agent
