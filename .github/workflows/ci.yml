@@ -50,7 +50,7 @@ jobs:
           setup_only: true
       - name: Install code generators
         run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.35.2
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6
           go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.17.0
       - name: Generate
         run: |
@@ -95,7 +95,7 @@ jobs:
           setup_only: true
       - name: Install code generators
         run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.35.2
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6
           go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.17.0
       - name: Generate
         run: |
@@ -118,7 +118,7 @@ jobs:
           setup_only: true
       - name: Install code generators
         run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.35.2
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6
           go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.17.0
       - name: Generate
         run: |
