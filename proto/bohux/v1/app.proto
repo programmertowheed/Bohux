@@ -4,6 +4,7 @@ package bohux.v1;
 
 import "bohux/v1/common.proto";
 import "google/api/field_behavior.proto";
+import "google/protobuf/struct.proto";
 
 option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
 
@@ -24,6 +25,10 @@ message App {
   Runtime runtime = 5 [(google.api.field_behavior) = REQUIRED];
   // Handles only, never values (rule 3).
   repeated SecretRef secrets = 6;
+  // Target-specific options the environment's provider interprets (its Spec.Raw,
+  // ADR-0032), e.g. the Docker provider's external `networks` and `volumes`. Setting
+  // them requires the owner role.
+  google.protobuf.Struct provider_options = 7;
 }
 
 // Where a Release's artifact comes from.
@@ -113,6 +118,8 @@ message CreateAppRequest {
   Runtime runtime = 4 [(google.api.field_behavior) = REQUIRED];
   repeated SecretRef secrets = 5;
   string idempotency_key = 6 [(google.api.field_behavior) = REQUIRED];
+  // Owner role required when non-empty (ADR-0032).
+  google.protobuf.Struct provider_options = 7;
 }
 
 message CreateAppResponse {
@@ -155,6 +162,8 @@ message UpdateAppRequest {
   repeated SecretRef secrets = 4;
   string expected_revision_id = 5 [(google.api.field_behavior) = REQUIRED];
   string idempotency_key = 6 [(google.api.field_behavior) = REQUIRED];
+  // Replaces the App's provider options; owner role required to change them (ADR-0032).
+  google.protobuf.Struct provider_options = 7;
 }
 
 message UpdateAppResponse {

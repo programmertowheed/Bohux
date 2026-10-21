@@ -141,6 +141,8 @@ message Workload {
   // the agent applies the fallback on its own (ADR-0031). Unset for compensation.
   Workload fallback = 12;
   google.protobuf.Timestamp fallback_after = 13;
+  // The App's provider options as JSON, passed to the provider as Spec.Raw (ADR-0032).
+  bytes provider_options = 14;
 }
 
 // The plaintext of Workload.sealed_secrets before sealing (ADR-0008, ADR-0024): the
