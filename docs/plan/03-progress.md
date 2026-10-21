@@ -38,25 +38,26 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S5e — ADR-0020 duties and agent wiring (⏳, next to start)
-- **Exact next step:** make `bohux agent run` use the Docker provider (artifact root in
-  the agent state dir), then image retention and disk-pressure fail-closed.
+- **Slice:** S6a — deploy workflow: plan, Temporal locally, rollback test first (⏳,
+  next to start)
+- **Exact next step:** get a Temporal dev server running in the cloud container (the
+  `temporal` CLI's `server start-dev`), then write `.claude/skills/new-workflow/`.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S5e (ADR-0020 duties and
-> agent wiring) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0020 items 3-4,
-> ADR-0025, and docs/providers/docker.md. Start the local Docker daemon and Postgres
-> (tracker *Known gaps*). Wire `bohux agent run` to the Docker provider through an
-> internal/provider Registry (artifact root `<state dir>/workloads`), and have the
-> control plane fill Workload.app_slug/environment_slug when it assigns. Add image
-> retention as an agent task (keep images of the current plus the last 5 Releases per
-> App, by the io.bohux labels; never an image a running container uses) and
-> disk-pressure fail-closed (below 10% free, report the node degraded in StatusReport
-> and refuse builds later). Test with the real daemon where it matters. Verify with
-> build, vet, golangci-lint (also with the integration tag), unit and integration
-> tests, and Docker conformance. Tick boxes, update the tracker and the next session
-> prompt, commit, push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S6a (deploy workflow:
+> plan, local Temporal, rollback test first) on branch `claude/relaxed-rubin-76m7dl`,
+> following ADR-0002, ADR-0007, ADR-0010, ADR-0020, and CLAUDE.md rules 5 and 6. Start
+> Postgres and Docker (tracker *Known gaps*) and get a Temporal dev server running in
+> the cloud container (try the `temporal` CLI, `server start-dev`); record how in
+> *Known gaps*. Write `.claude/skills/new-workflow/`. Split the rest of S6 into
+> sub-slices in the tracker. If the Temporal Go SDK is a new dependency that needs an
+> ADR, write it as proposed and list it under *Waiting on the owner*. Then write the
+> rollback/compensation test first (rule 5): a deploy whose new Release never turns
+> healthy must reassign the last healthy Release. Verify with build, vet,
+> golangci-lint (also with the integration tag), unit and integration tests. Tick
+> boxes, update the tracker and the next session prompt, commit, push, and give me the
+> next prompt.
 
 ## Waiting on the owner
 
@@ -368,7 +369,7 @@ Split into sub-slices, one session each.
       causes no state changes, reconciler reports (fake provider) reach the control
       plane
 
-### S5 — Docker provider ⏳
+### S5 — Docker provider ✅
 Split into sub-slices, one session each.
 
 #### S5a — plan ✅
@@ -401,20 +402,48 @@ Split into sub-slices, one session each.
 - [x] **Docker conformance: all 13 cases green** against Docker 29.9 / Compose 5.6 in
       the cloud container (91 s; recreate steps take ~10 s because busybox httpd
       ignores SIGTERM and waits for the stop timeout). No leftovers afterwards
-- [ ] Compose artifact + 0600 `secrets.env` (rule 2, ADR-0008), labels, spec hash,
+- [x] Compose artifact + 0600 `secrets.env` (rule 2, ADR-0008), labels, spec hash,
       HTTP health; lifecycle conformance cases green against the local daemon
+      (re-confirmed in S5e)
 
 #### S5d — Docker: Logs, Exec, Scale ✅ (done within S5c)
 - [x] Logs, Exec (no TTY yet, documented), Scale (rewrites the artifact); their
       conformance cases are green
 
-#### S5e — ADR-0020 duties and wiring ⏳
-- [ ] Image retention (current + last 5 Releases per App), disk-pressure fail-closed
-      (node degraded in StatusReport); `bohux agent run` uses the Docker provider;
-      `docs/providers/docker.md`
+#### S5e — ADR-0020 duties and wiring ✅
+- [x] `bohux agent run` builds the Docker provider through an `internal/provider`
+      `Registry`; artifacts under `<state dir>/workloads`; target is the local daemon
+      or `DOCKER_HOST`. No new flags (one agent, one target, ADR-0007)
+- [x] Control plane `Assign` resolves each workload's App in the same transaction and
+      fills `environment_id`, `app_slug`, `environment_slug`; an unknown App (or one in
+      another tenant) or a mismatched environment is refused
+- [x] Image retention as an agent task (`agent.Retention`, hourly): per App keep the
+      current Release + the 5 newest others by the `io.bohux.*` image labels, never an
+      image any container (running or stopped) uses, nothing without a cached
+      assignment. `provider.ImageStore` is an optional interface, not a verb; Docker
+      implements it. Tested against the real daemon
+- [x] Disk-pressure fail-closed (`agent.DiskMonitor`, 30 s): below 10% free on the state
+      dir's or Docker data root's filesystem, every StatusReport carries
+      `degraded` + `DISK_PRESSURE`, sent at once on a flip. `Degraded()` is what S7's
+      build path must check; there is no build path yet
+- [x] Fixed a race in `Assign`: the node lock joined heads to revisions with
+      `FOR UPDATE OF h`, so a concurrent state change (node coming online) made Postgres
+      drop the row on recheck and `Assign` failed with "not found". Now the head is
+      locked alone, then its state read
+- [x] `docs/providers/docker.md`, `docs/reference/config.md`; Docker conformance still
+      green (92 s)
 
 ### S6 — Deploy workflow ⏳
+To be split into sub-slices in S6a.
+
+#### S6a — plan, local Temporal, rollback test first ⏳
+- [ ] Temporal dev server running in the cloud container; how, in *Known gaps*
 - [ ] `.claude/skills/new-workflow/` (referenced by ADR-0002)
+- [ ] Temporal Go SDK dependency (ADR if needed, proposed)
+- [ ] Rest of S6 split into sub-slices
+- [ ] Rollback/compensation test written first (rule 5)
+
+#### S6 (to split)
 - [ ] **Rollback/compensation test first** (rule 5)
 - [ ] Temporal workflow: build → (push no-op single-node) → assign → wait healthy →
       finalize / compensate
@@ -473,6 +502,14 @@ Split into sub-slices, one session each.
   1.24–1.26). Raising the `go` directive is cheap and its own commit when wanted.
 
 ## Session log (newest first)
+
+### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
+- S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by
+  `Assign`, image retention and disk pressure (real-daemon test), `Assign` lock race
+  fixed. Build, vet, golangci-lint (both tags), unit, integration, Docker conformance
+  all pass locally.
+- New test helper package `internal/store/fixture` (creates project/env/App rows).
+- **Next:** S6a.
 
 ### 2026-10-21 (auto run) — branch `claude/relaxed-rubin-76m7dl`
 - Owner asked for an automatic run, slice after slice, until the session ends. Owner
