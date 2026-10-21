@@ -7,12 +7,6 @@ deps:
 lint:
   use:
     - STANDARD
-  # Pre-contract draft, replaced by the files listed in docs/specs/api-contract.md in
-  # slice S1. Remove this ignore in S1d.
-  ignore:
-    - proto/bohux/v1/service.proto
 breaking:
   use:
     - FILE
-  ignore:
-    - proto/bohux/v1/service.proto

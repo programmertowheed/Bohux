@@ -1,0 +1,183 @@
+syntax = "proto3";
+
+package bohux.v1;
+
+import "bohux/v1/common.proto";
+import "google/api/field_behavior.proto";
+
+option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
+
+// A deployable unit in one environment (ADR-0014: App, not Service). Every update is a
+// new revision; a Release captures the revision it was built from.
+message App {
+  ResourceMeta meta = 1;
+  string environment_id = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+  // Unique within the environment.
+  string slug = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+  Source source = 4 [(google.api.field_behavior) = REQUIRED];
+  Runtime runtime = 5 [(google.api.field_behavior) = REQUIRED];
+  // Handles only, never values (rule 3).
+  repeated SecretRef secrets = 6;
+}
+
+// Where a Release's artifact comes from.
+message Source {
+  oneof kind {
+    GitSource git = 1;
+    ImageSource image = 2;
+  }
+}
+
+// Built by BuildKit on CreateRelease (ADR-0011 item 7).
+message GitSource {
+  string repo_url = 1 [(google.api.field_behavior) = REQUIRED];
+  // Branch, tag, or commit used when CreateRelease names no ref.
+  string ref = 2;
+  // Build context within the repository. Empty means the repository root.
+  string subpath = 3;
+  BuildStrategy strategy = 4;
+}
+
+// A prebuilt image, pinned by digest, never by tag.
+message ImageSource {
+  // e.g. "ghcr.io/acme/api".
+  string repository = 1 [(google.api.field_behavior) = REQUIRED];
+  // e.g. "sha256:…".
+  string digest = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+// v0.1 builds Dockerfiles only (ADR-0011 item 7). Other strategies are added as values
+// here when they ship.
+enum BuildStrategy {
+  // Server default: DOCKERFILE.
+  BUILD_STRATEGY_UNSPECIFIED = 0;
+  BUILD_STRATEGY_DOCKERFILE = 1;
+}
+
+message Runtime {
+  int32 replicas = 1 [(google.api.field_behavior) = REQUIRED];
+  // Kubernetes quantity syntax, e.g. "500m".
+  string cpu = 2;
+  // Kubernetes quantity syntax, e.g. "512Mi".
+  string memory = 3;
+  repeated Port ports = 4;
+  HealthCheck health = 5;
+}
+
+message Port {
+  int32 container_port = 1 [(google.api.field_behavior) = REQUIRED];
+  PortProtocol protocol = 2;
+  // Host port to publish on (v0.1 has no proxy, ADR-0011 item 9). 0 means not published.
+  // Publishing a host port makes deploys stop-old/start-new, with downtime (ADR-0020).
+  int32 host_port = 3;
+}
+
+enum PortProtocol {
+  // Server default: TCP.
+  PORT_PROTOCOL_UNSPECIFIED = 0;
+  PORT_PROTOCOL_TCP = 1;
+  PORT_PROTOCOL_UDP = 2;
+}
+
+// HTTP health check. A deploy finalizes only when it passes (ADR-0007).
+message HealthCheck {
+  string path = 1 [(google.api.field_behavior) = REQUIRED];
+  // Must be one of the app's container ports.
+  int32 port = 2 [(google.api.field_behavior) = REQUIRED];
+  int32 interval_seconds = 3;
+  int32 timeout_seconds = 4;
+  int32 failure_threshold = 5;
+}
+
+service AppService {
+  rpc CreateApp(CreateAppRequest) returns (CreateAppResponse);
+  rpc GetApp(GetAppRequest) returns (GetAppResponse);
+  rpc ListApps(ListAppsRequest) returns (ListAppsResponse);
+  rpc UpdateApp(UpdateAppRequest) returns (UpdateAppResponse);
+  rpc DeleteApp(DeleteAppRequest) returns (DeleteAppResponse);
+
+  // Writes a new App revision and a new assignment. No new Release.
+  rpc ScaleApp(ScaleAppRequest) returns (ScaleAppResponse);
+}
+
+message CreateAppRequest {
+  string environment_id = 1 [(google.api.field_behavior) = REQUIRED];
+  string slug = 2 [(google.api.field_behavior) = REQUIRED];
+  Source source = 3 [(google.api.field_behavior) = REQUIRED];
+  Runtime runtime = 4 [(google.api.field_behavior) = REQUIRED];
+  repeated SecretRef secrets = 5;
+  string idempotency_key = 6 [(google.api.field_behavior) = REQUIRED];
+}
+
+message CreateAppResponse {
+  App app = 1;
+}
+
+message GetAppRequest {
+  oneof lookup {
+    string id = 1;
+    // Slug lookup is within an environment.
+    AppSlug slug = 2;
+  }
+}
+
+message AppSlug {
+  string environment_id = 1;
+  string slug = 2;
+}
+
+message GetAppResponse {
+  App app = 1;
+}
+
+message ListAppsRequest {
+  string environment_id = 1 [(google.api.field_behavior) = REQUIRED];
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListAppsResponse {
+  repeated App apps = 1;
+  string next_page_token = 2;
+}
+
+// Replaces source, runtime, and secrets as a whole.
+message UpdateAppRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+  Source source = 2 [(google.api.field_behavior) = REQUIRED];
+  Runtime runtime = 3 [(google.api.field_behavior) = REQUIRED];
+  repeated SecretRef secrets = 4;
+  string expected_revision_id = 5 [(google.api.field_behavior) = REQUIRED];
+  string idempotency_key = 6 [(google.api.field_behavior) = REQUIRED];
+}
+
+message UpdateAppResponse {
+  App app = 1;
+}
+
+message DeleteAppRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+  string expected_revision_id = 2 [(google.api.field_behavior) = REQUIRED];
+  string idempotency_key = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+message DeleteAppResponse {
+  string revision_id = 1;
+}
+
+message ScaleAppRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+  int32 replicas = 2 [(google.api.field_behavior) = REQUIRED];
+  string expected_revision_id = 3 [(google.api.field_behavior) = REQUIRED];
+  string idempotency_key = 4 [(google.api.field_behavior) = REQUIRED];
+}
+
+message ScaleAppResponse {
+  App app = 1;
+}

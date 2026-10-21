@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package bohux.v1;
+
+import "bohux/v1/app.proto";
+import "bohux/v1/common.proto";
+import "google/api/field_behavior.proto";
+
+option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
+
+// An artifact plus the App revision it runs with. **Immutable**: there is no update or
+// delete RPC; old Releases are removed by retention GC (ADR-0010, ADR-0020). Promotion
+// reuses the same digest.
+message Release {
+  ResourceMeta meta = 1;
+  string app_id = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+  ReleaseState state = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // Image content digest. In single-node mode, the local image ID (ADR-0020). Set when
+  // the build finishes, or at creation for an image source.
+  string artifact_digest = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // The App revision (source, runtime, secret refs) captured at creation.
+  string config_revision_id = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // What was built or imported: a resolved commit SHA or an image reference.
+  string source_ref = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // SLSA provenance attestation, if any.
+  string provenance_ref = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string sbom_ref = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // The build workflow (ADR-0002). Empty for an image source.
+  string build_workflow_id = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // False once retention has removed the artifact; such a Release cannot be deployed or
+  // rolled back to, and says so up front (ADR-0020).
+  bool artifact_available = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // Set when state is RELEASE_STATE_FAILED.
+  ErrorDetail failure = 11 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+enum ReleaseState {
+  RELEASE_STATE_UNSPECIFIED = 0;
+  RELEASE_STATE_BUILDING = 1;
+  RELEASE_STATE_READY = 2;
+  RELEASE_STATE_FAILED = 3;
+}
+
+// Build is not its own service in v0.1: CreateRelease from a Git ref starts the build
+// workflow.
+service ReleaseService {
+  rpc CreateRelease(CreateReleaseRequest) returns (CreateReleaseResponse);
+  rpc GetRelease(GetReleaseRequest) returns (GetReleaseResponse);
+  rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse);
+}
+
+// With no `from`, builds or imports from the App's current source.
+message CreateReleaseRequest {
+  string app_id = 1 [(google.api.field_behavior) = REQUIRED];
+  oneof from {
+    // Build this branch, tag, or commit of the App's Git source.
+    string git_ref = 2;
+    // Use this prebuilt image instead of building.
+    ImageSource image = 3;
+  }
+  string idempotency_key = 4 [(google.api.field_behavior) = REQUIRED];
+}
+
+message CreateReleaseResponse {
+  // In RELEASE_STATE_BUILDING for a Git source; poll GetRelease for the result.
+  Release release = 1;
+}
+
+message GetReleaseRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message GetReleaseResponse {
+  Release release = 1;
+}
+
+// Newest first.
+message ListReleasesRequest {
+  string app_id = 1 [(google.api.field_behavior) = REQUIRED];
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListReleasesResponse {
+  repeated Release releases = 1;
+  string next_page_token = 2;
+}

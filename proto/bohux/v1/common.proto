@@ -32,3 +32,12 @@ message ErrorDetail {
   // The request field the error is about, as a dotted path, if any.
   string field = 2;
 }
+
+// The only way a secret appears in a resource (rule 3). The value lives in OpenBao and is
+// resolved on the node at apply time (ADR-0008); it is never in this message.
+message SecretRef {
+  // Environment variable name the workload sees, e.g. "DATABASE_URL".
+  string key = 1 [(google.api.field_behavior) = REQUIRED];
+  // Opaque handle returned by SecretService.SetSecret.
+  string handle = 2 [(google.api.field_behavior) = REQUIRED];
+}

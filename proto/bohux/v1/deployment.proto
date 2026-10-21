@@ -1,0 +1,138 @@
+syntax = "proto3";
+
+package bohux.v1;
+
+import "bohux/v1/common.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
+
+// One attempt to reconcile a Release onto an Environment, run as a Temporal workflow
+// (ADR-0002). Created only; its state is driven by the workflow. Who started it is
+// `meta.created_by`, taken from authentication (rule 10).
+message Deployment {
+  ResourceMeta meta = 1;
+  string release_id = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+  string environment_id = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+  DeploymentStrategy strategy = 4 [(google.api.field_behavior) = IMMUTABLE];
+  DeploymentState state = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string workflow_id = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // The Deployment this one reverts, if it is a rollback (ADR-0010).
+  string rollback_of = 7 [(google.api.field_behavior) = IMMUTABLE];
+  // Free-text reason given by the caller, recorded for audit.
+  string reason = 8 [(google.api.field_behavior) = IMMUTABLE];
+  google.protobuf.Timestamp started_at = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp finished_at = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // Set when state is FAILED, COMPENSATING, or ROLLED_BACK.
+  ErrorDetail failure = 11 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+enum DeploymentStrategy {
+  // Server default: RECREATE.
+  DEPLOYMENT_STRATEGY_UNSPECIFIED = 0;
+  // Stop old, start new. The only v0.1 strategy; has downtime on host ports (ADR-0020).
+  // Zero-downtime strategies arrive with ingress (ADR-0019).
+  DEPLOYMENT_STRATEGY_RECREATE = 1;
+}
+
+enum DeploymentState {
+  DEPLOYMENT_STATE_UNSPECIFIED = 0;
+  DEPLOYMENT_STATE_PENDING = 1;
+  // Waiting for the Release's build to finish.
+  DEPLOYMENT_STATE_BUILDING = 2;
+  // Reserved for approval gates; unused until they ship (not v0.1).
+  DEPLOYMENT_STATE_AWAITING_APPROVAL = 3;
+  DEPLOYMENT_STATE_APPLYING = 4;
+  DEPLOYMENT_STATE_HEALTH_GATE = 5;
+  DEPLOYMENT_STATE_SUCCEEDED = 6;
+  DEPLOYMENT_STATE_FAILED = 7;
+  // Compensation finished: the last healthy Release is live again.
+  DEPLOYMENT_STATE_ROLLED_BACK = 8;
+  // Compensation in progress: assigning the last healthy Release.
+  DEPLOYMENT_STATE_COMPENSATING = 9;
+  DEPLOYMENT_STATE_CANCELLED = 10;
+}
+
+service DeploymentService {
+  rpc CreateDeployment(CreateDeploymentRequest) returns (CreateDeploymentResponse);
+  rpc GetDeployment(GetDeploymentRequest) returns (GetDeploymentResponse);
+  rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse);
+  // Sends the current state, then every change until the Deployment is terminal.
+  rpc WatchDeployment(WatchDeploymentRequest) returns (stream WatchDeploymentResponse);
+  // Convenience: CreateDeployment of an earlier Release with `rollback_of` set. There is
+  // no other rollback path (ADR-0010).
+  rpc Rollback(RollbackRequest) returns (RollbackResponse);
+  rpc CancelDeployment(CancelDeploymentRequest) returns (CancelDeploymentResponse);
+}
+
+message CreateDeploymentRequest {
+  string release_id = 1 [(google.api.field_behavior) = REQUIRED];
+  string environment_id = 2 [(google.api.field_behavior) = REQUIRED];
+  DeploymentStrategy strategy = 3;
+  string rollback_of = 4;
+  string reason = 5;
+  string idempotency_key = 6 [(google.api.field_behavior) = REQUIRED];
+}
+
+message CreateDeploymentResponse {
+  Deployment deployment = 1;
+}
+
+message GetDeploymentRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message GetDeploymentResponse {
+  Deployment deployment = 1;
+}
+
+// Newest first.
+message ListDeploymentsRequest {
+  string environment_id = 1 [(google.api.field_behavior) = REQUIRED];
+  // Optional filter: only Deployments of this App's Releases.
+  string app_id = 2;
+  int32 page_size = 3;
+  string page_token = 4;
+}
+
+message ListDeploymentsResponse {
+  repeated Deployment deployments = 1;
+  string next_page_token = 2;
+}
+
+message WatchDeploymentRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message WatchDeploymentResponse {
+  Deployment deployment = 1;
+}
+
+message RollbackRequest {
+  string app_id = 1 [(google.api.field_behavior) = REQUIRED];
+  // Empty means the last Release that deployed healthy before the current one.
+  string to_release_id = 2;
+  string reason = 3;
+  string idempotency_key = 4 [(google.api.field_behavior) = REQUIRED];
+}
+
+message RollbackResponse {
+  Deployment deployment = 1;
+}
+
+// Cancelling runs compensation if anything was applied.
+message CancelDeploymentRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+  string idempotency_key = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+message CancelDeploymentResponse {
+  Deployment deployment = 1;
+}

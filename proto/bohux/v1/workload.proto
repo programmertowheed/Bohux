@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package bohux.v1;
+
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
+
+// Live access to an App's running instances, relayed through the agent stream
+// (ADR-0007). Exec is bidirectional, so browsers cannot use it; the CLI can. That is
+// allowed: rule 8 forbids the UI having more than the CLI, not less.
+service WorkloadService {
+  rpc StreamLogs(StreamLogsRequest) returns (stream StreamLogsResponse);
+  // The first request must carry `start`. Every session is audited.
+  rpc Exec(stream ExecRequest) returns (stream ExecResponse);
+}
+
+message StreamLogsRequest {
+  string app_id = 1 [(google.api.field_behavior) = REQUIRED];
+  // Empty means every instance.
+  string instance = 2;
+  // Keep streaming new lines until the client cancels.
+  bool follow = 3;
+  google.protobuf.Timestamp since = 4;
+  // Lines of history to send first. 0 means the server default.
+  int32 tail_lines = 5;
+}
+
+message StreamLogsResponse {
+  repeated LogLine lines = 1;
+}
+
+message LogLine {
+  google.protobuf.Timestamp time = 1;
+  // Provider-defined instance name, e.g. a container name.
+  string instance = 2;
+  LogStream stream = 3;
+  string message = 4;
+}
+
+enum LogStream {
+  LOG_STREAM_UNSPECIFIED = 0;
+  LOG_STREAM_STDOUT = 1;
+  LOG_STREAM_STDERR = 2;
+}
+
+message ExecRequest {
+  oneof msg {
+    ExecStart start = 1;
+    bytes stdin = 2;
+    TerminalSize resize = 3;
+  }
+}
+
+message ExecStart {
+  string app_id = 1 [(google.api.field_behavior) = REQUIRED];
+  // Empty means any running instance.
+  string instance = 2;
+  repeated string command = 3 [(google.api.field_behavior) = REQUIRED];
+  bool tty = 4;
+  TerminalSize size = 5;
+}
+
+message TerminalSize {
+  uint32 rows = 1;
+  uint32 cols = 2;
+}
+
+message ExecResponse {
+  oneof msg {
+    bytes stdout = 1;
+    bytes stderr = 2;
+    ExecExit exit = 3;
+  }
+}
+
+// Last message of a session.
+message ExecExit {
+  int32 exit_code = 1;
+}

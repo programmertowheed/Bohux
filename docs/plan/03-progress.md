@@ -38,18 +38,20 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S1b — proto: app, release, deployment (⏳, next to start)
-- **Exact next step:** write `proto/bohux/v1/app.proto` (App replaces the draft
-  `Service`) per `docs/specs/api-contract.md`, following the patterns in S1a's files.
+- **Slice:** S1c — proto: node, secret, audit, agent protocol (⏳, next to start;
+  now also carries S1d's final check)
+- **Exact next step:** write `proto/bohux/v1/node.proto` per
+  `docs/specs/api-contract.md`, following the patterns in the S1a/S1b files.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S1b (proto: app, release,
-> deployment, workload) on branch `claude/relaxed-rubin-76m7dl`. Follow
-> docs/specs/api-contract.md and the patterns in the S1a proto files. Verify with buf lint,
-> buf build, buf generate and go build (see "How to verify protos locally" in the
-> tracker), tick the S1b boxes, update the tracker and the next session prompt, commit,
-> push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S1c (proto: node, secret,
+> audit, and the agent protocol in proto/bohux/agent/v1/agent.proto) on branch
+> `claude/relaxed-rubin-76m7dl`. Follow docs/specs/api-contract.md and the patterns in the
+> S1a/S1b proto files; reuse `SecretRef` from common.proto. Verify with buf lint, buf
+> build, buf generate and go build (see "How to verify protos locally" in the tracker),
+> tick the S1c boxes (including the folded-in S1d check), update the tracker and the next
+> session prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -59,6 +61,7 @@ work is in right now*.
 | O2 | Run `make run-dev && make footprint` on a 2GB VPS; record results in `docs/footprint.md` | ADR-0002 stays or reopens; nothing before S6 |
 | O3 | Create the `bohumix` GitHub org and move the repo (ADR-0015). Code already uses `github.com/bohumix/bohux` | Public `go get`, not local work |
 | O4 | Confirm the vision change: parity is demand-driven, not the goal | Nothing technical |
+| O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
 
@@ -93,17 +96,38 @@ sub-slices, one session each.
   - `Update*` replaces the mutable fields as a whole; no field masks.
   - Token secret uses `debug_redact = true`; the interceptor (S3) is still required.
 
-#### S1b — app, release, deployment ⏳
-- [ ] `app.proto` (App replaces Service), `release.proto`, `deployment.proto`
+#### S1b — app, release, deployment ✅
+- [x] `app.proto` (App replaces Service), `release.proto`, `deployment.proto`
       (no `approver`/`actor` request fields), `workload.proto`
+- [x] Draft `service.proto` deleted early (it defined the same symbols in `bohux.v1`, so
+      the new files could not build beside it); its `buf.yaml` ignores removed
+- Choices the spec left open, made in S1b (change before v0.1 ships if wrong):
+  - `SecretRef` lives in `common.proto` (shared by App now, agent protocol in S1c).
+  - `Source` is Git or image only; the draft's `StaticSource` dropped (not v0.1).
+    `ImageSource` = `repository` + `digest` (a digest alone cannot be pulled).
+  - `BuildStrategy` has only `DOCKERFILE`; `DeploymentStrategy` has only `RECREATE`
+    (ADR-0011 item 7, ADR-0020 item 5). More values are added when they ship.
+  - `Port.host_port` (0 = unpublished) replaces the draft's `public` flag (no proxy in
+    v0.1). `HealthCheck` is HTTP with a required `port`.
+  - `ScaleApp` changes `replicas` only, not cpu/memory.
+  - `Release.state` (`BUILDING`/`READY`/`FAILED`), `artifact_available` (ADR-0020
+    "not rollback-able"), `build_workflow_id`, `failure`. `CreateRelease` takes an
+    optional `git_ref` or `ImageSource`; neither means "the App's current source".
+  - `Deployment` keeps the draft states and adds `COMPENSATING`, `CANCELLED`; adds
+    `reason`, `failure`. `rollback_of` is a Deployment id. `CancelDeployment` takes no
+    `expected_revision_id` (workflow-driven state changes constantly).
+  - `Rollback` is per App; empty `to_release_id` = last healthy Release.
+  - `WorkloadService` addresses instances by provider-defined `instance` name.
 
 #### S1c — node, secret, audit, agent protocol ⏳
 - [ ] `node.proto`, `secret.proto` (value redacted), `audit.proto`
 - [ ] `proto/bohux/agent/v1/agent.proto`, including version fields for skew (ADR-0020)
+- [ ] (was S1d) `buf lint` clean with no ignores; `buf generate` + `go build ./...` pass
+      with every file from the spec's *Files* list present
 
-#### S1d — cleanup ⏳
-- [ ] Delete `proto/bohux/v1/service.proto` and its ignore in `buf.yaml`
-- [ ] `buf lint` clean with no ignores; `buf generate` + `go build ./gen/...` pass
+#### S1d — cleanup ✅ (folded into S1b/S1c)
+- [x] Delete `proto/bohux/v1/service.proto` and its ignore in `buf.yaml` (done in S1b)
+- Final lint/generate check moved to S1c.
 
 ### S2 — Storage ⏳
 - [ ] Migration tool choice (ADR if it is a new dependency)
@@ -157,9 +181,11 @@ sub-slices, one session each.
 - **How to verify protos locally in the cloud container** (registry blocked): copy
   `proto/` and `buf.gen.yaml` into a scratch dir, fetch
   `google/api/field_behavior.proto` from raw.githubusercontent.com/googleapis/googleapis
-  into `gapi/google/api/`, write a `buf.yaml` with modules `proto` and `gapi`, change the
+  into `gapi/google/api/`, write a `buf.yaml` with modules `proto` and `gapi` (lint
+  `ignore: [gapi]`), change the
   managed-mode `disable` entry to `path: google/api`, then `buf lint`, `buf build`,
-  `buf generate proto`, copy `gen/` back, and `go build ./...`.
+  `buf generate proto`, copy `gen/` back, and `go build ./...`. `buf` and the
+  `protoc-gen-*` plugins are in `/root/go/bin` (not on `PATH` by default).
 - `gen/` is not committed. Run `make generate` (or `buf generate`) after cloning, before
   `go build ./...`. CI does this.
 - The Buf Schema Registry was unreachable from the cloud container on 2026-10-21; S1
@@ -168,6 +194,15 @@ sub-slices, one session each.
   tests cannot run there. Integration slices (S2+) need CI or a local machine.
 
 ## Session log (newest first)
+
+### 2026-10-21 (S1b) — branch `claude/relaxed-rubin-76m7dl`
+- S1b done: app, release, deployment, workload protos; `SecretRef` added to common.
+  buf lint (no ignores), buf build, buf format, generate, go build and vet pass locally
+  (scratch workaround).
+- Deleted the draft `service.proto` now, not in S1d: same symbols, same package. S1d's
+  remaining check folded into S1c.
+- Asked the owner O5 (App non-secret env vars).
+- **Next:** S1c, starting with `node.proto`.
 
 ### 2026-10-21 (S1a) — branch `claude/relaxed-rubin-76m7dl`
 - S1a done: common, identity, tenancy, project, environment protos. buf lint, buf build,
