@@ -42,18 +42,18 @@ work is in right now*.
   items O35 lists; S15's web terminal is ⛔ on O29
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** the rest of v0.2 needs product calls (O35, O32, O29). Of v0.3,
-  the items that need no product call first are done (S20); restore drills need the
-  age private key, which is kept off the host by design (a product call), and the
-  others need workflow or data-model designs. Ask the owner which to design next;
-  meanwhile harden what exists (CI via a PR: O24; live-install checks). Buildpacks/Nixpacks needs an owner choice
+- **Exact next step:** the remaining work needs owner calls: v0.2's open items (O35,
+  O32, O29), the Swarm provider's design (O37, ADR-0045), restore drills (the age
+  private key is kept off the host by design), and the other v0.3 items need workflow
+  or data-model designs. Ask the owner which to take next; and review the proposed
+  ADRs (O19–O37). Meanwhile: CI via a PR (O24), live-install checks. Buildpacks/Nixpacks needs an owner choice
   (O32); team invites need user accounts (identity model): ask the owner first.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then continue slice S15 (web UI: webhooks
-> and notification channels screens, ADR-0039) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
-> and ADR-0034. Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*).
+> Read CLAUDE.md and docs/plan/03-progress.md. I have answered <O-items> under *Waiting on
+> the owner*; mark the ADRs accordingly and take the next slice they unblock, on branch
+> `claude/relaxed-rubin-76m7dl`. Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*).
 > Verify with build, vet, golangci-lint (also with the integration tag), unit and
 > integration tests. Tick boxes, update the tracker and the next session prompt,
 > commit, push, and give me the next prompt.
@@ -97,6 +97,7 @@ work is in right now*.
 | O34 | Accept or reject ADR-0043 (email notifications: `EMAIL` channels with a `mailto:` list in OpenBao; one SMTP relay per install, TLS required). Adds a proto enum value, migration 00022, four control-plane settings | S19 |
 | O35 | Remaining v0.2 items need a product call before code: **managed Postgres/Redis** (needs app-to-app networking in an environment, which does not exist: each App is its own Compose network; plus image pinning, volume lifecycle, backups); **envelope encryption** (what threat beyond OpenBao's own barrier: crypto-shredding environments? its backups then need the keys); **team invites** (user accounts); **Buildpacks/Nixpacks** (O32); **web terminal** (O29) | next v0.2 items |
 | O36 | Accept or reject ADR-0044 (webhook watch paths: path prefixes, no globs; changed files from the push payload; deploys anyway when the list may be incomplete). Adds `Webhook.paths`, migration 00023 | S20 |
+| O37 | Swarm provider (v0.3): answer ADR-0045's questions before it is built — multi-node in scope or a single manager; health for remote tasks (image `HEALTHCHECK` or a probe container); may agents hold registry push credentials | S21 |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -1200,6 +1201,9 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 - One unexplained failure: a Docker conformance run right after the integration suite
   failed once (log not kept); three reruns, including the same ordering, passed.
 - S20 (v0.3): webhook watch paths (ADR-0044 proposed, O36).
+- S21 (Swarm) not started: a second daemon in swarm mode works in the sandbox (the
+  main one has `--live-restore`, which swarm refuses), but health, exec, and images
+  differ in ways that need the owner (ADR-0045 proposed as questions, O37).
 - **Next:** see Current focus.
 
 ### 2026-10-21 (auto run, S9e–S9f) — branch `claude/relaxed-rubin-76m7dl`
