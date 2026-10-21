@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -111,7 +112,12 @@ func render(spec provider.Spec) (composeYAML, secretsEnv, stateJSON []byte, err 
 		if port.GetProtocol() == bohuxv1.PortProtocol_PORT_PROTOCOL_UDP {
 			proto = "udp"
 		}
-		svc.Ports = append(svc.Ports, fmt.Sprintf("%d:%d/%s", port.GetHostPort(), port.GetContainerPort(), proto))
+		published := fmt.Sprintf("%d:%d/%s", port.GetHostPort(), port.GetContainerPort(), proto)
+		if opts.PublishAddress != "" {
+			published = net.JoinHostPort(opts.PublishAddress, strconv.Itoa(int(port.GetHostPort()))) +
+				fmt.Sprintf(":%d/%s", port.GetContainerPort(), proto)
+		}
+		svc.Ports = append(svc.Ports, published)
 	}
 	if rt.GetCpu() != "" || rt.GetMemory() != "" {
 		cpus, err := cpuLimit(rt.GetCpu())

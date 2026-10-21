@@ -157,7 +157,8 @@ func TestSetReplicas(t *testing.T) {
 
 func TestRenderOptions(t *testing.T) {
 	s := spec()
-	s.Raw = []byte(`{"networks": ["bohux-infra"], "volumes": [{"source": "bohux-controlplane-data", "target": "/var/lib/bohux"}]}`)
+	s.Raw = []byte(`{"networks": ["bohux-infra"], "volumes": [{"source": "bohux-controlplane-data", "target": "/var/lib/bohux"}],
+		"publish_address": "127.0.0.1"}`)
 	composeYAML, _, _, err := render(s)
 	if err != nil {
 		t.Fatal(err)
@@ -172,6 +173,9 @@ func TestRenderOptions(t *testing.T) {
 	}
 	if strings.Join(svc.Volumes, ",") != "bohux-controlplane-data:/var/lib/bohux" || !doc.Volumes["bohux-controlplane-data"].External {
 		t.Errorf("volumes = %v / %v", svc.Volumes, doc.Volumes)
+	}
+	if strings.Join(svc.Ports, ",") != "127.0.0.1:80:8080/tcp" {
+		t.Errorf("ports = %v, want bound to 127.0.0.1", svc.Ports)
 	}
 
 	plain, _, _, err := render(spec())
@@ -191,6 +195,7 @@ func TestRenderRejectsOptions(t *testing.T) {
 		`{"volumes": [{"source": "data", "target": "/"}]}`,
 		`{"networks": ["host;rm"]}`,
 		`{"networks": ["default"]}`,
+		`{"publish_address": "localhost"}`,
 		`[1]`,
 	} {
 		s := spec()

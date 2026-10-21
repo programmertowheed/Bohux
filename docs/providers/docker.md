@@ -106,6 +106,8 @@ needs the owner role. Accepted, as JSON:
   own. Declared `external` in the Compose file.
 - `volumes`: existing **named** volumes mounted at `target` (a clean absolute path).
   Host paths are refused. Declared `external`.
+- `publish_address`: the host IP every published port binds to (default: all
+  interfaces), e.g. `127.0.0.1` to keep a port off the network.
 
 Both must exist; the provider never creates or removes them, and Destroy leaves them.
 Any other key, or a malformed value, fails the workload with `SPEC_INVALID`.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"path"
 	"regexp"
 )
@@ -15,6 +16,8 @@ type options struct {
 	Networks []string `json:"networks"`
 	// Volumes mount external named volumes; host paths are not accepted.
 	Volumes []volumeOption `json:"volumes"`
+	// PublishAddress is the host IP published ports bind to; empty means all.
+	PublishAddress string `json:"publish_address"`
 }
 
 type volumeOption struct {
@@ -39,6 +42,11 @@ func parseOptions(raw []byte) (options, error) {
 	for _, n := range o.Networks {
 		if !dockerName.MatchString(n) || n == "default" {
 			return options{}, fmt.Errorf("provider options: %q is not a network name", n)
+		}
+	}
+	if o.PublishAddress != "" {
+		if ip := net.ParseIP(o.PublishAddress); ip == nil {
+			return options{}, fmt.Errorf("provider options: publish_address %q is not an IP address", o.PublishAddress)
 		}
 	}
 	for _, v := range o.Volumes {

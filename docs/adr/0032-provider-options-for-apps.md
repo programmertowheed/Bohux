@@ -31,15 +31,19 @@ needed by any other v0.1 App.
 2. **Setting non-empty provider options requires the `owner` role.** Options can reach
    outside the workload (other networks, existing volumes), which is close to root on
    the node; a deployer must not get that by editing an App.
-3. **The Docker provider accepts two keys**, both naming things that already exist and
-   that Bohux never creates or deletes:
+3. **The Docker provider accepts three keys.** The first two name things that already
+   exist and that Bohux never creates or deletes:
    - `networks`: external Docker networks to attach the App's containers to, in
      addition to its own.
    - `volumes`: `{"source": <external named volume>, "target": <path in the
      container>}`; no host paths.
+   - `publish_address`: the host IP its published ports bind to (default: all
+     interfaces). The control plane binds `127.0.0.1`: v0.1 has no TLS ingress, so its
+     API must not face the internet.
    Unknown keys are refused. The rendered Compose file shows them (rule 2).
-4. **The control plane App** uses `networks: ["bohux-infra"]` and a volume
-   `bohux-controlplane-data` → `/var/lib/bohux`, both created by the installer, and
+4. **The control plane App** uses `networks: ["bohux-infra"]`, a volume
+   `bohux-controlplane-data` → `/var/lib/bohux` (both created by the installer), and
+   `publish_address: "127.0.0.1"`, and
    gets its database URL, Temporal address, and OpenBao token as App secrets (the open
    question O5 — where non-secret App config lives — is not decided here; secrets work
    for both, at the cost of holding a non-secret in OpenBao). The OpenBao token reaches
