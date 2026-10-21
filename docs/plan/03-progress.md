@@ -38,24 +38,24 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S3e — resource handlers (⏳, next to start)
-- **Exact next step:** ProjectService in `internal/api` (replacing its Unimplemented
-  stub), following the IdentityService patterns.
+- **Slice:** S3e2 — EnvironmentService (⏳, next to start)
+- **Exact next step:** EnvironmentService in `internal/api`, following `project.go`.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S3e (resource handlers) on
-> branch `claude/relaxed-rubin-76m7dl`. Implement ProjectService, EnvironmentService
-> and AppService in internal/api, replacing their Unimplemented stubs, following the
-> IdentityService patterns: store write path with audit events, ADR-0022 idempotency,
-> `expected_revision_id`, ADR-0023 two-step authorization (auth.RequireProject in
-> every handler; ListProjects filtered for project-scoped tokens), lookup by id or
-> slug, paging. App source/runtime/secrets are stored as protojson (data-model.md
-> "Schema rules"). Test over real ConnectRPC on the local Postgres, including a token
-> from another project and a stale revision. If the slice is too big, stop at a clean
-> point and split it in the tracker. Verify with build, vet, golangci-lint (also with
-> the integration tag) and tests. Tick boxes, update the tracker and the next session
-> prompt, commit, push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slices S3e2 (EnvironmentService)
+> and S3e3 (AppService) on branch `claude/relaxed-rubin-76m7dl`, in internal/api,
+> replacing their Unimplemented stubs and following internal/api/project.go: store write
+> path with audit events, ADR-0022 idempotency, `expected_revision_id`, ADR-0023
+> two-step authorization (authorizeProject in every handler, resolving the project
+> through the parent), lookup by id or slug, paging, and FailedPrecondition when
+> deleting a parent with live children. App source/runtime/secrets are stored as
+> protojson (data-model.md "Schema rules"); validate them (see the S3e notes in the
+> tracker). Test over real ConnectRPC on the local Postgres, including a token from
+> another project and a stale revision. Commit each service separately. Verify with
+> build, vet, golangci-lint (also with the integration tag) and tests. Tick boxes,
+> update the tracker and the next session prompt, commit, push, and give me the next
+> prompt.
 
 ## Waiting on the owner
 
@@ -244,9 +244,26 @@ Split into sub-slices, one session each.
 - Traces: no tracing exists yet. When OpenTelemetry is added, span attributes must
   go through `secrets.Message` too.
 
-#### S3e — resource handlers ⏳
-- [ ] ProjectService, EnvironmentService, AppService on the store, each mutation with
-      an audit event, idempotency key, and `expected_revision_id`
+#### S3e1 — ProjectService ✅
+- [x] Create (tenant-wide owner), Get by id/slug (hidden across projects), List
+      (scoped, paged), Update (owner, CAS), Delete (tenant-wide owner, refuses live
+      environments, frees the slug); idempotent; audited. Slugs are DNS labels
+      (`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`, a choice)
+- [x] RoleBinding RPCs answer `Unimplemented` with the reason: bindings bind user
+      principals, which arrive with user accounts (v1.0); tokens carry their role
+      (ADR-0023). Stored bindings would have no effect
+
+#### S3e2 — EnvironmentService ⏳
+- [ ] CRUD per api-contract.md; `node_id` must name a live node in the tenant;
+      delete refuses live apps
+
+#### S3e3 — AppService ⏳
+- [ ] CRUD + ScaleApp. Validation to write: source is git (repo_url) or image
+      (repository + `sha256:` digest); replicas ≥ 0; ports 1–65535, host ports
+      0–65535 and unique; health port is one of the container ports; secret keys are
+      env-var names (`^[A-Z_][A-Z0-9_]*$`), unique, and each (key, handle) is a live
+      secret_ref in the app's environment. ScaleApp writes a revision only; the new
+      assignment comes with S4/S6
 
 ### S4 — Agent ⏳
 - [ ] Bootstrap-token registration, mTLS, outbound `Connect` stream
@@ -319,6 +336,7 @@ Split into sub-slices, one session each.
   rule for gates: write the ADR as *proposed*, build on it, list it under *Waiting on
   the owner* (O6 onward).
 - S2a done: ADR-0021 (goose on pgx).
+- S3e split into S3e1–S3e3. S3e1 done: ProjectService.
 - S3d done: `internal/secrets` redaction, access-log interceptor, rule 3 test.
 - S3c3 done: bootstrap command, Identity/Tenant handlers, idempotency records, all
   tested over real ConnectRPC; end-to-end binary smoke test passed.
