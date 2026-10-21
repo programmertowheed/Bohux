@@ -41,6 +41,10 @@ mkdir -p "$work/v2" "$work/broken" && mv "$work/Dockerfile.v2" "$work/v2/Dockerf
 v2="$(push v2 "$work/v2")"
 printf 'FROM %s\nCMD ["no-such-command"]\n' "$v1" >"$work/broken/Dockerfile"
 broken="$(push broken "$work/broken")"
+mkdir -p "$work/hello"
+printf 'FROM busybox:1.36\nRUN mkdir -p /www && echo "hello from bohux" > /www/index.html\nCMD ["httpd", "-f", "-p", "8080", "-h", "/www"]\n' \
+  >"$work/hello/Dockerfile"
+hello="$(push hello "$work/hello")"
 
 # --- Install -------------------------------------------------------------------------
 log "installing $v1"
@@ -85,4 +89,27 @@ for _ in $(seq 60); do
 done
 [[ "$(archives)" -gt "$before" ]] || die "the triggered backup wrote no archive"
 
-log "PASS: Bohux deployed itself, rolled itself back, recovered from a broken version of itself, and backed itself up"
+# --- An App on a route, through the node's ingress (ADR-0034) ------------------------
+log "serving an App on https://hello.localhost through the ingress"
+api="$BOHUX_API_URL"
+call() {
+  curl -fsS -H "Authorization: Bearer $BOHUX_TOKEN" -H 'Content-Type: application/json' -d "$2" "$api/bohux.v1.$1"
+}
+node="$(call NodeService/ListNodes '{}' | jq -r '.nodes[0].meta.id')"
+project="$(call ProjectService/CreateProject '{"slug": "demo", "displayName": "Demo", "idempotencyKey": "selfdeploy-demo"}' |
+  jq -r .project.meta.id)"
+env_id="$(call EnvironmentService/CreateEnvironment "{\"projectId\": \"$project\", \"slug\": \"prod\",
+  \"providerBinding\": {\"provider\": \"docker\", \"nodeId\": \"$node\"}, \"idempotencyKey\": \"selfdeploy-env\"}" |
+  jq -r .environment.meta.id)"
+call AppService/CreateApp "$(jq -n --arg e "$env_id" --arg r "${hello%@*}" --arg d "${hello#*@}" '{
+  environmentId: $e, slug: "hello", idempotencyKey: "selfdeploy-hello",
+  source: {image: {repository: $r, digest: $d}},
+  runtime: {replicas: 1, ports: [{containerPort: 8080}], health: {path: "/", port: 8080}},
+  routes: [{host: "hello.localhost", port: 8080}]}')" >/dev/null
+BOHUX_PROJECT=demo "$bin" deploy hello -e prod --image "$hello" --reason selfdeploy || die "deploying an App with a route"
+https_port="${BOHUX_HTTPS_PORT:-443}"
+body="$(curl -fsSk --resolve "hello.localhost:$https_port:127.0.0.1" "https://hello.localhost:$https_port/")" ||
+  die "the ingress did not serve hello.localhost"
+[[ "$body" == "hello from bohux" ]] || die "hello.localhost served \"$body\""
+
+log "PASS: Bohux deployed itself, rolled itself back, recovered from a broken version of itself, backed itself up, and served an App on a route"

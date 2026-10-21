@@ -16,6 +16,12 @@
 #   BOHUX_DEPLOY_HEALTH_TIMEOUT
 #                      the control plane's --deploy-health-timeout (default: its own,
 #                      5m); tests shorten it
+#   BOHUX_ACME_EMAIL   ACME account e-mail for the ingress's certificates (ADR-0034)
+#   BOHUX_HTTP_PORT, BOHUX_HTTPS_PORT
+#                      host ports the ingress listens on (default: 80 and 443)
+#   BOHUX_INGRESS_SOCKET_DIR
+#                      directory of Caddy's admin socket (default: /run/bohux-caddy);
+#                      the same path inside Caddy's container and on the host
 #   BOHUX_BACKUP_RECIPIENT
 #                      age public key (age1…) for nightly backups (ADR-0033); keep
 #                      its private key off this host (docs/runbooks/backup-and-restore.md).
@@ -36,6 +42,8 @@ etc="${BOHUX_ETC:-/etc/bohux}"
 state="${BOHUX_STATE_DIR:-/var/lib/bohux-agent}"
 bin="${BOHUX_BIN:-/usr/local/bin/bohux}"
 systemd="${BOHUX_SYSTEMD:-1}"
+socket_dir="${BOHUX_INGRESS_SOCKET_DIR:-/run/bohux-caddy}"
+acme_email="${BOHUX_ACME_EMAIL:-}"
 api="http://127.0.0.1:7400"
 agent_addr="127.0.0.1:7443"
 
@@ -70,6 +78,14 @@ if [[ ! -f "$env_file" ]]; then
   } >"$env_file"
 fi
 grep -q '^BOHUX_BACKUP_PASSWORD=' "$env_file" || echo "BOHUX_BACKUP_PASSWORD=$(openssl rand -hex 24)" >>"$env_file"
+# Paths and ports Compose needs for the ingress; rewritten on every run.
+sed -i '/^BOHUX_INGRESS_\|^BOHUX_HTTP_PORT=\|^BOHUX_HTTPS_PORT=/d' "$env_file"
+{
+  echo "BOHUX_INGRESS_CONFIG_DIR=$state/ingress"
+  echo "BOHUX_INGRESS_SOCKET_DIR=$socket_dir"
+  echo "BOHUX_HTTP_PORT=${BOHUX_HTTP_PORT:-80}"
+  echo "BOHUX_HTTPS_PORT=${BOHUX_HTTPS_PORT:-443}"
+} >>"$env_file"
 # shellcheck disable=SC1090
 source "$env_file"
 if [[ ! -f "$etc/openbao-unseal.key" ]]; then
@@ -87,9 +103,17 @@ rm -rf "$etc/infra/postgres-init" && cp -r "$bundle/postgres-init" "$etc/infra/"
 chmod 644 "$etc/infra/compose.yaml" "$etc/infra/openbao.hcl"
 chmod 755 "$etc/infra" "$etc/infra/postgres-init" "$etc/infra/postgres-init/"*
 compose=(docker compose -p bohux-infra -f "$etc/infra/compose.yaml" --env-file "$env_file")
-log "starting Postgres, Temporal, OpenBao"
+# The ingress starts from the agent's config file; until the agent loads one, Caddy
+# serves nothing and listens for it on the admin socket (ADR-0034).
+mkdir -p "$state/ingress" "$socket_dir"
+if [[ ! -f "$state/ingress/caddy.json" ]]; then
+  jq -n --arg s "unix/$socket_dir/admin.sock" '{admin: {listen: $s, origins: ["localhost"]}}' >"$state/ingress/caddy.json"
+  chmod 644 "$state/ingress/caddy.json"
+fi
+docker network inspect bohux-ingress >/dev/null 2>&1 || docker network create bohux-ingress >/dev/null
+log "starting Postgres, Temporal, OpenBao, Caddy"
 "${compose[@]}" up -d --wait postgres openbao
-"${compose[@]}" up -d temporal
+"${compose[@]}" up -d temporal caddy
 
 # pg_isready answers during the first start's init script too; wait for its database.
 until "${compose[@]}" exec -T postgres psql -q -U postgres -d bohux_app -c 'SELECT 1' >/dev/null 2>&1; do sleep 1; done
@@ -173,14 +197,18 @@ if [[ ! -f "$state/identity.json" ]]; then
     --control-plane "$agent_addr" --ca-cert-sha256 "$(jq -r .caCertSha256 <<<"$bt")"
 fi
 if [[ "$systemd" == 1 ]]; then
-  sed "s#/usr/local/bin/bohux agent run --state-dir /var/lib/bohux-agent#$bin agent run --state-dir $state#" \
+  sed -e "s#/usr/local/bin/bohux agent run --state-dir /var/lib/bohux-agent#$bin agent run --state-dir $state#" \
+    -e "s#BOHUX_INGRESS_ADMIN_SOCKET=/run/bohux-caddy/admin.sock#BOHUX_INGRESS_ADMIN_SOCKET=$socket_dir/admin.sock#" \
     "$bundle/bohux-agent.service" >/etc/systemd/system/bohux-agent.service
+  [[ -z "$acme_email" ]] || sed -i "/^Environment=BOHUX_INGRESS_ADMIN_SOCKET/a Environment=BOHUX_ACME_EMAIL=$acme_email" \
+    /etc/systemd/system/bohux-agent.service
   chmod 644 /etc/systemd/system/bohux-agent.service
   systemctl daemon-reload
   systemctl enable --now bohux-agent >/dev/null
 elif ! pgrep -f "$bin agent run --state-dir $state" >/dev/null; then
   log "starting the agent without systemd (test host)"
-  nohup "$bin" agent run --state-dir "$state" >>"$etc/agent.log" 2>&1 &
+  BOHUX_INGRESS_ADMIN_SOCKET="$socket_dir/admin.sock" BOHUX_ACME_EMAIL="$acme_email" \
+    nohup "$bin" agent run --state-dir "$state" >>"$etc/agent.log" 2>&1 &
 fi
 node=""
 until [[ -n "$node" ]]; do

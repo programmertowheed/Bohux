@@ -71,6 +71,8 @@ already holds a registration.
 | Flag | Environment | Default | Meaning |
 |---|---|---|---|
 | `--state-dir` | `BOHUX_AGENT_STATE_DIR` | `/var/lib/bohux-agent` | The registered state. |
+| `--ingress-admin-socket` | `BOHUX_INGRESS_ADMIN_SOCKET` | empty | Caddy's admin API Unix socket for this node's ingress (ADR-0034). The agent loads the config of every App with routes there and writes it to `<state dir>/ingress/caddy.json`, which Caddy starts from. Empty: no ingress, and workloads with routes report `INGRESS_FAILED`. The install bundle sets `/run/bohux-caddy/admin.sock`. |
+| `--acme-email` | `BOHUX_ACME_EMAIL` | empty | ACME account e-mail for the ingress's certificates. Hosts under `.localhost` use Caddy's internal CA instead. |
 
 Connects to the control plane recorded at registration over mTLS and keeps the
 stream open, reconnecting with backoff (1 s doubling to 1 min; 5 min after a

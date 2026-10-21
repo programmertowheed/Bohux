@@ -38,18 +38,16 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S10e — Caddy in the install bundle (⏳, next to start)
+- **Slice:** S10f — zero-downtime deploys (🔄, ADR-0035 written)
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** `caddy` service in `deploy/install/compose.yaml` (ports 80/443,
-  `bohux-ingress`, socket dir `/run/bohux-caddy`, config from the agent's
-  `ingress/caddy.json`), installer writes the first config and passes the socket and
-  `BOHUX_ACME_EMAIL` to the agent; self-deploy test serves an App on a route.
+- **Exact next step:** `provider.ResourceRef.Slot` (Docker project suffix; empty slot =
+  today's names) with a conformance check, then the agent's switch (ADR-0035 item 3).
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S10e (Caddy in the install
-> bundle) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S10f (zero-downtime deploys,
+> ADR-0035) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
 > and ADR-0034. Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*).
 > Verify with build, vet, golangci-lint (also with the integration tag), unit and
 > integration tests. Tick boxes, update the tracker and the next session prompt,
@@ -78,6 +76,7 @@ work is in right now*.
 | O18 | Accept or reject ADR-0032 (`App.provider_options` → `Spec.Raw`, owner-only; Docker accepts external networks and named volumes). Changes `app.proto` and agent.proto. Built on already | S9c onward |
 | O19 | Accept or reject ADR-0033 (nightly backup: Temporal schedule in the control plane, read-only `BYPASSRLS` role `bohux_backup`, local directory with retention 7; S3 deferred). Built on already | S9f |
 | O20 | Accept or reject ADR-0034 (routes on Apps, hosts unique across tenants, routes are App state, the agent programs its node's Caddy, providers report endpoints). Changes app.proto and agent.proto. Built on already | S10 |
+| O21 | Accept or reject ADR-0035 (zero-downtime deploys: two slots per routed App, switched by the agent through one ingress load). Changes the provider ResourceRef. Built on already | S10f |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -829,12 +828,25 @@ Shape: ADR-0034 (O20). Split into sub-slices, one session each.
       hash) and `--force-recreate` broke an interrupted apply; a restart now removes
       stopped containers and runs `up`
 
-#### S10e — Caddy in the install bundle ⏳
-- [ ] `caddy` service (pinned), ports 80/443, `bohux-ingress` network, admin socket
-      directory, `BOHUX_ACME_EMAIL`; self-deploy test serves an App on a route
+#### S10e — Caddy in the install bundle ✅
+- [x] `caddy` service (`caddy:2.8.4-alpine`, pinned by digest) in the infra project:
+      ports `BOHUX_HTTP_PORT`/`BOHUX_HTTPS_PORT` (80/443), the external `bohux-ingress`
+      network (the installer creates it; the Docker provider may too), certificates on
+      volume `caddy`, started from the agent's `ingress/caddy.json` (the installer
+      writes a first, admin-only one), admin socket in `BOHUX_INGRESS_SOCKET_DIR`
+      (`/run/bohux-caddy`) at the same path inside and out
+- [x] The agent gets the socket (systemd `Environment=`) and `BOHUX_ACME_EMAIL`
+- [x] Self-deploy test: an App `hello` with route `hello.localhost` deployed through the
+      CLI is served over HTTPS by the ingress. **Passed here**, with everything before it
 
-#### S10f — zero-downtime deploys (needs its own ADR) ⏳
-- [ ] Two Releases live during a deploy, Caddy swaps upstreams, the old one stops after
+#### S10f — zero-downtime deploys ⏳
+- [x] Proposed ADR-0035 (O21): the agent switches a routed App without host ports
+      between two slots (`ResourceRef.Slot`, `blue`/`green`): apply the other slot, cut
+      the ingress over in one load once it is healthy, record it, destroy the old one;
+      a Release that never turns healthy never takes traffic
+- [ ] `ResourceRef.Slot` in the provider names (Docker: project suffix), conformance
+- [ ] Agent slot state (`slots.json`) and the switch; status during a switch
+- [ ] Self-deploy test: a second deploy of `hello` while a client polls it, no failures
 
 ## Known gaps and notes
 - **`buf.lock` missing.** Whoever has registry access (CI, or a local machine) runs
@@ -927,7 +939,9 @@ Shape: ADR-0034 (O20). Split into sub-slices, one session each.
   the running workload and survive rollbacks.
 - S10c done: provider endpoints, Docker on `bohux-ingress`, conformance case.
 - S10d done: the agent programs Caddy; health includes the route; real-Caddy test.
-- **Next:** S10e.
+- S10e done: Caddy in the install bundle; the self-deploy test serves an App on a
+  route. ADR-0035 (zero-downtime) proposed (O21).
+- **Next:** S10f.
 
 ### 2026-10-21 (auto run 2, S6a) — branch `claude/relaxed-rubin-76m7dl`
 - Owner asked again for an automatic run, slice after slice, until the session ends.
