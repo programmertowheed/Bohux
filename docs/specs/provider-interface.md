@@ -43,7 +43,7 @@ type Provider interface {
 
 ## Types
 
-The Go definitions live in `providers/provider.go` (written in S4e; the owner reviews
+The Go definitions live in `internal/provider/provider.go` (written in S4e; the owner reviews
 them as O10). The choices the contract above left open:
 
 - **`ResourceRef`** is `{Environment, App}` (IDs). One workload per App per Environment.

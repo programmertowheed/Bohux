@@ -1,9 +1,9 @@
-// Package providers defines the extension boundary: the interface every deployment
+// Package provider defines the extension boundary: the interface every deployment
 // target implements, exactly as docs/specs/provider-interface.md states it (ADR-0005,
 // ADR-0010). Providers run only inside the agent (ADR-0007). Every provider implements
 // all eight methods or does not merge (CLAUDE.md rule 4); the conformance suite in
-// providers/_conformance is the gate.
-package providers
+// providers/_conformance is the gate. Implementations live in providers/<name>/.
+package provider
 
 import (
 	"context"

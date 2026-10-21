@@ -18,9 +18,9 @@ import (
 	"github.com/bohumix/bohux/internal/agent"
 	"github.com/bohumix/bohux/internal/api"
 	"github.com/bohumix/bohux/internal/controlplane"
+	"github.com/bohumix/bohux/internal/provider"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/version"
-	"github.com/bohumix/bohux/providers"
 )
 
 var errUsage = errors.New(`usage: bohux <command>
@@ -74,7 +74,7 @@ var defaultDeps = deps{
 // nodeProvider is the provider this agent runs (ADR-0007: one agent, one target).
 // The Docker provider arrives in S5; until then the agent connects and caches
 // assignments but does not reconcile.
-var nodeProvider providers.Provider
+var nodeProvider provider.Provider
 
 // runAgent loads the agent's state, then runs the reconcile loop and the control-
 // plane stream side by side until ctx ends. They share only the cache: the stream
@@ -106,7 +106,7 @@ func runAgent(ctx context.Context, stateDir string) error {
 	return errors.Join(<-errc, <-errc)
 }
 
-func descriptorProto(d providers.Descriptor) *bohuxv1.ProviderDescriptor {
+func descriptorProto(d provider.Descriptor) *bohuxv1.ProviderDescriptor {
 	caps := make([]string, len(d.Capabilities))
 	for i, c := range d.Capabilities {
 		caps[i] = string(c)

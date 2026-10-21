@@ -14,64 +14,64 @@ import (
 	agentv1 "github.com/bohumix/bohux/gen/bohux/agent/v1"
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/internal/pki"
-	"github.com/bohumix/bohux/providers"
+	"github.com/bohumix/bohux/internal/provider"
 )
 
 // fakeProvider is an in-memory target.
 type fakeProvider struct {
 	mu        sync.Mutex
-	running   map[providers.ResourceRef]providers.Status
-	secrets   map[providers.ResourceRef]map[string]string
+	running   map[provider.ResourceRef]provider.Status
+	secrets   map[provider.ResourceRef]map[string]string
 	applies   int
-	destroyed []providers.ResourceRef
+	destroyed []provider.ResourceRef
 }
 
 func newFake() *fakeProvider {
-	return &fakeProvider{running: map[providers.ResourceRef]providers.Status{},
-		secrets: map[providers.ResourceRef]map[string]string{}}
+	return &fakeProvider{running: map[provider.ResourceRef]provider.Status{},
+		secrets: map[provider.ResourceRef]map[string]string{}}
 }
 
-func (f *fakeProvider) Describe(context.Context) (providers.Descriptor, error) {
-	return providers.Descriptor{Name: "fake", Version: "0", Capabilities: providers.AllVerbs}, nil
+func (f *fakeProvider) Describe(context.Context) (provider.Descriptor, error) {
+	return provider.Descriptor{Name: "fake", Version: "0", Capabilities: provider.AllVerbs}, nil
 }
 
-func (f *fakeProvider) Plan(context.Context, providers.PlanRequest) (providers.Plan, error) {
-	return providers.Plan{}, nil
+func (f *fakeProvider) Plan(context.Context, provider.PlanRequest) (provider.Plan, error) {
+	return provider.Plan{}, nil
 }
 
-func (f *fakeProvider) Apply(_ context.Context, req providers.ApplyRequest) (providers.ApplyResult, error) {
+func (f *fakeProvider) Apply(_ context.Context, req provider.ApplyRequest) (provider.ApplyResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.applies++
 	if req.Spec.Secrets != nil {
 		vals, err := req.Spec.Secrets.Open()
 		if err != nil {
-			return providers.ApplyResult{}, err
+			return provider.ApplyResult{}, err
 		}
 		f.secrets[req.Spec.Ref] = vals
 	}
-	f.running[req.Spec.Ref] = providers.Status{Exists: true, Hash: req.Spec.Hash, Running: true,
+	f.running[req.Spec.Ref] = provider.Status{Exists: true, Hash: req.Spec.Hash, Running: true,
 		Healthy: true, ReadyReplicas: req.Spec.Runtime.GetReplicas()}
-	return providers.ApplyResult{Changed: true}, nil
+	return provider.ApplyResult{Changed: true}, nil
 }
 
-func (f *fakeProvider) Status(_ context.Context, ref providers.ResourceRef) (providers.Status, error) {
+func (f *fakeProvider) Status(_ context.Context, ref provider.ResourceRef) (provider.Status, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.running[ref], nil
 }
 
-func (f *fakeProvider) Logs(context.Context, providers.LogRequest) (iter.Seq2[providers.LogLine, error], error) {
-	return nil, providers.ErrUnsupported
+func (f *fakeProvider) Logs(context.Context, provider.LogRequest) (iter.Seq2[provider.LogLine, error], error) {
+	return nil, provider.ErrUnsupported
 }
 
-func (f *fakeProvider) Exec(context.Context, providers.ExecRequest) (providers.Session, error) {
-	return nil, providers.ErrUnsupported
+func (f *fakeProvider) Exec(context.Context, provider.ExecRequest) (provider.Session, error) {
+	return nil, provider.ErrUnsupported
 }
 
-func (f *fakeProvider) Scale(context.Context, providers.ScaleRequest) error { return nil }
+func (f *fakeProvider) Scale(context.Context, provider.ScaleRequest) error { return nil }
 
-func (f *fakeProvider) Destroy(_ context.Context, ref providers.ResourceRef) error {
+func (f *fakeProvider) Destroy(_ context.Context, ref provider.ResourceRef) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.running, ref)
@@ -80,7 +80,7 @@ func (f *fakeProvider) Destroy(_ context.Context, ref providers.ResourceRef) err
 }
 
 // crash stops a workload's process, as an OOM kill or a dockerd hiccup would.
-func (f *fakeProvider) crash(ref providers.ResourceRef) {
+func (f *fakeProvider) crash(ref provider.ResourceRef) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.running[ref]
@@ -94,7 +94,7 @@ func (f *fakeProvider) counts() (int, int) {
 	return f.applies, len(f.destroyed)
 }
 
-func (f *fakeProvider) isRunning(ref providers.ResourceRef) bool {
+func (f *fakeProvider) isRunning(ref provider.ResourceRef) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.running[ref].Running
@@ -130,8 +130,8 @@ func assign(t *testing.T, signer *pki.Authority, st *State, c *Cache, gen uint64
 	}
 }
 
-func ref(app string) providers.ResourceRef {
-	return providers.ResourceRef{Environment: "env", App: app}
+func ref(app string) provider.ResourceRef {
+	return provider.ResourceRef{Environment: "env", App: app}
 }
 
 // No control plane exists anywhere in these tests: the reconciler works from the
@@ -152,7 +152,7 @@ func TestReconcile(t *testing.T) {
 
 	t.Run("no assignment changes nothing", func(t *testing.T) {
 		// Even with a stale record of applied workloads from an earlier run.
-		if err := r.saveApplied(map[providers.ResourceRef]bool{ref("old"): true}); err != nil {
+		if err := r.saveApplied(map[provider.ResourceRef]bool{ref("old"): true}); err != nil {
 			t.Fatal(err)
 		}
 		if rep := r.Once(ctx); rep != nil {

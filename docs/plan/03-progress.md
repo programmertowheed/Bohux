@@ -38,25 +38,29 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S5a — Docker provider plan (⏳, next to start)
-- **Exact next step:** check whether a Docker daemon can run in the cloud container;
-  decide CLI (`docker compose`) vs. Engine API client (an ADR if it adds a dependency).
+- **Slice:** S5b — conformance suite (⏳, next to start)
+- **Exact next step:** `providers/_conformance` with the spec's lifecycle cases, run
+  against any `internal/provider.Provider` through a registry, `-provider`/`-target`
+  flags.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S5a (Docker provider
-> plan) on branch `claude/relaxed-rubin-76m7dl`. Read docs/specs/provider-interface.md
-> (including the Types section), providers/provider.go, ADR-0008 (Compose artifact plus
-> 0600 secrets.env), ADR-0020 (image retention, log rotation, disk pressure, host-port
-> downtime), and .claude/skills/new-provider/. Find out whether a Docker daemon can run
-> in this cloud container (dockerd as root, or rootless) so conformance can run here; if
-> not, say what must run in CI. Decide how the provider drives Docker: the `docker
-> compose` CLI against the written Compose file, or the Engine API via a Go client (a
-> new dependency needs an ADR via .claude/skills/write-adr/, written as proposed and
-> listed under *Waiting on the owner*). Then split S5 into sub-slices in the tracker
-> (conformance suite first, then the verbs) and start the first one if time allows.
-> Tick boxes, update the tracker and the next session prompt, commit, push, and give me
-> the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S5b (conformance suite) on
+> branch `claude/relaxed-rubin-76m7dl`, following docs/specs/provider-interface.md,
+> .claude/skills/new-provider/, ADR-0010, and ADR-0025. Add internal/provider/registry.go
+> (name → constructor taking a target string) and providers/_conformance: a test binary
+> run as `go test ./providers/_conformance -provider=<name> -target=<t>` covering every
+> case the spec lists (apply from empty → healthy; unchanged re-apply is a no-op; a
+> changed spec converges; kill mid-apply then re-apply converges without duplicates;
+> rollback = apply the previous release again, nothing orphaned; destroy leaves
+> nothing; logs and exec stream and end cleanly; secrets never in artifacts or logs and
+> only in the declared secret file; secret rotation re-renders and restarts), with
+> provider-specific checks (enumerating the target, reading artifacts) behind a small
+> Inspector interface each provider supplies. Prove the suite itself with an in-memory
+> provider that passes, and a deliberately broken one that fails the right cases. Do
+> not implement Docker yet. Verify with build, vet, golangci-lint (also with the
+> integration tag) and tests. Tick boxes, update the tracker and the next session
+> prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -70,7 +74,8 @@ work is in right now*.
 | O7 | Accept or reject ADR-0022 (token format `bxa_<tenant>_<id>_<secret>`, tenant-first lookup, SHA-256, idempotency records). Owner allowed building on it before acceptance | S3c onward is built on it |
 | O8 | Accept or reject ADR-0023 (tenant-wide API tokens when `project_id` is empty; two-step authorization). Changed `identity.proto`. Owner allowed building on it | S3c3 onward |
 | O9 | Accept or reject ADR-0024 (node CA + signing key as 0600 files in `--data-dir`, CA pinning by hash at install, 90-day node certs, Ed25519 assignment signatures, nacl/box sealing). Owner allowed building on it | S4b onward |
-| O10 | Review the provider types in `providers/provider.go` and the *Types* section of `docs/specs/provider-interface.md` (hash-based drift detection, no list verb: agent records what it applied). Built on already | S5 implements them |
+| O10 | Review the provider types in `internal/provider/provider.go` and the *Types* section of `docs/specs/provider-interface.md` (hash-based drift detection, no list verb: agent records what it applied). Built on already | S5 implements them |
+| O11 | Accept or reject ADR-0025 (Docker provider drives `docker compose` on its own artifact; agent-side HTTP health checks; layout and labels). Owner allowed building on it | S5c onward |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -345,7 +350,7 @@ Split into sub-slices, one session each.
       and receives newer generations; secrets sealed at rest and open with the node key
 
 #### S4e1 — provider interface and offline reconcile ✅
-- [x] `providers.Provider` exactly as the spec (Describe + seven verbs) with its types;
+- [x] `internal/provider.Provider` exactly as the spec (Describe + seven verbs) with its types;
       types documented in provider-interface.md (O10)
 - [x] `agent.Reconciler`: desired = cached assignment, observed = `Status`, `Apply`
       when missing, drifted (hash), or not running; timer + cache-change trigger; no
@@ -368,9 +373,34 @@ Split into sub-slices, one session each.
       plane
 
 ### S5 — Docker provider ⏳
-- [ ] Conformance suite in `providers/_conformance`
-- [ ] `Describe` + all seven verbs; Compose artifact + `secrets.env` on disk (rule 2)
-- [ ] Image retention (current + last 5), log rotation, disk-pressure fail-closed (ADR-0020)
+Split into sub-slices, one session each.
+
+#### S5a — plan ✅
+- [x] A Docker daemon runs in the cloud container (see *Known gaps*), so conformance
+      runs here against real Docker
+- [x] Proposed ADR-0025 (O11): drive `docker compose` against the written artifact, no
+      Go Docker client; agent-side HTTP health; layout, project names, labels; json-file
+      log rotation in the artifact
+- [x] `Workload.app_slug` / `environment_slug` (additive proto change, ADR-0025)
+- [x] Provider interface moved to `internal/provider/provider.go`, where the
+      new-provider skill says it lives (not a public contract; third-party providers
+      are gRPC plugins, ADR-0016)
+
+#### S5b — conformance suite ⏳
+- [ ] `internal/provider/registry.go`; `providers/_conformance` with every spec case,
+      proven against an in-memory provider (passes) and a broken one (fails)
+
+#### S5c — Docker: Describe, Plan, Apply, Status, Destroy ⏳
+- [ ] Compose artifact + 0600 `secrets.env` (rule 2, ADR-0008), labels, spec hash,
+      HTTP health; lifecycle conformance cases green against the local daemon
+
+#### S5d — Docker: Logs, Exec, Scale ⏳
+- [ ] Remaining verbs; full conformance green
+
+#### S5e — ADR-0020 duties and wiring ⏳
+- [ ] Image retention (current + last 5 Releases per App), disk-pressure fail-closed
+      (node degraded in StatusReport); `bohux agent run` uses the Docker provider;
+      `docs/providers/docker.md`
 
 ### S6 — Deploy workflow ⏳
 - [ ] `.claude/skills/new-workflow/` (referenced by ADR-0002)
@@ -408,7 +438,14 @@ Split into sub-slices, one session each.
   `go build ./...`. CI does this.
 - The Buf Schema Registry was unreachable from the cloud container on 2026-10-21; S1
   may need to run `buf dep update` where the registry is reachable (CI or locally).
-- The cloud container has no running Docker daemon, so `make run-dev` cannot run there.
+- The cloud container has no Docker daemon running at start; one can be started (below).
+- **Local Docker in the cloud container:** `dockerd` is installed and runs as root:
+  ```
+  mkdir -p /var/lib/bohux-dockerd-test
+  nohup dockerd --data-root /var/lib/bohux-dockerd-test --live-restore > /tmp/dockerd.log 2>&1 &
+  docker run --rm busybox:1.36 echo ok      # image pulls work through the proxy
+  ```
+  Docker 29.9, Compose v5.6. Enough for provider conformance (S5).
 - **Local Postgres in the cloud container:** Postgres 16 binaries are in
   `/usr/lib/postgresql/16/bin`. The scratchpad is not readable by the `postgres` user,
   so use its home:
@@ -439,6 +476,8 @@ Split into sub-slices, one session each.
   done: the agent verifies, caches, and acks them.
 - S4e split; S4e1 done: provider interface (O10) and the offline reconcile loop. S4e2
   done: status reports and silent-stream detection. **S4 done.**
+- S5 split into S5a–S5e. S5a done: ADR-0025 proposed (O11), Docker runs locally,
+  provider interface moved to `internal/provider`.
 - S4b split into S4b1/S4b2, both done: `internal/pki`, NodeService, data dir, agent
   TLS listener, Register.
 - S3d done: `internal/secrets` redaction, access-log interceptor, rule 3 test.

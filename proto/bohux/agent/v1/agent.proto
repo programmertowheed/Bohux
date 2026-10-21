@@ -131,6 +131,9 @@ message Workload {
   // Values for `secrets`, encrypted to this node's sealing key (ADR-0008). Only the agent
   // can open it; the control plane never logs or stores it.
   bytes sealed_secrets = 9;
+  // Human-readable names for the artifacts the provider writes (ADR-0025).
+  string app_slug = 10;
+  string environment_slug = 11;
 }
 
 // The plaintext of Workload.sealed_secrets before sealing (ADR-0008, ADR-0024): the

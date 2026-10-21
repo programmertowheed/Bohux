@@ -20,7 +20,7 @@ import (
 
 	agentv1 "github.com/bohumix/bohux/gen/bohux/agent/v1"
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
-	"github.com/bohumix/bohux/providers"
+	"github.com/bohumix/bohux/internal/provider"
 )
 
 const (
@@ -36,7 +36,7 @@ const (
 type Reconciler struct {
 	State    *State
 	Cache    *Cache
-	Provider providers.Provider
+	Provider provider.Provider
 	// Interval between passes; zero means 10 seconds. A new assignment triggers a
 	// pass at once.
 	Interval time.Duration
@@ -119,9 +119,9 @@ func (r *Reconciler) Once(ctx context.Context) *agentv1.StatusReport {
 	}
 
 	report := &agentv1.StatusReport{Generation: a.GetGeneration()}
-	desired := map[providers.ResourceRef]bool{}
+	desired := map[provider.ResourceRef]bool{}
 	for _, w := range a.GetWorkloads() {
-		ref := providers.ResourceRef{Environment: w.GetEnvironmentId(), App: w.GetAppId()}
+		ref := provider.ResourceRef{Environment: w.GetEnvironmentId(), App: w.GetAppId()}
 		desired[ref] = true
 		ws := &agentv1.WorkloadStatus{AppId: w.GetAppId(), ReleaseId: w.GetReleaseId()}
 		report.Workloads = append(report.Workloads, ws)
@@ -163,7 +163,7 @@ func (r *Reconciler) Once(ctx context.Context) *agentv1.StatusReport {
 
 // converge applies w if the target does not match it or is not running, then fills
 // ws from the observed state.
-func (r *Reconciler) converge(ctx context.Context, ref providers.ResourceRef, w *agentv1.Workload, ws *agentv1.WorkloadStatus) {
+func (r *Reconciler) converge(ctx context.Context, ref provider.ResourceRef, w *agentv1.Workload, ws *agentv1.WorkloadStatus) {
 	spec, err := r.spec(ref, w)
 	if err != nil {
 		fail(ws, "SPEC_INVALID")
@@ -177,7 +177,7 @@ func (r *Reconciler) converge(ctx context.Context, ref providers.ResourceRef, w 
 		return
 	}
 	if !st.Exists || st.Hash != spec.Hash || !st.Running {
-		if _, err := r.Provider.Apply(ctx, providers.ApplyRequest{Spec: spec}); err != nil {
+		if _, err := r.Provider.Apply(ctx, provider.ApplyRequest{Spec: spec}); err != nil {
 			fail(ws, "APPLY_FAILED")
 			slog.ErrorContext(ctx, "provider apply; will retry", "app", w.GetAppId(), "err", err)
 			return
@@ -216,21 +216,21 @@ func (s workloadSecrets) Open() (map[string]string, error) { return s.st.OpenSec
 // spec builds the provider Spec. Its hash covers the workload minus fields that do
 // not change what runs (the per-send seal, the deployment id) plus a keyed digest of
 // the secret values, so a rotated secret re-applies without the hash revealing it.
-func (r *Reconciler) spec(ref providers.ResourceRef, w *agentv1.Workload) (providers.Spec, error) {
+func (r *Reconciler) spec(ref provider.ResourceRef, w *agentv1.Workload) (provider.Spec, error) {
 	values, err := r.State.OpenSecrets(w)
 	if err != nil {
-		return providers.Spec{}, err
+		return provider.Spec{}, err
 	}
 	shape := proto.Clone(w).(*agentv1.Workload)
 	shape.SealedSecrets, shape.DeploymentId = nil, ""
 	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(shape)
 	if err != nil {
-		return providers.Spec{}, fmt.Errorf("encode workload: %w", err)
+		return provider.Spec{}, fmt.Errorf("encode workload: %w", err)
 	}
 	h := sha256.New()
 	h.Write(b)
 	h.Write(r.secretDigest(values))
-	spec := providers.Spec{
+	spec := provider.Spec{
 		Ref: ref, Release: w.GetReleaseId(), Image: w.GetImage(), Runtime: w.GetRuntime(),
 		Hash: hex.EncodeToString(h.Sum(nil)),
 	}
@@ -259,8 +259,8 @@ func (r *Reconciler) secretDigest(values map[string]string) []byte {
 	return mac.Sum(nil)
 }
 
-func (r *Reconciler) loadApplied() (map[providers.ResourceRef]bool, error) {
-	out := map[providers.ResourceRef]bool{}
+func (r *Reconciler) loadApplied() (map[provider.ResourceRef]bool, error) {
+	out := map[provider.ResourceRef]bool{}
 	raw, err := os.ReadFile(filepath.Join(r.State.dir, appliedFile))
 	if errors.Is(err, fs.ErrNotExist) {
 		return out, nil
@@ -268,7 +268,7 @@ func (r *Reconciler) loadApplied() (map[providers.ResourceRef]bool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", appliedFile, err)
 	}
-	var refs []providers.ResourceRef
+	var refs []provider.ResourceRef
 	if err := json.Unmarshal(raw, &refs); err != nil {
 		return nil, fmt.Errorf("decode %s: %w", appliedFile, err)
 	}
@@ -278,8 +278,8 @@ func (r *Reconciler) loadApplied() (map[providers.ResourceRef]bool, error) {
 	return out, nil
 }
 
-func (r *Reconciler) saveApplied(applied map[providers.ResourceRef]bool) error {
-	refs := make([]providers.ResourceRef, 0, len(applied))
+func (r *Reconciler) saveApplied(applied map[provider.ResourceRef]bool) error {
+	refs := make([]provider.ResourceRef, 0, len(applied))
 	for ref := range applied {
 		refs = append(refs, ref)
 	}
