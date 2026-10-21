@@ -15,10 +15,11 @@ import (
 	"github.com/bohumix/bohux/internal/store"
 )
 
-// auditService reads the audit trail written with every change (rule 10, ADR-0004).
-// Revisions are not served yet: their snapshots need a reader per resource type.
+// auditService reads the audit trail and revision history written with every change
+// (rule 10, ADR-0004, ADR-0017).
 type auditService struct {
 	s *Server
+	auditReader
 }
 
 var actorKinds = map[string]bohuxv1.PrincipalKind{
@@ -115,12 +116,4 @@ func (as *auditService) ListAuditEvents(ctx context.Context, req *connect.Reques
 		resp.NextPageToken = resp.AuditEvents[size-1].GetId()
 	}
 	return connect.NewResponse(resp), nil
-}
-
-func (as *auditService) ListRevisions(context.Context, *connect.Request[bohuxv1.ListRevisionsRequest]) (*connect.Response[bohuxv1.ListRevisionsResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("revisions are not served yet"))
-}
-
-func (as *auditService) GetRevision(context.Context, *connect.Request[bohuxv1.GetRevisionRequest]) (*connect.Response[bohuxv1.GetRevisionResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("revisions are not served yet"))
 }
