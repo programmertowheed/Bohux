@@ -38,20 +38,20 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S6b — deploy workflow activities (⏳, next to start)
-- **Exact next step:** migration `00016` (`deployments_revisions.workflow_run_id`), then
-  the activities in `internal/workflow/deploy/activities.go`.
+- **Slice:** S6c — worker and API (⏳, next to start)
+- **Exact next step:** Temporal client + worker in `bohux controlplane`
+  (`--temporal-address`, `--temporal-namespace`), then ReleaseService for image sources.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S6b (deploy workflow
-> activities) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0026, the
-> `new-workflow` skill, and CLAUDE.md rules 3, 6 and 10. Start Postgres, Docker and
-> Temporal (tracker *Known gaps*). Write migration `00016`, then replace the activity
-> stubs in `internal/workflow/deploy/activities.go` with real ones (RecordStart,
-> SetState, LastHealthyRelease, AssignRelease via a new per-App
-> `agentapi.Server.AssignApp`, WaitHealthy), each idempotent and integration-tested
-> against Postgres. Verify with build, vet, golangci-lint (also with the integration
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S6c (deploy worker and
+> API) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0026, the
+> `new-workflow` skill, api-contract.md, and CLAUDE.md rules 1, 8 and 10. Start
+> Postgres, Docker and Temporal (tracker *Known gaps*). Run the deploy worker inside
+> `bohux controlplane` (control plane must start even when Temporal is down), add
+> ReleaseService for image sources and DeploymentService (Create, Get, List,
+> Rollback, Cancel, Watch), with an integration test against the real Temporal dev
+> server. Verify with build, vet, golangci-lint (also with the integration
 > tag), unit and integration tests. Tick boxes, update the tracker and the next
 > session prompt, commit, push, and give me the next prompt.
 
@@ -449,16 +449,29 @@ Split into sub-slices in S6a, one session each. Shape: ADR-0026 (O12).
       that fails; cancel during the gate; cancel before assign; invalid Release. The
       activities are stubs until S6b
 
-#### S6b — activities ⏳
-- [ ] Migration `00016`: `deployments_revisions.workflow_run_id`
-- [ ] `RecordStart` (insert-if-absent with the pre-generated ID, validate Release
-      READY, artifact available, same environment), `SetState` (no-op on repeat,
-      audited), `LastHealthyRelease`
-- [ ] `agentapi.Server.AssignApp`: per-App read-modify-write of the latest generation
-      under the node lock; idempotent per Deployment; empty Release removes the workload
-- [ ] `WaitHealthy`: poll the stored report every 2 s with heartbeats; target Release
-      healthy with all replicas ready; `FAILED` fails at once; deadline → timeout
-- [ ] Integration tests against Postgres for every activity
+#### S6b — activities ✅
+- [x] Migration `00016`: `deployments_revisions.workflow_run_id`
+- [x] `RecordStart` (insert-if-absent with the pre-generated ID under the App lock,
+      then validate Release ready, artifact available, same App and environment),
+      `SetState` (no-op on repeat or once terminal, audited as `bohux.workflow/Deploy`
+      with the caller as actor), `LastHealthyRelease` (newest `succeeded` by
+      `finished_at`). `InsertDeployment` and `ValidateRelease` are exported for the API
+- [x] `agentapi.Server.AssignApp`: per-App read-modify-write of the latest generation
+      under the node lock; idempotent per Deployment; nil removes the workload; other
+      workloads kept as stored. `Assign` shares the locked path. `ErrRevokedNode`,
+      `ErrUnknownApp`, `ErrWrongEnv` exported
+- [x] `AssignRelease` builds the workload from the Release and its captured App
+      revision (image source → `repository@digest`, else the artifact digest)
+- [x] `WaitHealthy`: polls the stored report (2 s default) with heartbeats; target
+      Release `HEALTHY` with ready ≥ replicas; `FAILED` fails at once; deadline →
+      `HealthTimeout`
+- [x] Integration tests against Postgres for every activity; fixtures `Node`,
+      `DeployableApp`, `Release`
+- **Found:** Temporal treats a *wrapped* non-retryable error as retryable, so
+  activities return the `ApplicationError` bare (`applicationError`). Tested
+- **Not handled yet:** `ScaleApp` and App edits change no running workload until the
+  next deploy (a Release captures its App revision). Decide in S6c whether ScaleApp
+  starts a deploy of the current Release
 
 #### S6c — worker and API ⏳
 - [ ] `bohux controlplane --temporal-address --temporal-namespace`; worker on
@@ -546,6 +559,9 @@ Split into sub-slices in S6a, one session each. Shape: ADR-0026 (O12).
   SDK v1.41.1; ADR-0026 proposed (O12); S6 split into S6b–S6d; the deploy workflow and
   its compensation test (mocked activities) green; lint clean.
 - **Next:** S6b.
+- S6b done: migration `00016`, real activities, `agentapi.Server.AssignApp`, fixtures,
+  integration tests. Wrapped non-retryable errors were silently retryable; fixed.
+- **Next:** S6c.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by

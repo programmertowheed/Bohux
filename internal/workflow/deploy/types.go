@@ -115,6 +115,8 @@ type AssignInput struct {
 type Assigned struct {
 	NodeID     string
 	Generation uint64
+	// Replicas the Release runs with; zero for a removal.
+	Replicas int32
 }
 
 // WaitInput waits for Generation on NodeID to run AppID at ReleaseID, healthy.
@@ -124,6 +126,8 @@ type WaitInput struct {
 	Generation uint64
 	AppID      string
 	ReleaseID  string
+	// Replicas that must be ready.
+	Replicas int32
 	// Deadline is when the health gate fails with ErrTypeHealthTimeout. Set by the
 	// workflow so activity retries do not extend it.
 	Deadline time.Time
