@@ -24,14 +24,30 @@ work is in right now*.
    what was done, what is half-done and where, the exact next step.
 2. Commit and push. Unpushed work is lost when the cloud container is reclaimed.
 
+**Session size (owner rule)**
+- One task per session. Sessions are short; the owner runs `/clear` between them.
+- If a task grows too big for one session, stop at a clean point, split the rest into a
+  new sub-slice here, commit, and push.
+- Every session ends by giving the owner **the exact prompt for the next session**, and
+  that prompt is also written under *Next session prompt* below.
+- Items under *Waiting on the owner* are handled by the owner outside the repo. Do not
+  wait on them; work on the code.
+
 **Status legend:** ⏳ not started · 🔄 in progress · ✅ done · ⛔ blocked (say on what)
 
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S1 — proto contract (⏳, next to start)
+- **Slice:** S1a — proto: common and tenancy (⏳, next to start)
 - **Exact next step:** write `proto/bohux/v1/common.proto` (`ResourceMeta`) per
-  `docs/specs/api-contract.md`, then the remaining files in its *Files* list.
+  `docs/specs/api-contract.md`.
+
+## Next session prompt
+
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S1a (proto: common and
+> tenancy) on branch `claude/relaxed-rubin-76m7dl`. Follow docs/specs/api-contract.md and
+> ADR-0014. Run buf lint and buf build, tick the S1a boxes, update the tracker and the
+> next session prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -58,13 +74,26 @@ Each slice ends green in CI and pushed. Order matters: later slices build on ear
 - [x] This file, linked from `CLAUDE.md`
 
 ### S1 — Proto contract ⏳
-Plan: `docs/specs/api-contract.md` (all questions answered there).
-- [ ] Add `buf.build/googleapis/googleapis` dependency, pinned in `buf.lock` (ADR-0014)
-- [ ] `proto/bohux/v1/`: common, identity, tenancy, project, environment, app, release,
-      deployment, workload, node, secret, audit
+Plan: `docs/specs/api-contract.md` (all questions answered there). Split into four
+sub-slices, one session each.
+
+#### S1a — common and tenancy ⏳
+- [ ] Add `buf.build/googleapis/googleapis` dependency pinned in `buf.lock` (ADR-0014);
+      if the registry is unreachable, note it and let CI resolve it
+- [ ] `common.proto` (`ResourceMeta`, pagination, idempotency conventions)
+- [ ] `identity.proto`, `tenancy.proto`, `project.proto`, `environment.proto`
+
+#### S1b — app, release, deployment ⏳
+- [ ] `app.proto` (App replaces Service), `release.proto`, `deployment.proto`
+      (no `approver`/`actor` request fields), `workload.proto`
+
+#### S1c — node, secret, audit, agent protocol ⏳
+- [ ] `node.proto`, `secret.proto` (value redacted), `audit.proto`
 - [ ] `proto/bohux/agent/v1/agent.proto`, including version fields for skew (ADR-0020)
-- [ ] Delete `proto/bohux/v1/service.proto` and its lint/breaking ignore in `buf.yaml`
-- [ ] `buf lint` clean with no ignores
+
+#### S1d — cleanup ⏳
+- [ ] Delete `proto/bohux/v1/service.proto` and its ignore in `buf.yaml`
+- [ ] `buf lint` clean with no ignores; `buf generate` + `go build ./gen/...` pass
 
 ### S2 — Storage ⏳
 - [ ] Migration tool choice (ADR if it is a new dependency)
@@ -120,6 +149,10 @@ Plan: `docs/specs/api-contract.md` (all questions answered there).
   tests cannot run there. Integration slices (S2+) need CI or a local machine.
 
 ## Session log (newest first)
+
+### 2026-10-21 (planning) — branch `claude/relaxed-rubin-76m7dl`
+- Owner set session rules: one task per session, split when large, always hand over the
+  next prompt. S1 split into S1a–S1d.
 
 ### 2026-10-21 (later) — branch `claude/relaxed-rubin-76m7dl`
 - Owner accepted ADR-0019: Caddy is the only ingress proxy through v1 (Traefik and nginx rejected).
