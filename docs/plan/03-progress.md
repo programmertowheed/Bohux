@@ -92,7 +92,7 @@ work is in right now*.
 | O30 | Accept or reject ADR-0041 (registry credentials and Git deploy keys are environment secrets the App names; sealed apart from its env vars; on the node only for the one command). Adds `App.image_pull_secret`, migration 00021 | S17 |
 | O31 | Git host keys for deploy-key fetches: trusted on first use per node and pinned in `<state>/builds/known_hosts` (now). Alternative: a known_hosts secret per environment, refusing unknown hosts | S17 |
 | O32 | Buildpacks or Nixpacks (v0.2 "auto-detect builds"): which builder, and is the extra builder image on the node acceptable (ADR-0011 item 7 lists Dockerfile only) | next v0.2 item |
-| O33 | Accept or reject ADR-0042 (refines ADR-0031: a release cancels its fallback only when healthy while the control plane accepts the agent; found when a new control plane refused its own agent) | S15 check |
+| O33 | Accept or reject ADR-0042 (refines ADR-0031: a release healthy while the control plane *rejects* its agent does not cancel its fallback; an unreachable control plane changes nothing, rule 1; found when a new control plane refused its own agent) | S15 check |
 | O34 | Accept or reject ADR-0043 (email notifications: `EMAIL` channels with a `mailto:` list in OpenBao; one SMTP relay per install, TLS required). Adds a proto enum value, migration 00022, four control-plane settings | S19 |
 | O35 | Remaining v0.2 items need a product call before code: **managed Postgres/Redis** (needs app-to-app networking in an environment, which does not exist: each App is its own Compose network; plus image pinning, volume lifecycle, backups); **envelope encryption** (what threat beyond OpenBao's own barrier: crypto-shredding environments? its backups then need the keys); **team invites** (user accounts); **Buildpacks/Nixpacks** (O32); **web terminal** (O29) | next v0.2 items |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
@@ -1173,6 +1173,17 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   missing slotted Apps, and the macOS build.
 - S19: email notifications (ADR-0043 proposed, O34). O35 lists what the rest of v0.2
   needs decided.
+- A code review of the session's commits found eight real defects, all fixed with
+  tests: a secret used as a pull secret or deploy key could be deleted; the pull
+  credential dropped the operator's Docker context and proxies; a failed SMTP QUIT
+  after acceptance re-sent mail; `token create` was scoped by `BOHUX_PROJECT`; a data
+  race in exec `Close`; a silent slot-read error; the mailto: conversion duplicated in
+  clients; and ADR-0042 as first written let a control-plane *outage* revert a
+  healthy release (rule 1). It now keys on a version rejection only.
+- Live install: deploy and rollback of a routed App with 312 polled requests, all 200;
+  exec follows the serving slot. The UI's new pages pass the installed CSP.
+- One unexplained failure: a Docker conformance run right after the integration suite
+  failed once (log not kept); three reruns, including the same ordering, passed.
 - **Next:** see Current focus.
 
 ### 2026-10-21 (auto run, S9e–S9f) — branch `claude/relaxed-rubin-76m7dl`
