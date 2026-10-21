@@ -41,8 +41,8 @@ type Subject struct {
 	Provider  provider.Provider
 	Inspector Inspector
 	// Fixture returns the spec for a release of a small workload that logs
-	// LogMarker(release) when it starts and serves its health check. The suite fills
-	// in Secrets and Hash.
+	// LogMarker(release) when it starts and serves its health check. It must use ref
+	// unchanged. The suite fills in Secrets and Hash.
 	Fixture   func(ref provider.ResourceRef, release int, replicas int32) provider.Spec
 	LogMarker func(release int) string
 	// Timeout bounds each wait for convergence; zero means two minutes.
@@ -76,7 +76,9 @@ func NewHarness(s Subject) *Harness {
 	if s.Timeout == 0 {
 		s.Timeout = 2 * time.Minute
 	}
-	return &Harness{S: s, Ref: provider.ResourceRef{Environment: "conformance", App: "c" + randomHex(4)}, replicas: 1}
+	app := "c" + randomHex(4)
+	return &Harness{S: s, Ref: provider.ResourceRef{Environment: "conformance", App: app,
+		EnvironmentSlug: "conformance", AppSlug: app}, replicas: 1}
 }
 
 func randomHex(n int) string {

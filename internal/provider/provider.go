@@ -78,10 +78,15 @@ type Descriptor struct {
 	Capabilities []Verb
 }
 
-// ResourceRef names one workload on the target: an App in an Environment.
+// ResourceRef names one workload on the target: an App in an Environment. The IDs
+// identify it; the slugs (immutable, like the IDs) make the target's names readable
+// (ADR-0025).
 type ResourceRef struct {
 	Environment string
 	App         string
+
+	EnvironmentSlug string `json:",omitempty"`
+	AppSlug         string `json:",omitempty"`
 }
 
 // SecretSource yields a workload's secret values when the provider writes its

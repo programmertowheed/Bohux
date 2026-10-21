@@ -121,7 +121,8 @@ func (r *Reconciler) Once(ctx context.Context) *agentv1.StatusReport {
 	report := &agentv1.StatusReport{Generation: a.GetGeneration()}
 	desired := map[provider.ResourceRef]bool{}
 	for _, w := range a.GetWorkloads() {
-		ref := provider.ResourceRef{Environment: w.GetEnvironmentId(), App: w.GetAppId()}
+		ref := provider.ResourceRef{Environment: w.GetEnvironmentId(), App: w.GetAppId(),
+			EnvironmentSlug: w.GetEnvironmentSlug(), AppSlug: w.GetAppSlug()}
 		desired[ref] = true
 		ws := &agentv1.WorkloadStatus{AppId: w.GetAppId(), ReleaseId: w.GetReleaseId()}
 		report.Workloads = append(report.Workloads, ws)

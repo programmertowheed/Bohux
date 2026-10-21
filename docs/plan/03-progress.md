@@ -38,7 +38,8 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S5c — Docker provider lifecycle (⏳, next to start)
+- **Slice:** S5c — Docker provider lifecycle (🔄 in progress: code and unit tests in;
+  first full Docker conformance run pending)
 - **Exact next step:** `providers/docker` Describe (CLI version checks), Compose
   rendering (artifact + 0600 secrets.env, labels, logging), Apply, Status, Destroy.
 
@@ -396,7 +397,11 @@ Split into sub-slices, one session each.
       variants each fail exactly the case meant to catch them (runs in `go test ./...`)
 - [x] `providers/_conformance`: `go test ./providers/_conformance -provider=memory`
 
-#### S5c — Docker: Describe, Plan, Apply, Status, Destroy ⏳
+#### S5c — Docker: Describe, Plan, Apply, Status, Destroy 🔄
+- Written: all eight methods (`providers/docker`, one file per verb), Inspector,
+  busybox-httpd fixture in `providers/_conformance`, render/quantity/name/log unit
+  tests, `docs/providers/docker.md`, CI job `conformance-docker`. **Pending:** a green
+  `go test ./providers/_conformance -provider=docker` against the local daemon.
 - [ ] Compose artifact + 0600 `secrets.env` (rule 2, ADR-0008), labels, spec hash,
       HTTP health; lifecycle conformance cases green against the local daemon
 

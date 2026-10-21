@@ -104,6 +104,29 @@ jobs:
       - name: Integration tests
         run: go test -tags=integration -race -count=1 ./internal/... ./cmd/...
 
+  # Provider conformance against a real Docker daemon (CLAUDE.md rule 4, ADR-0025).
+  conformance-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.47.2
+          setup_only: true
+      - name: Install code generators
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.35.2
+          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.17.0
+      - name: Generate
+        run: |
+          test -f buf.lock || buf dep update
+          buf generate
+      - name: Docker conformance
+        run: go test -count=1 -v -timeout 20m ./providers/_conformance -provider=docker
+
   compose:
     runs-on: ubuntu-latest
     steps:

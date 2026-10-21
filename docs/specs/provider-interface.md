@@ -46,7 +46,8 @@ type Provider interface {
 The Go definitions live in `internal/provider/provider.go` (written in S4e; the owner reviews
 them as O10). The choices the contract above left open:
 
-- **`ResourceRef`** is `{Environment, App}` (IDs). One workload per App per Environment.
+- **`ResourceRef`** is `{Environment, App}` (IDs) plus their slugs, for readable target
+  names (ADR-0025). One workload per App per Environment.
 - **`Spec`** carries the pinned `Image`, the `bohux.v1.Runtime`, a lazy
   `SecretSource` (rule 3 below: providers call `Open` only to write the secret file),
   `Raw` (rule 5), and a `Hash` of the desired state.
