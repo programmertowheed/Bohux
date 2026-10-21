@@ -60,6 +60,18 @@ type Server struct {
 type session struct {
 	// wake is signaled when a new assignment is written for the node.
 	wake chan struct{}
+	// out carries other messages for the stream's sender (build requests).
+	out chan *agentv1.ConnectResponse
+	// done is closed when the stream ends.
+	done chan struct{}
+
+	mu sync.Mutex
+	// builds holds who waits for each Release's build result.
+	builds map[string][]chan *agentv1.BuildResult
+}
+
+func newSession() *session {
+	return &session{wake: make(chan struct{}, 1), out: make(chan *agentv1.ConnectResponse), done: make(chan struct{})}
 }
 
 // wake nudges the node's open stream, if any, to send its latest assignment.

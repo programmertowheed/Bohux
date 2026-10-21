@@ -93,9 +93,10 @@ func (s *Server) Connect(ctx context.Context, stream *connect.BidiStream[agentv1
 	// The newest stream for a node owns its online state. When this one ends, it marks
 	// the node offline only if no newer stream has replaced it, so a quick reconnect is
 	// not overwritten by the old stream's cleanup. ctx is done by then; use a fresh one.
-	sess := &session{wake: make(chan struct{}, 1)}
+	sess := newSession()
 	s.sessions.Store(node, sess)
 	defer func() {
+		close(sess.done)
 		if !s.sessions.CompareAndDelete(node, sess) {
 			return
 		}
@@ -128,6 +129,8 @@ func (s *Server) Connect(ctx context.Context, stream *connect.BidiStream[agentv1
 				if err := s.recordReport(ctx, tenant, node, m.StatusReport); err != nil {
 					slog.WarnContext(ctx, "record status report", "node", node.String(), "err", err)
 				}
+			case *agentv1.ConnectRequest_BuildResult:
+				sess.deliver(m.BuildResult)
 			default:
 				// LogChunk and ExecOutput are handled with WorkloadService (S8).
 				slog.DebugContext(ctx, "agent message", "node", node.String(), "type", fmt.Sprintf("%T", m))
@@ -171,6 +174,10 @@ func (s *Server) Connect(ctx context.Context, stream *connect.BidiStream[agentv1
 			return fmt.Errorf("receive: %w", err)
 		case <-sess.wake:
 			if err := push(); err != nil {
+				return nil
+			}
+		case msg := <-sess.out:
+			if err := stream.Send(msg); err != nil {
 				return nil
 			}
 		case <-ticker.C:
