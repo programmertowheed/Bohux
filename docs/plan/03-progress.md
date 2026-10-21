@@ -38,26 +38,22 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S6a — deploy workflow: plan, Temporal locally, rollback test first (⏳,
-  next to start)
-- **Exact next step:** get a Temporal dev server running in the cloud container (the
-  `temporal` CLI's `server start-dev`), then write `.claude/skills/new-workflow/`.
+- **Slice:** S6b — deploy workflow activities (⏳, next to start)
+- **Exact next step:** migration `00016` (`deployments_revisions.workflow_run_id`), then
+  the activities in `internal/workflow/deploy/activities.go`.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S6a (deploy workflow:
-> plan, local Temporal, rollback test first) on branch `claude/relaxed-rubin-76m7dl`,
-> following ADR-0002, ADR-0007, ADR-0010, ADR-0020, and CLAUDE.md rules 5 and 6. Start
-> Postgres and Docker (tracker *Known gaps*) and get a Temporal dev server running in
-> the cloud container (try the `temporal` CLI, `server start-dev`); record how in
-> *Known gaps*. Write `.claude/skills/new-workflow/`. Split the rest of S6 into
-> sub-slices in the tracker. If the Temporal Go SDK is a new dependency that needs an
-> ADR, write it as proposed and list it under *Waiting on the owner*. Then write the
-> rollback/compensation test first (rule 5): a deploy whose new Release never turns
-> healthy must reassign the last healthy Release. Verify with build, vet,
-> golangci-lint (also with the integration tag), unit and integration tests. Tick
-> boxes, update the tracker and the next session prompt, commit, push, and give me the
-> next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S6b (deploy workflow
+> activities) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0026, the
+> `new-workflow` skill, and CLAUDE.md rules 3, 6 and 10. Start Postgres, Docker and
+> Temporal (tracker *Known gaps*). Write migration `00016`, then replace the activity
+> stubs in `internal/workflow/deploy/activities.go` with real ones (RecordStart,
+> SetState, LastHealthyRelease, AssignRelease via a new per-App
+> `agentapi.Server.AssignApp`, WaitHealthy), each idempotent and integration-tested
+> against Postgres. Verify with build, vet, golangci-lint (also with the integration
+> tag), unit and integration tests. Tick boxes, update the tracker and the next
+> session prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -73,6 +69,7 @@ work is in right now*.
 | O9 | Accept or reject ADR-0024 (node CA + signing key as 0600 files in `--data-dir`, CA pinning by hash at install, 90-day node certs, Ed25519 assignment signatures, nacl/box sealing). Owner allowed building on it | S4b onward |
 | O10 | Review the provider types in `internal/provider/provider.go` and the *Types* section of `docs/specs/provider-interface.md` (hash-based drift detection, no list verb: agent records what it applied). Built on already | S5 implements them |
 | O11 | Accept or reject ADR-0025 (Docker provider drives `docker compose` on its own artifact; agent-side HTTP health checks; layout and labels). Owner allowed building on it | S5c onward |
+| O12 | Accept or reject ADR-0026 (deploy workflow shape: worker in the control plane, workflow ID per App, row written by API and workflow, per-App assign, polling health activity, compensation by reassignment). Built on already | S6b onward |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -433,20 +430,49 @@ Split into sub-slices, one session each.
 - [x] `docs/providers/docker.md`, `docs/reference/config.md`; Docker conformance still
       green (92 s)
 
-### S6 — Deploy workflow ⏳
-To be split into sub-slices in S6a.
+### S6 — Deploy workflow 🔄
+Split into sub-slices in S6a, one session each. Shape: ADR-0026 (O12).
 
-#### S6a — plan, local Temporal, rollback test first ⏳
-- [ ] Temporal dev server running in the cloud container; how, in *Known gaps*
-- [ ] `.claude/skills/new-workflow/` (referenced by ADR-0002)
-- [ ] Temporal Go SDK dependency (ADR if needed, proposed)
-- [ ] Rest of S6 split into sub-slices
-- [ ] Rollback/compensation test written first (rule 5)
+#### S6a — plan, local Temporal, rollback test first ✅
+- [x] Temporal dev server running in the cloud container; how, in *Known gaps*
+- [x] `.claude/skills/new-workflow/` (referenced by ADR-0002)
+- [x] Temporal Go SDK `go.temporal.io/sdk` v1.41.1 (last version supporting Go 1.23).
+      No ADR of its own: ADR-0002 chose Temporal. It raised `google.golang.org/protobuf`
+      to v1.36.6, so CI's `protoc-gen-go` pin moved to v1.36.6 too
+- [x] Proposed ADR-0026 (O12): worker in the control plane, one workflow ID per App,
+      row written by API and workflow, per-App assign under the node lock, polling
+      health activity, compensation by reassignment
+- [x] Rest of S6 split into sub-slices (below)
+- [x] Rollback/compensation test written first (rule 5): `internal/workflow/deploy`
+      workflow against mocked activities: never healthy → last healthy reassigned;
+      failed workload; first deploy removes its workload; assign error; compensation
+      that fails; cancel during the gate; cancel before assign; invalid Release. The
+      activities are stubs until S6b
 
-#### S6 (to split)
-- [ ] **Rollback/compensation test first** (rule 5)
-- [ ] Temporal workflow: build → (push no-op single-node) → assign → wait healthy →
-      finalize / compensate
+#### S6b — activities ⏳
+- [ ] Migration `00016`: `deployments_revisions.workflow_run_id`
+- [ ] `RecordStart` (insert-if-absent with the pre-generated ID, validate Release
+      READY, artifact available, same environment), `SetState` (no-op on repeat,
+      audited), `LastHealthyRelease`
+- [ ] `agentapi.Server.AssignApp`: per-App read-modify-write of the latest generation
+      under the node lock; idempotent per Deployment; empty Release removes the workload
+- [ ] `WaitHealthy`: poll the stored report every 2 s with heartbeats; target Release
+      healthy with all replicas ready; `FAILED` fails at once; deadline → timeout
+- [ ] Integration tests against Postgres for every activity
+
+#### S6c — worker and API ⏳
+- [ ] `bohux controlplane --temporal-address --temporal-namespace`; worker on
+      `bohux-deploy`; the control plane still starts when Temporal is down (API up,
+      deploys refused until it is back)
+- [ ] ReleaseService for image sources (READY at creation, digest from the App)
+- [ ] DeploymentService: Create (start, then row), Get, List, Rollback (empty target =
+      last healthy), Cancel, Watch; concurrent deploy of one App → `FAILED_PRECONDITION`
+- [ ] Integration test with a real Temporal dev server and a fake agent report
+
+#### S6d — end to end ⏳
+- [ ] Real Temporal + control plane + agent on Docker: healthy deploy succeeds; a
+      Release whose health check never passes rolls back to the previous one; downtime
+      of the recreate measured (ADR-0020 item 5)
 
 ### S7 — Build and secrets ⏳
 - [ ] BuildKit Dockerfile builds, exported to the local image store, resource-limited
@@ -495,13 +521,31 @@ To be split into sub-slices in S6a.
   export BOHUX_TEST_POSTGRES_URL='postgres://postgres@127.0.0.1:55432/postgres?sslmode=disable'
   go test -tags=integration -race -count=1 ./internal/store/...
   ```
-  (skip `initdb` if `$D/data` exists). Temporal/OpenBao still need CI or a local machine.
+  (skip `initdb` if `$D/data` exists). OpenBao still needs CI or a local machine.
+- **Local Temporal in the cloud container:** `temporal.download` is blocked, GitHub
+  releases are not:
+  ```
+  mkdir -p /opt/temporal && cd /opt/temporal
+  curl -sSL https://github.com/temporalio/cli/releases/download/v1.4.1/temporal_cli_1.4.1_linux_amd64.tar.gz | tar xz
+  nohup ./temporal server start-dev --headless --ip 127.0.0.1 --port 7233 --db-filename /opt/temporal/dev.db > /tmp/temporal.log 2>&1 &
+  ./temporal operator cluster health --address 127.0.0.1:7233   # SERVING
+  export BOHUX_TEST_TEMPORAL_ADDRESS=127.0.0.1:7233
+  ```
+  CLI 1.4.1 = Server 1.28.0. Namespace `default` exists. The SDK's
+  `testsuite.StartDevServer` downloads from the blocked host, so do not use it.
 - **Dev stack:** `deploy/dev/postgres-init/` creates `bohux_app` only on a fresh
   `postgres` volume. An existing volume needs `docker compose down -v` first.
 - **Go 1.23 pin holds dependencies back** (goose ≤ v3.26, pgx ≤ v5.7.6; newer need Go
   1.24–1.26). Raising the `go` directive is cheap and its own commit when wanted.
 
 ## Session log (newest first)
+
+### 2026-10-21 (auto run 2, S6a) — branch `claude/relaxed-rubin-76m7dl`
+- Owner asked again for an automatic run, slice after slice, until the session ends.
+- S6a done: Temporal dev server via the CLI from GitHub releases; `new-workflow` skill;
+  SDK v1.41.1; ADR-0026 proposed (O12); S6 split into S6b–S6d; the deploy workflow and
+  its compensation test (mocked activities) green; lint clean.
+- **Next:** S6b.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by
