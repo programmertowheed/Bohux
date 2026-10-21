@@ -51,6 +51,9 @@ type RunOptions struct {
 	// Builder, if set, answers build requests (ADR-0028); without it every request
 	// fails with BUILDER_UNAVAILABLE.
 	Builder BuildRunner
+	// Workloads, if set, serves log and exec requests (WorkloadService); without it
+	// logs are empty and exec fails.
+	Workloads WorkloadAccess
 	// MinBackoff and MaxBackoff bound reconnect delays; zero means 1s and 1m.
 	MinBackoff, MaxBackoff time.Duration
 }
@@ -192,9 +195,17 @@ func session(ctx context.Context, client agentv1connect.AgentServiceClient, o Ru
 	// sender. A result for a stream that ended is dropped: the control plane asks
 	// again, and the Builder answers from its recent results.
 	builds := make(chan *agentv1.BuildResult, 4)
+	// Log lines and exec output take the same way out.
+	outbox := make(chan *agentv1.ConnectRequest, 16)
+	rl := newRelays(streamCtx, o.Workloads, outbox)
+	defer rl.closeAll()
 	first := true
 	for {
 		select {
+		case m := <-outbox:
+			if err := stream.Send(m); err != nil {
+				return fmt.Errorf("send workload output: %w", err)
+			}
 		case r := <-builds:
 			if err := stream.Send(&agentv1.ConnectRequest{Msg: &agentv1.ConnectRequest_BuildResult{BuildResult: r}}); err != nil {
 				return fmt.Errorf("send build result: %w", err)
@@ -251,8 +262,9 @@ func session(ctx context.Context, client agentv1connect.AgentServiceClient, o Ru
 					}
 				}(m.BuildRequest)
 			default:
-				// Assignments, logs, and exec arrive from S4d on.
-				slog.DebugContext(ctx, "unhandled control-plane message", "type", fmt.Sprintf("%T", m))
+				if !rl.handle(msg) {
+					slog.DebugContext(ctx, "unhandled control-plane message", "type", fmt.Sprintf("%T", m))
+				}
 			}
 		}
 	}

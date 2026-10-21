@@ -60,7 +60,7 @@ func TestBuilderDocker(t *testing.T) {
 	}
 	ctx := context.Background()
 	repo, commit := gitRepo(t, map[string]string{
-		"svc/Dockerfile": "FROM busybox:1.36\nRUN echo built > /built\nCMD [\"cat\", \"/built\"]\n",
+		"svc/Dockerfile":    "FROM busybox:1.36\nRUN echo built > /built\nCMD [\"cat\", \"/built\"]\n",
 		"broken/Dockerfile": "FROM busybox:1.36\nRUN exit 3\n",
 	})
 	b := &Builder{WorkDir: t.TempDir()}

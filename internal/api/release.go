@@ -18,7 +18,6 @@ import (
 
 const releaseType = "bohux.v1.Release"
 
-
 type releaseService struct {
 	s *Server
 }

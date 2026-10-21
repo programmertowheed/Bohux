@@ -131,8 +131,11 @@ func (s *Server) Connect(ctx context.Context, stream *connect.BidiStream[agentv1
 				}
 			case *agentv1.ConnectRequest_BuildResult:
 				sess.deliver(m.BuildResult)
+			case *agentv1.ConnectRequest_LogChunk:
+				sess.deliverLog(m.LogChunk)
+			case *agentv1.ConnectRequest_ExecOutput:
+				sess.deliverExec(m.ExecOutput)
 			default:
-				// LogChunk and ExecOutput are handled with WorkloadService (S8).
 				slog.DebugContext(ctx, "agent message", "node", node.String(), "type", fmt.Sprintf("%T", m))
 			}
 		}

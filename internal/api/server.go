@@ -9,8 +9,10 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	agentv1 "github.com/bohumix/bohux/gen/bohux/agent/v1"
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/gen/bohux/v1/bohuxv1connect"
+	"github.com/bohumix/bohux/internal/agentapi"
 	"github.com/bohumix/bohux/internal/pki"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/workflow/deploy"
@@ -27,19 +29,22 @@ type Server struct {
 	// Secrets stores secret values (OpenBao, ADR-0008). Nil makes SetSecret
 	// unavailable.
 	Secrets SecretBackend
-	// Agents writes node assignments outside a deploy (ScaleApp, ADR-0027). Nil means
-	// ScaleApp changes only the App, and the next deploy carries the new replicas.
-	Agents Scaler
+	// Agents reaches nodes outside a deploy: assignments for ScaleApp (ADR-0027) and
+	// rotated secrets, and logs and exec for WorkloadService. Nil means ScaleApp changes
+	// only the App, and logs and exec are unavailable.
+	Agents NodeAgents
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 }
 
-// Scaler writes node generations outside a deploy: a scale (ADR-0027) or a rotated
-// secret (ADR-0008). agentapi.Server implements it.
-type Scaler interface {
+// NodeAgents is what the API needs from the agent endpoint; agentapi.Server
+// implements it.
+type NodeAgents interface {
 	ScaleAppTx(ctx context.Context, tx *store.Tx, node, app uuid.UUID, replicas int32, actor store.Actor) (bool, error)
 	RotateTx(ctx context.Context, tx *store.Tx, handle string, actor store.Actor) ([]uuid.UUID, error)
 	Wake(node uuid.UUID)
+	Logs(ctx context.Context, node uuid.UUID, req *agentv1.LogRequest) (<-chan *agentv1.LogChunk, error)
+	Exec(ctx context.Context, node uuid.UUID, open *agentv1.ExecOpen) (*agentapi.ExecRelay, error)
 }
 
 // Deployer starts and cancels deploy runs; deploy.Starter implements it.
@@ -69,10 +74,10 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.Handle(bohuxv1connect.NewReleaseServiceHandler(&releaseService{s}, opts))
 	mux.Handle(bohuxv1connect.NewDeploymentServiceHandler(&deploymentService{s}, opts))
 	mux.Handle(bohuxv1connect.NewSecretServiceHandler(&secretService{s}, opts))
+	mux.Handle(bohuxv1connect.NewWorkloadServiceHandler(&workloadService{s}, opts))
 
 	// Not written yet: mounted so every RPC is authenticated, logged, and answers
 	// Unimplemented rather than 404. Each is replaced as its slice lands.
-	mux.Handle(bohuxv1connect.NewWorkloadServiceHandler(bohuxv1connect.UnimplementedWorkloadServiceHandler{}, opts))
 	mux.Handle(bohuxv1connect.NewAuditServiceHandler(bohuxv1connect.UnimplementedAuditServiceHandler{}, opts))
 }
 

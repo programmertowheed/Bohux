@@ -68,10 +68,14 @@ type session struct {
 	mu sync.Mutex
 	// builds holds who waits for each Release's build result.
 	builds map[string][]chan *agentv1.BuildResult
+	// logs and execs route log chunks and exec output to their API callers.
+	logs  map[string]chan *agentv1.LogChunk
+	execs map[string]chan *agentv1.ExecOutput
 }
 
 func newSession() *session {
-	return &session{wake: make(chan struct{}, 1), out: make(chan *agentv1.ConnectResponse), done: make(chan struct{})}
+	return &session{wake: make(chan struct{}, 1), out: make(chan *agentv1.ConnectResponse), done: make(chan struct{}),
+		logs: map[string]chan *agentv1.LogChunk{}, execs: map[string]chan *agentv1.ExecOutput{}}
 }
 
 // wake nudges the node's open stream, if any, to send its latest assignment.
