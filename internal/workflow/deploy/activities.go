@@ -339,7 +339,8 @@ func appNode(ctx context.Context, tx *store.Tx, app uuid.UUID) (uuid.UUID, error
 }
 
 // buildWorkload reads the Release, the App revision it captured, the App's current
-// replicas, and the environment's provider, and returns the workload to assign.
+// replicas and routes, and the environment's provider, and returns the workload to
+// assign.
 func buildWorkload(ctx context.Context, tx *store.Tx, app uuid.UUID, in AssignInput) (*agentv1.Workload, error) {
 	release, err := uuid.Parse(in.ReleaseID)
 	if err != nil {
@@ -351,10 +352,11 @@ func buildWorkload(ctx context.Context, tx *store.Tx, app uuid.UUID, in AssignIn
 		sourceRef               string
 		available               bool
 		rt, secs, currentRT     []byte
-		opts                    []byte
+		opts, routes            []byte
 	)
 	err = tx.QueryRow(ctx, `SELECT a.environment_id, er.provider, r.artifact_digest, r.state,
-		r.artifact_available, r.source_ref, ar.runtime, ar.secrets, cur.runtime, ar.provider_options
+		r.artifact_available, r.source_ref, ar.runtime, ar.secrets, cur.runtime, ar.provider_options,
+		cur.routes
 		FROM releases_heads h
 		JOIN releases_revisions r ON r.id = h.revision_id
 		JOIN apps_revisions ar ON ar.id = h.config_revision_id
@@ -363,7 +365,7 @@ func buildWorkload(ctx context.Context, tx *store.Tx, app uuid.UUID, in AssignIn
 		JOIN environments_heads e ON e.id = a.environment_id
 		JOIN environments_revisions er ON er.id = e.revision_id
 		WHERE h.id = $1 AND h.app_id = $2 AND NOT h.deleted`, release, app).Scan(
-		&env, &provider, &digest, &state, &available, &sourceRef, &rt, &secs, &currentRT, &opts)
+		&env, &provider, &digest, &state, &available, &sourceRef, &rt, &secs, &currentRT, &opts, &routes)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, invalid("release does not exist for this app")
 	}
@@ -386,10 +388,15 @@ func buildWorkload(ctx context.Context, tx *store.Tx, app uuid.UUID, in AssignIn
 	if err != nil {
 		return nil, err
 	}
+	// So are routes (ADR-0034): a rollback never moves a host.
+	rs, err := decodeRoutes(routes)
+	if err != nil {
+		return nil, err
+	}
 	w := &agentv1.Workload{
 		AppId: app.String(), EnvironmentId: env.String(), ReleaseId: in.ReleaseID,
 		DeploymentId: in.DeploymentID, Provider: provider, Image: imageRef(sourceRef, digest),
-		Runtime: runtime, Secrets: secrets,
+		Runtime: runtime, Secrets: secrets, Routes: rs,
 	}
 	// Provider options travel as the Release's App revision had them (ADR-0032).
 	if string(opts) != "{}" {
@@ -406,6 +413,22 @@ func imageRef(sourceRef, digest string) string {
 		return sourceRef
 	}
 	return digest
+}
+
+func decodeRoutes(raw []byte) ([]*bohuxv1.Route, error) {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, fmt.Errorf("decode app routes: %w", err)
+	}
+	routes := make([]*bohuxv1.Route, 0, len(items))
+	for _, it := range items {
+		r := &bohuxv1.Route{}
+		if err := loadJSON.Unmarshal(it, r); err != nil {
+			return nil, fmt.Errorf("decode app route: %w", err)
+		}
+		routes = append(routes, r)
+	}
+	return routes, nil
 }
 
 func decodeSecretRefs(raw []byte) ([]*bohuxv1.SecretRef, error) {

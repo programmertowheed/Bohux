@@ -41,7 +41,12 @@ func toConnect(ctx context.Context, err error) error {
 
 // invalidArgument reports a bad request field, with a typed ErrorDetail (convention 7).
 func invalidArgument(field, reason, msg string) error {
-	e := connect.NewError(connect.CodeInvalidArgument, errors.New(msg))
+	return fieldError(connect.CodeInvalidArgument, field, reason, msg)
+}
+
+// fieldError is a Connect error with code about one request field.
+func fieldError(code connect.Code, field, reason, msg string) error {
+	e := connect.NewError(code, errors.New(msg))
 	if d, err := connect.NewErrorDetail(&bohuxv1.ErrorDetail{Reason: reason, Field: field}); err == nil {
 		e.AddDetail(d)
 	}

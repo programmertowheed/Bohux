@@ -128,3 +128,32 @@ func TestFallback(t *testing.T) {
 		}
 	})
 }
+
+// TestRouteChangeDoesNotReapply: routes are the ingress's business (ADR-0034), so a
+// generation that changes only them leaves the containers alone.
+func TestRouteChangeDoesNotReapply(t *testing.T) {
+	ctx := context.Background()
+	signer, err := pki.LoadOrCreate(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := testState(t, signer)
+	c, err := OpenCache(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := newFake()
+	r := &Reconciler{State: st, Cache: c, Provider: fake}
+	cacheWorkloads(t, signer, st, c, 1, deployed("r1", "d1"))
+	r.Once(ctx)
+	applies, _ := fake.counts()
+	routed := deployed("r1", "d1")
+	routed.Routes = []*bohuxv1.Route{{Host: "api.example.com", Port: 8080}}
+	cacheWorkloads(t, signer, st, c, 2, routed)
+	if ws := only(t, r.Once(ctx)); ws.GetState() != agentv1.WorkloadState_WORKLOAD_STATE_HEALTHY {
+		t.Fatalf("after a route change: %v", ws)
+	}
+	if a, _ := fake.counts(); a != applies {
+		t.Errorf("a route change re-applied (%d applies, was %d)", a, applies)
+	}
+}

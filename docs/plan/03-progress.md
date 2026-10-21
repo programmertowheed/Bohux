@@ -38,16 +38,15 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S10b — routes in the store and the API (⏳, next to start)
+- **Slice:** S10c — provider endpoints (⏳, next to start)
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** migration 00018 (`apps_revisions.routes`, `route_hosts`), then
-  the App write path and validation (S10b list).
+- **Exact next step:** `provider.Status.Endpoints` and a `Spec` marker that the
+  workload has routes (the Docker provider joins it to `bohux-ingress`); conformance.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S10b (routes in the store and
-> the API) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S10c (provider endpoints) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
 > and ADR-0034. Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*).
 > Verify with build, vet, golangci-lint (also with the integration tag), unit and
 > integration tests. Tick boxes, update the tracker and the next session prompt,
@@ -783,13 +782,20 @@ Shape: ADR-0034 (O20). Split into sub-slices, one session each.
 - [x] Proto: `bohux.v1.Route`, `App.routes`, `Create/UpdateAppRequest.routes`,
       `Workload.routes`, `WorkloadStatus.ingress_loaded`, reason `INGRESS_FAILED`
 
-#### S10b — routes in the store and the API ⏳
-- [ ] Migration: `apps_revisions.routes` (jsonb), `route_hosts` (host primary key,
-      tenant RLS); one write path in the App create/update/delete transactions
-- [ ] Validation (lowercase DNS name, port among runtime ports), `ALREADY_EXISTS` for
-      a taken host without revealing the tenant
-- [ ] `RouteAppTx` (as `ScaleAppTx`): changed routes re-assign the running workload;
-      `AssignRelease` carries the App's current routes; rollback test first
+#### S10b — routes in the store and the API ✅
+- [x] Migration 00018: `apps_revisions.routes` (jsonb array), `route_hosts` (host
+      primary key, tenant RLS); `claimHosts` in the App create/update/delete
+      transactions is the one write path
+- [x] Validation (lowercase DNS name of two or more labels, no duplicates, port among
+      the container ports); a taken host is `ALREADY_EXISTS`/`HOST_IN_USE`, naming no
+      tenant (test with two tenants)
+- [x] `ScaleAppTx` became `FollowAppTx`: replicas and routes follow the running
+      workload in the same transaction, from UpdateApp and ScaleApp alike. Note:
+      UpdateApp now also applies a replica change at once (ADR-0027 already said the
+      workload always runs the App's current replicas)
+- [x] `AssignRelease` carries the App's current routes; tested on an older Release
+      (the rollback case) first. The agent's spec hash excludes routes (a route change
+      never re-applies containers; unit test)
 
 #### S10c — provider endpoints ⏳
 - [ ] `provider.Status.Endpoints`; Docker joins Apps with routes to `bohux-ingress`
@@ -895,7 +901,9 @@ Shape: ADR-0034 (O20). Split into sub-slices, one session each.
   installer option, runbooks for backup/restore, control-plane upgrade, OpenBao unseal
   key, and infra upgrades. S7d closed (done in S9d). **S9 and v0.1 are done** except O2.
 - S10 split into S10a–S10f. S10a done: ADR-0034 proposed (O20), proto for routes.
-- **Next:** S10b.
+- S10b done: routes in the store and API, hosts unique across tenants, routes follow
+  the running workload and survive rollbacks.
+- **Next:** S10c.
 
 ### 2026-10-21 (auto run 2, S6a) — branch `claude/relaxed-rubin-76m7dl`
 - Owner asked again for an automatic run, slice after slice, until the session ends.

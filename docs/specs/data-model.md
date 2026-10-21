@@ -24,6 +24,7 @@ Tenant ─▶ Project ─▶ Environment ─▶ App ─▶ Release ─▶ Deploy
 | `audit_events` | Written in the **same transaction** as the revision. |
 | `nodes` | Registered agents: last_seen, version, capabilities, drain state. |
 | `secret_refs` | Handles only. **No values, ever** (CLAUDE.md rule 3). |
+| `route_hosts` | Which App holds each route host, across tenants (ADR-0034). Its primary key keeps one host to one App even where RLS hides the holder. Mirrors the live Apps' current routes; the revisions are the history. |
 
 ## Invariants
 

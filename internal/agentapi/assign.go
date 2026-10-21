@@ -193,17 +193,18 @@ func (s *Server) writeTx(ctx context.Context, tx *store.Tx, node uuid.UUID, acto
 	return gen, true, nil
 }
 
-// ScaleAppTx sets the replicas of the App's workload in the node's next generation,
-// inside the caller's transaction (ADR-0027). An App with no workload on the node, or
-// already at replicas, writes nothing. When it reports written, the caller calls Wake
-// after commit.
-func (s *Server) ScaleAppTx(ctx context.Context, tx *store.Tx, node, app uuid.UUID, replicas int32, actor store.Actor) (bool, error) {
+// FollowAppTx sets the replicas (ADR-0027) and routes (ADR-0034) of the App's workload
+// in the node's next generation, inside the caller's transaction: App state that is not
+// part of a Release. An App with no workload on the node, or already at both, writes
+// nothing. When it reports written, the caller calls Wake after commit.
+func (s *Server) FollowAppTx(ctx context.Context, tx *store.Tx, node, app uuid.UUID, replicas int32, routes []*bohuxv1.Route, actor store.Actor) (bool, error) {
 	_, written, err := s.writeTx(ctx, tx, node, actor, func(_ *store.Tx, current []*agentv1.Workload) ([]*agentv1.Workload, bool, error) {
 		next := make([]*agentv1.Workload, len(current))
 		changed := false
 		for i, c := range current {
 			next[i] = c
-			if c.GetAppId() != app.String() || c.GetRuntime().GetReplicas() == replicas {
+			if c.GetAppId() != app.String() ||
+				(c.GetRuntime().GetReplicas() == replicas && sameRoutes(c.GetRoutes(), routes)) {
 				continue
 			}
 			w := proto.Clone(c).(*agentv1.Workload)
@@ -211,14 +212,35 @@ func (s *Server) ScaleAppTx(ctx context.Context, tx *store.Tx, node, app uuid.UU
 				w.Runtime = &bohuxv1.Runtime{}
 			}
 			w.Runtime.Replicas = replicas
+			w.Routes = cloneRoutes(routes)
 			next[i], changed = w, true
 		}
 		return next, changed, nil
 	})
 	if err != nil {
-		return false, fmt.Errorf("scale app %s on node %s: %w", app, node, err)
+		return false, fmt.Errorf("follow app %s on node %s: %w", app, node, err)
 	}
 	return written, nil
+}
+
+func sameRoutes(a, b []*bohuxv1.Route) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !proto.Equal(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneRoutes(rs []*bohuxv1.Route) []*bohuxv1.Route {
+	out := make([]*bohuxv1.Route, len(rs))
+	for i, r := range rs {
+		out[i] = proto.Clone(r).(*bohuxv1.Route)
+	}
+	return out
 }
 
 // RotateTx writes a new generation, with the same workloads, for every node whose

@@ -366,21 +366,22 @@ func TestAssignApp(t *testing.T) {
 	})
 }
 
-func TestScaleAppTx(t *testing.T) {
+func TestFollowAppTx(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t)
 	node := uuid.MustParse(h.register("vps-1").node)
 	app1, _ := fixture.App(t, h.st, h.tenant, "api", "prod")
 	app2, _ := fixture.App(t, h.st, h.tenant, "worker", "prod2")
+	var routes []*bohuxv1.Route
 	scale := func(app uuid.UUID, replicas int32) bool {
 		t.Helper()
 		var written bool
 		if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
 			var err error
-			written, err = h.srv.ScaleAppTx(ctx, tx, node, app, replicas, system)
+			written, err = h.srv.FollowAppTx(ctx, tx, node, app, replicas, routes, system)
 			return err
 		}); err != nil {
-			t.Fatalf("ScaleAppTx: %v", err)
+			t.Fatalf("FollowAppTx: %v", err)
 		}
 		return written
 	}
@@ -419,6 +420,34 @@ func TestScaleAppTx(t *testing.T) {
 		}
 		if got := w.GetRuntime().GetReplicas(); got != want {
 			t.Errorf("app %s replicas = %d, want %d", w.GetAppSlug(), got, want)
+		}
+	}
+
+	// Routes follow the same way (ADR-0034), and only for this App.
+	routes = []*bohuxv1.Route{{Host: "api.example.com", Port: 8080}}
+	if !scale(app1, 3) {
+		t.Fatal("a route change wrote nothing")
+	}
+	if scale(app1, 3) {
+		t.Error("the same routes wrote again")
+	}
+	if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+		return tx.QueryRow(ctx, `SELECT payload FROM assignments WHERE node_id = $1
+			ORDER BY generation DESC LIMIT 1`, node).Scan(&raw)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p = &agentv1.AssignmentPayload{}
+	if err := proto.Unmarshal(raw, p); err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range p.GetWorkloads() {
+		want := 0
+		if w.GetAppId() == app1.String() {
+			want = 1
+		}
+		if len(w.GetRoutes()) != want {
+			t.Errorf("app %s routes = %v, want %d", w.GetAppSlug(), w.GetRoutes(), want)
 		}
 	}
 }

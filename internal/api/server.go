@@ -40,7 +40,7 @@ type Server struct {
 // NodeAgents is what the API needs from the agent endpoint; agentapi.Server
 // implements it.
 type NodeAgents interface {
-	ScaleAppTx(ctx context.Context, tx *store.Tx, node, app uuid.UUID, replicas int32, actor store.Actor) (bool, error)
+	FollowAppTx(ctx context.Context, tx *store.Tx, node, app uuid.UUID, replicas int32, routes []*bohuxv1.Route, actor store.Actor) (bool, error)
 	RotateTx(ctx context.Context, tx *store.Tx, handle string, actor store.Actor) ([]uuid.UUID, error)
 	Wake(node uuid.UUID)
 	Logs(ctx context.Context, node uuid.UUID, req *agentv1.LogRequest) (<-chan *agentv1.LogChunk, error)

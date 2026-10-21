@@ -272,3 +272,99 @@ func TestAppProviderOptions(t *testing.T) {
 		t.Errorf("scale = %v, %v; want the options kept", scaled, err)
 	}
 }
+
+// TestAppRoutes: hosts are validated, unique across all tenants without revealing who
+// holds one, follow the App through updates, and are freed by delete (ADR-0034).
+func TestAppRoutes(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	srv := h.server()
+	apps := bohuxv1connect.NewAppServiceClient(srv.Client(), srv.URL)
+	envs := bohuxv1connect.NewEnvironmentServiceClient(srv.Client(), srv.URL)
+
+	// A second tenant, set up the same way through its own root token.
+	tenant2, root2, err := Bootstrap(ctx, h.st, "globex", "Globex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h2 := *h
+	h2.tenant, h2.root = tenant2, root2
+
+	src := &bohuxv1.Source{Kind: &bohuxv1.Source_Image{Image: &bohuxv1.ImageSource{
+		Repository: "ghcr.io/acme/api", Digest: "sha256:" + strings.Repeat("ab", 32)}}}
+	rt := &bohuxv1.Runtime{Replicas: 1, Ports: []*bohuxv1.Port{{ContainerPort: 8080}}}
+	envFor := func(h *harness, token string) string {
+		e, err := envs.CreateEnvironment(ctx, req(token, &bohuxv1.CreateEnvironmentRequest{
+			ProjectId: h.project("web").String(), Slug: "prod", ProviderBinding: dockerOn(h.node("vps-1")),
+			IdempotencyKey: "env"}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e.Msg.GetEnvironment().GetMeta().GetId()
+	}
+	env1, env2 := envFor(h, h.root), envFor(&h2, root2)
+	create := func(token, env, slug string, routes ...*bohuxv1.Route) (*bohuxv1.App, error) {
+		r, err := apps.CreateApp(ctx, req(token, &bohuxv1.CreateAppRequest{EnvironmentId: env, Slug: slug,
+			Source: src, Runtime: rt, Routes: routes, IdempotencyKey: slug}))
+		if err != nil {
+			return nil, err
+		}
+		return r.Msg.GetApp(), nil
+	}
+	route := func(host string) *bohuxv1.Route { return &bohuxv1.Route{Host: host, Port: 8080} }
+
+	for _, tt := range []struct {
+		name   string
+		routes []*bohuxv1.Route
+	}{
+		{"uppercase", []*bohuxv1.Route{route("API.example.com")}},
+		{"wildcard", []*bohuxv1.Route{route("*.example.com")}},
+		{"port", []*bohuxv1.Route{route("api.example.com:443")}},
+		{"single label", []*bohuxv1.Route{route("localhost")}},
+		{"twice", []*bohuxv1.Route{route("a.example.com"), route("a.example.com")}},
+		{"unknown port", []*bohuxv1.Route{{Host: "b.example.com", Port: 9090}}},
+	} {
+		_, err := create(h.root, env1, "bad-"+strings.ReplaceAll(tt.name, " ", "-"), tt.routes...)
+		wantCode(t, err, connect.CodeInvalidArgument)
+	}
+
+	api, err := create(h.root, env1, "api", route("api.example.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(api.GetRoutes()) != 1 || api.GetRoutes()[0].GetHost() != "api.example.com" {
+		t.Fatalf("routes = %v", api.GetRoutes())
+	}
+	_, err = create(root2, env2, "squat", route("api.example.com"))
+	wantCode(t, err, connect.CodeAlreadyExists)
+	if err != nil && strings.Contains(err.Error(), "acme") {
+		t.Errorf("the conflict names the other tenant: %v", err)
+	}
+	_, err = create(h.root, env1, "same-tenant", route("api.example.com"))
+	wantCode(t, err, connect.CodeAlreadyExists)
+
+	// Moving the App to another host frees the first one.
+	moved, err := apps.UpdateApp(ctx, req(h.root, &bohuxv1.UpdateAppRequest{Id: api.GetMeta().GetId(), Source: src,
+		Runtime: rt, Routes: []*bohuxv1.Route{route("www.example.com")},
+		ExpectedRevisionId: api.GetMeta().GetRevisionId(), IdempotencyKey: "move"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := create(root2, env2, "takes-freed", route("api.example.com")); err != nil {
+		t.Fatalf("a freed host: %v", err)
+	}
+	// Scaling keeps the routes.
+	scaled, err := apps.ScaleApp(ctx, req(h.root, &bohuxv1.ScaleAppRequest{Id: api.GetMeta().GetId(), Replicas: 2,
+		ExpectedRevisionId: moved.Msg.GetApp().GetMeta().GetRevisionId(), IdempotencyKey: "scale"}))
+	if err != nil || len(scaled.Msg.GetApp().GetRoutes()) != 1 {
+		t.Fatalf("scale = %v, %v; want the route kept", scaled, err)
+	}
+	// Delete frees the host.
+	if _, err := apps.DeleteApp(ctx, req(h.root, &bohuxv1.DeleteAppRequest{Id: api.GetMeta().GetId(),
+		ExpectedRevisionId: scaled.Msg.GetApp().GetMeta().GetRevisionId(), IdempotencyKey: "del"})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := create(root2, env2, "takes-deleted", route("www.example.com")); err != nil {
+		t.Fatalf("a deleted app's host: %v", err)
+	}
+}

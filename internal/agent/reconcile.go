@@ -302,7 +302,8 @@ type workloadSecrets struct {
 func (s workloadSecrets) Open() (map[string]string, error) { return s.st.OpenSecrets(s.w) }
 
 // spec builds the provider Spec. Its hash covers the workload minus fields that do
-// not change what runs (the per-send seal, the deployment id, the fallback) plus a keyed digest of
+// not change what runs (the per-send seal, the deployment id, the fallback, the routes)
+// plus a keyed digest of
 // the secret values, so a rotated secret re-applies without the hash revealing it.
 func (r *Reconciler) spec(ref provider.ResourceRef, w *agentv1.Workload) (provider.Spec, error) {
 	values, err := r.State.OpenSecrets(w)
@@ -313,6 +314,8 @@ func (r *Reconciler) spec(ref provider.ResourceRef, w *agentv1.Workload) (provid
 	shape.SealedSecrets, shape.DeploymentId = nil, ""
 	// The fallback changes what may run later, not what runs now.
 	shape.Fallback, shape.FallbackAfter = nil, nil
+	// Routes reload the ingress, never the containers (ADR-0034).
+	shape.Routes = nil
 	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(shape)
 	if err != nil {
 		return provider.Spec{}, fmt.Errorf("encode workload: %w", err)
