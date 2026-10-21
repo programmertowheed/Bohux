@@ -6,6 +6,7 @@ import { AppService } from "../gen/bohux/v1/app_pb";
 import { DeploymentService, DeploymentState } from "../gen/bohux/v1/deployment_pb";
 import { Failed, Loading, Table } from "../components/Table";
 import { AppActions } from "../components/Actions";
+import { AppSettings, NewApp } from "../components/Forms";
 import { WorkloadService } from "../gen/bohux/v1/workload_pb";
 import { bytes, enumName, short, when } from "../format";
 
@@ -58,9 +59,11 @@ export function Environment() {
                 logs
               </Link>
               <AppActions app={a} project={project} env={env} />
+              <AppSettings app={a} />
             </span>,
           ])}
         />
+        <div className="mt-4"><NewApp environmentId={envId} /></div>
       </div>
       <div>
         <h2 className="mb-2 font-semibold">Recent deployments</h2>

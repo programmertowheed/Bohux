@@ -4,6 +4,7 @@ import { ProjectService } from "../gen/bohux/v1/project_pb";
 import { EnvironmentService } from "../gen/bohux/v1/environment_pb";
 import { Failed, Loading, Table } from "../components/Table";
 import { short } from "../format";
+import { NewEnvironment } from "../components/Forms";
 
 export function Environments() {
   const { project } = useParams({ from: "/p/$project" });
@@ -29,6 +30,7 @@ export function Environments() {
           e.providerBinding?.target.case === "nodeId" ? short(e.providerBinding.target.value) : "",
         ])}
       />
+      <div className="mt-4"><NewEnvironment projectId={projectId} /></div>
     </section>
   );
 }

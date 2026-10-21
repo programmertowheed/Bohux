@@ -42,8 +42,7 @@ work is in right now*.
   rollback, activity, usage done); S16 done
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** UI forms mirroring the CLI (environment and App create, scale,
-  routes), then the next v0.2 item (Buildpacks/Nixpacks, or registry and Git
+- **Exact next step:** the next v0.2 item (Buildpacks/Nixpacks, or registry and Git
   credentials). Team invites need user accounts: ask the owner first (identity model).
 
 ## Next session prompt
@@ -958,8 +957,12 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       its current-state select joined on the chosen revision; authorized by the
       resource's project (tenant-wide token for resources outside a project). A test
       runs every type's historical query
-- [ ] Next: release history per App, environment and App creation (mirroring `bohux
-      env|app create`), routes and scale
+- [x] Forms mirroring the CLI: new environment (node picker), new App (image, port,
+      health, route), scale, add/remove routes. Checked in Chromium against the live
+      install: an App created, deployed, scaled to 2, and given a second route in the
+      UI served on both hosts over HTTPS
+- [ ] Next: release history per App; secrets (`SetSecret` takes a value: allowed in
+      the UI per ADR-0039, never as an MCP tool)
 
 ### S16 — Resource view (ADR-0040) ✅
 - [x] Proposed ADR-0040 (O28): agents sample the node (`/proc`, `statfs`) and, through
