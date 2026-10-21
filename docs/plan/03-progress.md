@@ -38,18 +38,21 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S9e — Bohux deploys Bohux, in CI (⏳, next to start)
-- **Exact next step:** `scripts/selfdeploy-test.sh` (what S9d did by hand) and a CI job
-  running it on a GitHub runner with systemd; installer option for the control plane's
-  health timeout.
+- **Slice:** S10a — routes and ingress design, proto (⏳, next to start)
+- **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
+  owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
+- **Exact next step:** ADR-0034 (drafted, proposed, uncommitted if not in git) → proto
+  `bohux.v1.Route`, `App.routes`, `Workload.routes`, `WorkloadStatus.ingress_loaded`,
+  reason `INGRESS_FAILED`; regenerate; split S10 in this file.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S9e (Bohux deploys Bohux,
-> in CI) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0030 and ADR-0031.
-> Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*). Verify with build, vet, golangci-lint (also with the integration
-> tag), unit and integration tests. Tick boxes, update the tracker and the next
-> session prompt, commit, push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S10a (routes and the node
+> ingress: ADR-0034, proto) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
+> and ADR-0034. Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*).
+> Verify with build, vet, golangci-lint (also with the integration tag), unit and
+> integration tests. Tick boxes, update the tracker and the next session prompt,
+> commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -72,6 +75,7 @@ work is in right now*.
 | O16 | Accept or reject ADR-0030 (single-VPS layout: agent as a systemd unit, infra as one Compose project, control plane as an App of itself installed through a seed). Built on already | S9 |
 | O17 | Accept or reject ADR-0031 (agent-side fallback: previous workload + deadline, applied only when the control plane cannot compensate). Changes agent.proto. Built on already | S9b onward |
 | O18 | Accept or reject ADR-0032 (`App.provider_options` → `Spec.Raw`, owner-only; Docker accepts external networks and named volumes). Changes `app.proto` and agent.proto. Built on already | S9c onward |
+| O19 | Accept or reject ADR-0033 (nightly backup: Temporal schedule in the control plane, read-only `BYPASSRLS` role `bohux_backup`, local directory with retention 7; S3 deferred). Built on already | S9f |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -161,7 +165,7 @@ sub-slices, one session each.
 - [x] Delete `proto/bohux/v1/service.proto` and its ignore in `buf.yaml` (done in S1b)
 - Final lint/generate check moved to S1c.
 
-### S2 — Storage ⏳
+### S2 — Storage ✅
 Split into sub-slices, one session each.
 
 #### S2a — migration tool ✅
@@ -522,7 +526,7 @@ Split into sub-slices in S6a, one session each. Shape: ADR-0026 (O12).
       from the App's current revision. Integration-tested at all three layers
 - [x] data-model.md and api-contract.md say so
 
-### S7 — Build and secrets 🔄 (S7d left)
+### S7 — Build and secrets ✅
 Split into sub-slices, one session each.
 
 #### S7a — secret storage ✅
@@ -590,8 +594,10 @@ Split into sub-slices, one session each.
   the 10% threshold, so the agent correctly refused builds (`DISK_PRESSURE`). See
   *Known gaps*
 
-#### S7d — OpenBao in the install bundle ⏳
-- [ ] Auto-unseal with a node-local key (ADR-0020 item 6), in the install bundle (S9)
+#### S7d — OpenBao in the install bundle ✅ (done in S9d)
+- [x] Auto-unseal with a node-local key (ADR-0020 item 6): the static seal, key at
+      `/etc/bohux/openbao-unseal.key` (0400, the container's openbao uid); runbook
+      `openbao-unseal-key.md`
 
 ### S8 — CLI ✅
 Split into sub-slices, one session each.
@@ -650,7 +656,7 @@ Split into sub-slices, one session each.
 - **Not done (ADR-0020 item 7):** the scheduled nightly backup (a Temporal schedule)
   and S3 targets. Planned with the install bundle (S9)
 
-### S9 — Exit: Bohux deploys Bohux 🔄
+### S9 — Exit: Bohux deploys Bohux ✅
 Split into sub-slices, one session each. Includes S7d (OpenBao auto-unseal).
 
 #### S9a — install layout and self-deploy design ✅
@@ -729,17 +735,36 @@ Split into sub-slices, one session each. Includes S7d (OpenBao auto-unseal).
       2 min margin, ADR-0031), the control plane came back and finished the run as
       `rolled_back`. **The v0.1 exit criterion works by hand.**
 
-#### S9e — Bohux deploys Bohux, in CI ⏳
-- [ ] A CI job (systemd, real runner) that does what S9d did by hand: local registry,
-      image, `scripts/install.sh`, deploy v2, rollback, broken version → fallback.
-      Shorten the gate with an installer option that sets the control plane's
-      `BOHUX_DEPLOY_HEALTH_TIMEOUT` (as a secret, like the rest of its config)
-- [ ] Footprint re-measured and published (with O2)
+#### S9e — Bohux deploys Bohux, in CI ✅
+- [x] `scripts/selfdeploy-test.sh` and CI job `selfdeploy` (systemd, real runner) do
+      what S9d did by hand: local registry, image, `scripts/install.sh`, deploy v2,
+      rollback, broken version → fallback, plus (S9f) a triggered nightly backup.
+      Installer option `BOHUX_DEPLOY_HEALTH_TIMEOUT` (a secret, like the rest of its
+      config) shortens the gate to 60 s. **Passed here** (`BOHUX_SYSTEMD=0`): v2 in
+      19 s, rollback in 35 s, broken version recovered in 242 s (60 s gate + 2 min
+      margin + restart)
+- [x] Found by the test: a container whose first start failed (seed still holding the
+      port) came back from `compose up` on its first network only, so the control
+      plane lost `bohux-infra`. The Docker provider now re-creates on a restart plan
+      (`--force-recreate`); regression test against a real daemon
+- [ ] Footprint re-measured and published (with O2): needs the owner's 2 GB VPS
 
-#### S9f — schedules and runbooks ⏳
-- [ ] Nightly backup as a Temporal schedule (ADR-0020 item 7), local path target
-- [ ] Runbooks (`write-runbook`): backup key custody and restore, OpenBao unseal key,
-      infra upgrades
+#### S9f — schedules and runbooks ✅
+- [x] Proposed ADR-0033 (O19): nightly backup as a Temporal schedule
+      `bohux-backup-nightly` owned by the control plane (created/updated on start,
+      removed when no recipient), `BackupWorkflow` = `WriteBackup` (`.partial` → rename,
+      heartbeat, 3 attempts) + `PruneBackups` (keep 7, never after a failed write);
+      a read-only `bohux_backup` role (`BYPASSRLS`, `SELECT` + default privileges);
+      local directory on its own volume. S3 deferred
+- [x] `internal/workflow/backup`, failure path tested first (a failed write never
+      prunes, leaves no file); integration tests with the read-only role on real
+      Postgres and the schedule on Temporal (create, update in place, trigger, remove)
+- [x] Control plane flags `--backup-*` (docs/reference/config.md); installer option
+      `BOHUX_BACKUP_RECIPIENT`, role, volume `bohux-backups`, image directory owned by
+      the runtime user
+- [x] Runbooks (`write-runbook`): `backup-and-restore.md` (key custody, nightly,
+      by hand, restore), `control-plane-upgrade.md`, `openbao-unseal-key.md`,
+      `infra-upgrade.md`
 
 ## Known gaps and notes
 - **`buf.lock` missing.** Whoever has registry access (CI, or a local machine) runs
@@ -819,6 +844,15 @@ Split into sub-slices, one session each. Includes S7d (OpenBao auto-unseal).
   1.24–1.26). Raising the `go` directive is cheap and its own commit when wanted.
 
 ## Session log (newest first)
+
+### 2026-10-21 (auto run, S9e–S9f) — branch `claude/relaxed-rubin-76m7dl`
+- S9e done: `scripts/selfdeploy-test.sh` and the CI `selfdeploy` job; passed here. The
+  test found a Docker behaviour that cost the control plane its infra network after a
+  failed first start; the provider now re-creates on a restart plan (regression test).
+- S9f done: ADR-0033 proposed (O19), nightly backup schedule, read-only backup role,
+  installer option, runbooks for backup/restore, control-plane upgrade, OpenBao unseal
+  key, and infra upgrades. S7d closed (done in S9d). **S9 and v0.1 are done** except O2.
+- **Next:** S10a, ingress (v0.2). ADR-0034 drafted.
 
 ### 2026-10-21 (auto run 2, S6a) — branch `claude/relaxed-rubin-76m7dl`
 - Owner asked again for an automatic run, slice after slice, until the session ends.
