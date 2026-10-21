@@ -43,6 +43,12 @@ func open(t *testing.T, dsn string) *sql.DB {
 // connection as that role, as Bohux runs in production.
 func newAppDB(t *testing.T) *sql.DB {
 	t.Helper()
+	return open(t, newAppDSN(t))
+}
+
+// newAppDSN creates a database owned by a new non-superuser role and returns its DSN.
+func newAppDSN(t *testing.T) string {
+	t.Helper()
 	ctx := context.Background()
 	admin := open(t, adminDSN(t))
 	name := "bohux_test_" + randomHex(t, 6)
@@ -65,7 +71,7 @@ func newAppDB(t *testing.T) *sql.DB {
 	}
 	u.User = url.UserPassword(name, pass)
 	u.Path = "/" + name
-	return open(t, u.String())
+	return u.String()
 }
 
 func randomHex(t *testing.T, n int) string {
