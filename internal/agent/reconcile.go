@@ -322,7 +322,7 @@ func (r *Reconciler) spec(ref provider.ResourceRef, w *agentv1.Workload) (provid
 	h.Write(r.secretDigest(values))
 	spec := provider.Spec{
 		Ref: ref, Release: w.GetReleaseId(), Image: w.GetImage(), Runtime: w.GetRuntime(),
-		Hash: hex.EncodeToString(h.Sum(nil)),
+		Raw: w.GetProviderOptions(), Hash: hex.EncodeToString(h.Sum(nil)),
 	}
 	if len(w.GetSealedSecrets()) > 0 {
 		spec.Secrets = workloadSecrets{st: r.State, w: w}

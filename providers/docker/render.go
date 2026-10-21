@@ -22,18 +22,27 @@ const composeHeader = `# Written by Bohux. This file is the complete definition 
 `
 
 type composeDoc struct {
-	Name     string                    `yaml:"name"`
-	Services map[string]composeService `yaml:"services"`
+	Name     string                     `yaml:"name"`
+	Services map[string]composeService  `yaml:"services"`
+	Networks map[string]composeExternal `yaml:"networks,omitempty"`
+	Volumes  map[string]composeExternal `yaml:"volumes,omitempty"`
+}
+
+// composeExternal declares a network or volume that exists outside this project.
+type composeExternal struct {
+	External bool `yaml:"external"`
 }
 
 type composeService struct {
-	Image   string            `yaml:"image"`
-	Restart string            `yaml:"restart"`
-	EnvFile []string          `yaml:"env_file,omitempty"`
-	Ports   []string          `yaml:"ports,omitempty"`
-	Labels  map[string]string `yaml:"labels"`
-	Logging composeLogging    `yaml:"logging"`
-	Deploy  composeDeploy     `yaml:"deploy"`
+	Image    string            `yaml:"image"`
+	Restart  string            `yaml:"restart"`
+	EnvFile  []string          `yaml:"env_file,omitempty"`
+	Ports    []string          `yaml:"ports,omitempty"`
+	Networks []string          `yaml:"networks,omitempty"`
+	Volumes  []string          `yaml:"volumes,omitempty"`
+	Labels   map[string]string `yaml:"labels"`
+	Logging  composeLogging    `yaml:"logging"`
+	Deploy   composeDeploy     `yaml:"deploy"`
 }
 
 type composeLogging struct {
@@ -77,6 +86,10 @@ func render(spec provider.Spec) (composeYAML, secretsEnv, stateJSON []byte, err 
 	}
 	if spec.Image == "" {
 		return nil, nil, nil, errors.New("spec has no image")
+	}
+	opts, err := parseOptions(spec.Raw)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	name := project(spec.Ref)
 	svc := composeService{
@@ -135,7 +148,24 @@ func render(spec provider.Spec) (composeYAML, secretsEnv, stateJSON []byte, err 
 	// Always referenced, so adding a first secret later is only a content change.
 	svc.EnvFile = []string{secretsFile}
 
-	body, err := yaml.Marshal(composeDoc{Name: name, Services: map[string]composeService{service: svc}})
+	doc := composeDoc{Name: name, Services: map[string]composeService{service: svc}}
+	if len(opts.Networks) > 0 {
+		// Listing networks replaces the default one, so it is listed too.
+		svc.Networks = append([]string{"default"}, opts.Networks...)
+		doc.Networks = map[string]composeExternal{}
+		for _, n := range opts.Networks {
+			doc.Networks[n] = composeExternal{External: true}
+		}
+	}
+	if len(opts.Volumes) > 0 {
+		doc.Volumes = map[string]composeExternal{}
+		for _, v := range opts.Volumes {
+			svc.Volumes = append(svc.Volumes, v.Source+":"+v.Target)
+			doc.Volumes[v.Source] = composeExternal{External: true}
+		}
+	}
+	doc.Services[service] = svc
+	body, err := yaml.Marshal(doc)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("render compose file: %w", err)
 	}

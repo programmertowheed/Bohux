@@ -54,6 +54,7 @@ const (
 	envOpenBaoAddr     = "BOHUX_OPENBAO_ADDR"
 	envOpenBaoToken    = "BOHUX_OPENBAO_TOKEN_FILE"
 	envOpenBaoMount    = "BOHUX_OPENBAO_KV_MOUNT"
+	envOpenBaoTokenVal = "BOHUX_OPENBAO_TOKEN"
 
 	defaultListenAddr      = "127.0.0.1:7400"
 	defaultAgentListenAddr = "127.0.0.1:7443"
@@ -239,13 +240,14 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 		if *dbURL == "" {
 			return fmt.Errorf("controlplane: --database-url or %s is required", envDatabaseURL)
 		}
-		if *baoAddr != "" && *baoToken == "" {
-			return fmt.Errorf("controlplane: --openbao-token-file or %s is required with --openbao-address", envOpenBaoToken)
+		if *baoAddr != "" && *baoToken == "" && getenv(envOpenBaoTokenVal) == "" {
+			return fmt.Errorf("controlplane: --openbao-token-file, %s, or %s is required with --openbao-address",
+				envOpenBaoToken, envOpenBaoTokenVal)
 		}
 		cfg := controlplane.Config{ListenAddr: *listen, AgentListenAddr: *agentListen,
 			DatabaseURL: *dbURL, DataDir: *dataDir, TemporalAddress: *temporalAddr, TemporalNamespace: *temporalNS,
 			DeployHealthTimeout: *healthTimeout, OpenBaoAddress: *baoAddr, OpenBaoTokenFile: *baoToken,
-			OpenBaoMount: *baoMount}
+			OpenBaoMount: *baoMount, OpenBaoToken: getenv(envOpenBaoTokenVal)}
 		if err := d.runControlPlane(ctx, cfg); err != nil {
 			return fmt.Errorf("controlplane: %w", err)
 		}

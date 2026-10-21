@@ -15,6 +15,7 @@ Adding a setting means adding it here in the same commit.
 | `--temporal-namespace` | `BOHUX_TEMPORAL_NAMESPACE` | `default` | Temporal namespace for Bohux's workflows. It must exist. |
 | `--openbao-address` | `BOHUX_OPENBAO_ADDR` | empty | OpenBao URL holding secret values (ADR-0008). Empty disables secrets: `SetSecret` answers `UNAVAILABLE` and assignments that reference secrets cannot be sent. |
 | `--openbao-token-file` | `BOHUX_OPENBAO_TOKEN_FILE` | none, required with an address | File holding the OpenBao token. A file, so the token stays out of process listings and shell history. Read once at start. |
+| (none) | `BOHUX_OPENBAO_TOKEN` | none | The OpenBao token itself, used when no token file is given. For the control plane running as an App, which receives it as a secret (ADR-0032). |
 | `--openbao-kv-mount` | `BOHUX_OPENBAO_KV_MOUNT` | `secret` | KV **v2** mount for values. Each secret is one path, `bohux/<tenant>/<secret id>`; Postgres records which version is current, and only that version is ever sent to a node. |
 | `--deploy-health-timeout` | `BOHUX_DEPLOY_HEALTH_TIMEOUT` | `5m` | How long a deployed Release has to report healthy before the deploy rolls back to the last healthy Release (ADR-0026). Go duration syntax. |
 

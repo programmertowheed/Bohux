@@ -92,5 +92,20 @@ builder as it is. Builds are refused while the node reports disk pressure.
 
 ## `Spec.Raw`
 
-Not used yet. Target-specific options will be accepted here, never as new interface
-methods (provider-interface.md rule 5).
+An App's `provider_options` reach this provider as `Spec.Raw` (ADR-0032). Setting them
+needs the owner role. Accepted, as JSON:
+
+```json
+{
+  "networks": ["bohux-infra"],
+  "volumes": [{"source": "bohux-controlplane-data", "target": "/var/lib/bohux"}]
+}
+```
+
+- `networks`: existing Docker networks the containers join, besides the workload's
+  own. Declared `external` in the Compose file.
+- `volumes`: existing **named** volumes mounted at `target` (a clean absolute path).
+  Host paths are refused. Declared `external`.
+
+Both must exist; the provider never creates or removes them, and Destroy leaves them.
+Any other key, or a malformed value, fails the workload with `SPEC_INVALID`.

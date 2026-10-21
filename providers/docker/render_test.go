@@ -154,3 +154,49 @@ func TestSetReplicas(t *testing.T) {
 		t.Error("rewrite dropped the header comment")
 	}
 }
+
+func TestRenderOptions(t *testing.T) {
+	s := spec()
+	s.Raw = []byte(`{"networks": ["bohux-infra"], "volumes": [{"source": "bohux-controlplane-data", "target": "/var/lib/bohux"}]}`)
+	composeYAML, _, _, err := render(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc composeDoc
+	if err := yaml.Unmarshal(composeYAML, &doc); err != nil {
+		t.Fatal(err)
+	}
+	svc := doc.Services[service]
+	if strings.Join(svc.Networks, ",") != "default,bohux-infra" || !doc.Networks["bohux-infra"].External {
+		t.Errorf("networks = %v / %v", svc.Networks, doc.Networks)
+	}
+	if strings.Join(svc.Volumes, ",") != "bohux-controlplane-data:/var/lib/bohux" || !doc.Volumes["bohux-controlplane-data"].External {
+		t.Errorf("volumes = %v / %v", svc.Volumes, doc.Volumes)
+	}
+
+	plain, _, _, err := render(spec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plain), "networks:") || strings.Contains(string(plain), "volumes:") {
+		t.Errorf("no options still rendered networks or volumes:\n%s", plain)
+	}
+}
+
+func TestRenderRejectsOptions(t *testing.T) {
+	for _, raw := range []string{
+		`{"privileged": true}`,
+		`{"volumes": [{"source": "/etc", "target": "/host-etc"}]}`,
+		`{"volumes": [{"source": "data", "target": "relative"}]}`,
+		`{"volumes": [{"source": "data", "target": "/"}]}`,
+		`{"networks": ["host;rm"]}`,
+		`{"networks": ["default"]}`,
+		`[1]`,
+	} {
+		s := spec()
+		s.Raw = []byte(raw)
+		if _, _, _, err := render(s); err == nil {
+			t.Errorf("render accepted options %s", raw)
+		}
+	}
+}

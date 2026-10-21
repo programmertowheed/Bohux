@@ -52,6 +52,9 @@ type Config struct {
 	// OpenBaoTokenFile holds the OpenBao token. A file, not a flag value, so the token
 	// stays out of process listings and shell history.
 	OpenBaoTokenFile string
+	// OpenBaoToken is the token itself, used when no file is given: the control plane
+	// running as an App receives it as a secret env var (ADR-0032). Never logged.
+	OpenBaoToken string
 	// OpenBaoMount is the KV v2 mount for secret values.
 	OpenBaoMount string
 	// DeployHealthTimeout is how long a deployed Release has to turn healthy before
@@ -192,13 +195,16 @@ func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 // openBao builds the OpenBao client from the token file. OpenBao may be down or
 // sealed at start; calls fail until it answers, nothing else does.
 func openBao(cfg Config) (*openbao.Client, error) {
-	raw, err := os.ReadFile(cfg.OpenBaoTokenFile)
-	if err != nil {
-		return nil, fmt.Errorf("read OpenBao token file: %w", err)
+	token := cfg.OpenBaoToken
+	if cfg.OpenBaoTokenFile != "" {
+		raw, err := os.ReadFile(cfg.OpenBaoTokenFile)
+		if err != nil {
+			return nil, fmt.Errorf("read OpenBao token file: %w", err)
+		}
+		token = strings.TrimSpace(string(raw))
 	}
-	token := strings.TrimSpace(string(raw))
 	if token == "" {
-		return nil, errors.New("OpenBao token file is empty")
+		return nil, errors.New("OpenBao token is empty")
 	}
 	return &openbao.Client{Addr: cfg.OpenBaoAddress, Token: token, Mount: cfg.OpenBaoMount}, nil
 }

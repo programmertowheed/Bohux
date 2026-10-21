@@ -514,3 +514,43 @@ func TestBuildActivities(t *testing.T) {
 		t.Errorf("RunBuild before its row exists = %v, want a retryable error", err)
 	}
 }
+
+// TestProviderOptionsTravel: a Release's App revision's provider options reach the
+// workload (ADR-0032).
+func TestProviderOptionsTravel(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	app, _ := fixture.DeployableApp(t, h.st, h.tenant, h.node, "cp", 1)
+	if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+		var rev uuid.UUID
+		var src, rt, secs []byte
+		if err := tx.QueryRow(ctx, `SELECT h.revision_id, r.source, r.runtime, r.secrets FROM apps_heads h
+			JOIN apps_revisions r ON r.id = h.revision_id WHERE h.id = $1`, app).Scan(&rev, &src, &rt, &secs); err != nil {
+			return err
+		}
+		_, err := tx.Update(ctx, "apps", app, rev, []store.Col{{Name: "source", Value: src}, {Name: "runtime", Value: rt},
+			{Name: "secrets", Value: secs}, {Name: "provider_options", Value: `{"networks": ["bohux-infra"]}`}},
+			store.Audit{Actor: store.Actor{ID: store.SystemActorID, Kind: store.ActorSystem}, Action: "test", ResourceType: "bohux.v1.App"})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	release := fixture.Release(t, h.st, h.tenant, app, "ready", true)
+	if _, err := h.env.ExecuteActivity(h.acts.AssignRelease, AssignInput{TenantID: h.tenant.String(),
+		AppID: app.String(), ReleaseID: release.String(), DeploymentID: "d-1", Actor: testActor}); err != nil {
+		t.Fatal(err)
+	}
+	var raw []byte
+	if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+		return tx.QueryRow(ctx, `SELECT payload FROM assignments WHERE node_id = $1 ORDER BY generation DESC LIMIT 1`, h.node).Scan(&raw)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p := &agentv1.AssignmentPayload{}
+	if err := proto.Unmarshal(raw, p); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(p.GetWorkloads()[0].GetProviderOptions()); !strings.Contains(got, `"bohux-infra"`) {
+		t.Errorf("workload provider options = %q", got)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/gen/bohux/v1/bohuxv1connect"
@@ -37,7 +38,7 @@ type appService struct {
 }
 
 // appSpec validates an App's mutable state and returns its revision columns.
-func appSpec(ctx context.Context, tx *store.Tx, env uuid.UUID, src *bohuxv1.Source, rt *bohuxv1.Runtime, refs []*bohuxv1.SecretRef) ([]store.Col, error) {
+func appSpec(ctx context.Context, tx *store.Tx, env uuid.UUID, src *bohuxv1.Source, rt *bohuxv1.Runtime, refs []*bohuxv1.SecretRef, opts *structpb.Struct) ([]store.Col, error) {
 	if err := validSource(src); err != nil {
 		return nil, err
 	}
@@ -67,9 +68,32 @@ func appSpec(ctx context.Context, tx *store.Tx, env uuid.UUID, src *bohuxv1.Sour
 	if err != nil {
 		return nil, fmt.Errorf("encode secret refs: %w", err)
 	}
+	optJSON := []byte("{}")
+	if len(opts.GetFields()) > 0 {
+		if optJSON, err = protojson.Marshal(opts); err != nil {
+			return nil, fmt.Errorf("encode provider options: %w", err)
+		}
+	}
 	return []store.Col{
 		{Name: "source", Value: srcJSON}, {Name: "runtime", Value: rtJSON}, {Name: "secrets", Value: secJSON},
+		{Name: "provider_options", Value: optJSON},
 	}, nil
+}
+
+// authorizeOptions requires the owner role to set or change provider options: they
+// can reach outside the workload (ADR-0032).
+func authorizeOptions(ctx context.Context, project uuid.UUID, cur, next *structpb.Struct) error {
+	if proto.Equal(normalize(cur), normalize(next)) {
+		return nil
+	}
+	return authorizeProject(ctx, project, auth.RoleOwner)
+}
+
+func normalize(s *structpb.Struct) *structpb.Struct {
+	if s == nil {
+		return &structpb.Struct{}
+	}
+	return s
 }
 
 func validSource(src *bohuxv1.Source) error {
@@ -193,7 +217,10 @@ func (as *appService) CreateApp(ctx context.Context, req *connect.Request[bohuxv
 		if err := authorizeProject(ctx, project, auth.RoleDeployer); err != nil {
 			return err
 		}
-		cols, err := appSpec(ctx, tx, env, msg.GetSource(), msg.GetRuntime(), msg.GetSecrets())
+		if err := authorizeOptions(ctx, project, nil, msg.GetProviderOptions()); err != nil {
+			return err
+		}
+		cols, err := appSpec(ctx, tx, env, msg.GetSource(), msg.GetRuntime(), msg.GetSecrets(), msg.GetProviderOptions())
 		if err != nil {
 			return err
 		}
@@ -311,8 +338,8 @@ func (as *appService) UpdateApp(ctx context.Context, req *connect.Request[bohuxv
 	msg := req.Msg
 	app, err := as.update(ctx, bohuxv1connect.AppServiceUpdateAppProcedure, msg.GetId(),
 		msg.GetExpectedRevisionId(), msg.GetIdempotencyKey(), msg, auth.RoleDeployer,
-		func(*bohuxv1.App) (*bohuxv1.Source, *bohuxv1.Runtime, []*bohuxv1.SecretRef) {
-			return msg.GetSource(), msg.GetRuntime(), msg.GetSecrets()
+		func(*bohuxv1.App) (*bohuxv1.Source, *bohuxv1.Runtime, []*bohuxv1.SecretRef, *structpb.Struct) {
+			return msg.GetSource(), msg.GetRuntime(), msg.GetSecrets(), msg.GetProviderOptions()
 		}, false)
 	if err != nil {
 		return nil, err
@@ -327,10 +354,10 @@ func (as *appService) ScaleApp(ctx context.Context, req *connect.Request[bohuxv1
 	msg := req.Msg
 	app, err := as.update(ctx, bohuxv1connect.AppServiceScaleAppProcedure, msg.GetId(),
 		msg.GetExpectedRevisionId(), msg.GetIdempotencyKey(), msg, auth.RoleDeployer,
-		func(cur *bohuxv1.App) (*bohuxv1.Source, *bohuxv1.Runtime, []*bohuxv1.SecretRef) {
+		func(cur *bohuxv1.App) (*bohuxv1.Source, *bohuxv1.Runtime, []*bohuxv1.SecretRef, *structpb.Struct) {
 			rt := proto.Clone(cur.GetRuntime()).(*bohuxv1.Runtime)
 			rt.Replicas = msg.GetReplicas()
-			return cur.GetSource(), rt, cur.GetSecrets()
+			return cur.GetSource(), rt, cur.GetSecrets(), cur.GetProviderOptions()
 		}, true)
 	if err != nil {
 		return nil, err
@@ -342,7 +369,7 @@ func (as *appService) ScaleApp(ctx context.Context, req *connect.Request[bohuxv1
 // from the current one. With scale, the node's assignment follows the new replicas in
 // the same transaction.
 func (as *appService) update(ctx context.Context, rpc, rawID, rawExpected, key string, msg proto.Message, min auth.Role,
-	next func(cur *bohuxv1.App) (*bohuxv1.Source, *bohuxv1.Runtime, []*bohuxv1.SecretRef), scale bool,
+	next func(cur *bohuxv1.App) (*bohuxv1.Source, *bohuxv1.Runtime, []*bohuxv1.SecretRef, *structpb.Struct), scale bool,
 ) (*bohuxv1.App, error) {
 	p, _ := auth.FromContext(ctx)
 	id, err := parseID("id", rawID)
@@ -378,8 +405,11 @@ func (as *appService) update(ctx context.Context, rpc, rawID, rawExpected, key s
 			if err != nil {
 				return err
 			}
-			src, rt, refs := next(cur)
-			cols, err := appSpec(ctx, tx, env, src, rt, refs)
+			src, rt, refs, opts := next(cur)
+			if err := authorizeOptions(ctx, project, cur.GetProviderOptions(), opts); err != nil {
+				return err
+			}
+			cols, err := appSpec(ctx, tx, env, src, rt, refs, opts)
 			if err != nil {
 				return err
 			}
@@ -474,8 +504,8 @@ func (as *appService) DeleteApp(ctx context.Context, req *connect.Request[bohuxv
 	return connect.NewResponse(resp), nil
 }
 
-const appSelect = `SELECT ` + metaColumns + `, h.environment_id, h.slug, r.source, r.runtime, r.secrets
-	FROM apps_heads h JOIN apps_revisions r ON r.id = h.revision_id`
+const appSelect = `SELECT ` + metaColumns + `, h.environment_id, h.slug, r.source, r.runtime, r.secrets,
+	r.provider_options FROM apps_heads h JOIN apps_revisions r ON r.id = h.revision_id`
 
 // getApp reads a live app by id, or by (environment, slug) if id is nil.
 func getApp(ctx context.Context, tx *store.Tx, id, env uuid.UUID, slug string) (*bohuxv1.App, error) {
@@ -499,8 +529,9 @@ func scanApp(row pgx.Row) (*bohuxv1.App, error) {
 		env           uuid.UUID
 		slug          string
 		src, rt, secs []byte
+		opts          []byte
 	)
-	if err := row.Scan(append(m.dest(), &env, &slug, &src, &rt, &secs)...); err != nil {
+	if err := row.Scan(append(m.dest(), &env, &slug, &src, &rt, &secs, &opts)...); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
 		}
@@ -513,6 +544,12 @@ func scanApp(row pgx.Row) (*bohuxv1.App, error) {
 	}
 	if err := loadJSON.Unmarshal(rt, app.Runtime); err != nil {
 		return nil, fmt.Errorf("decode app runtime: %w", err)
+	}
+	if string(opts) != "{}" {
+		app.ProviderOptions = &structpb.Struct{}
+		if err := loadJSON.Unmarshal(opts, app.ProviderOptions); err != nil {
+			return nil, fmt.Errorf("decode app provider options: %w", err)
+		}
 	}
 	var items []json.RawMessage
 	if err := json.Unmarshal(secs, &items); err != nil {

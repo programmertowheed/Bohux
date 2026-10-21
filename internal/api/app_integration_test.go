@@ -10,6 +10,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/gen/bohux/v1/bohuxv1connect"
@@ -202,4 +203,72 @@ func TestApps(t *testing.T) {
 			t.Fatalf("environment delete after its app was deleted: %v", err)
 		}
 	})
+}
+
+// TestAppProviderOptions: provider options reach outside the workload, so only an
+// owner may set or change them (ADR-0032); everyone else keeps them as they are.
+func TestAppProviderOptions(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	srv := h.server()
+	apps := bohuxv1connect.NewAppServiceClient(srv.Client(), srv.URL)
+	envs := bohuxv1connect.NewEnvironmentServiceClient(srv.Client(), srv.URL)
+	p := h.project("one")
+	tok := func(role bohuxv1.Role, key string) string {
+		r, err := h.createToken(h.root, p, role, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.GetSecret()
+	}
+	owner, deployer := tok(bohuxv1.Role_ROLE_OWNER, "o"), tok(bohuxv1.Role_ROLE_DEPLOYER, "d")
+	e, err := envs.CreateEnvironment(ctx, req(owner, &bohuxv1.CreateEnvironmentRequest{
+		ProjectId: p.String(), Slug: "prod", ProviderBinding: dockerOn(h.node("vps-1")), IdempotencyKey: "e"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err := structpb.NewStruct(map[string]any{"networks": []any{"bohux-infra"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := &bohuxv1.Source{Kind: &bohuxv1.Source_Image{Image: &bohuxv1.ImageSource{
+		Repository: "ghcr.io/acme/api", Digest: "sha256:" + strings.Repeat("ab", 32)}}}
+	create := func(token, key string, o *structpb.Struct) (*bohuxv1.App, error) {
+		r, err := apps.CreateApp(ctx, req(token, &bohuxv1.CreateAppRequest{EnvironmentId: e.Msg.GetEnvironment().GetMeta().GetId(),
+			Slug: key, Source: src, Runtime: &bohuxv1.Runtime{Replicas: 1}, ProviderOptions: o, IdempotencyKey: key}))
+		if err != nil {
+			return nil, err
+		}
+		return r.Msg.GetApp(), nil
+	}
+
+	_, err = create(deployer, "by-deployer", opts)
+	wantCode(t, err, connect.CodePermissionDenied)
+	app, err := create(owner, "by-owner", opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(app.GetProviderOptions(), opts) {
+		t.Errorf("options = %v, want %v", app.GetProviderOptions(), opts)
+	}
+
+	update := func(token, key string, o *structpb.Struct) (*bohuxv1.App, error) {
+		r, err := apps.UpdateApp(ctx, req(token, &bohuxv1.UpdateAppRequest{Id: app.GetMeta().GetId(), Source: src,
+			Runtime: &bohuxv1.Runtime{Replicas: 1}, ProviderOptions: o,
+			ExpectedRevisionId: app.GetMeta().GetRevisionId(), IdempotencyKey: key}))
+		if err != nil {
+			return nil, err
+		}
+		return r.Msg.GetApp(), nil
+	}
+	_, err = update(deployer, "u1", nil)
+	wantCode(t, err, connect.CodePermissionDenied) // dropping them is a change too
+	if app, err = update(deployer, "u2", opts); err != nil {
+		t.Fatalf("a deployer keeping the options as they are: %v", err)
+	}
+	scaled, err := apps.ScaleApp(ctx, req(deployer, &bohuxv1.ScaleAppRequest{Id: app.GetMeta().GetId(), Replicas: 2,
+		ExpectedRevisionId: app.GetMeta().GetRevisionId(), IdempotencyKey: "s1"}))
+	if err != nil || !proto.Equal(scaled.Msg.GetApp().GetProviderOptions(), opts) {
+		t.Errorf("scale = %v, %v; want the options kept", scaled, err)
+	}
 }

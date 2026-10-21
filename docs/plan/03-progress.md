@@ -38,19 +38,15 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S9c — the control plane as an image (⏳, next to start)
-- **Exact next step:** Apps cannot mount host paths, and the control plane's data dir
-  (node CA) must survive its own redeploys. Decide in an ADR: provider-specific
-  `Runtime` passthrough (`Spec.Raw`, the provider spec's reserved escape hatch) for a
-  Docker bind mount, versus a first-class volume. Then the Dockerfile.
+- **Slice:** S9c2 — the control plane as an image (⏳, next to start)
+- **Exact next step:** write the `Dockerfile` and build it locally (with the generated
+  `gen/` in the build context, since the Buf registry is blocked here).
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S9c (the control plane as
-> an image) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0030, the
-> provider-interface spec (`Spec.Raw`), and CLAUDE.md rules 2, 4 and 9. Start Postgres,
-> Docker, Temporal and OpenBao (tracker *Known gaps*). Write the ADR for how an App gets
-> a host path first. Verify with build, vet, golangci-lint (also with the integration
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S9c2 (the control plane as
+> an image) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0030 and ADR-0032.
+> Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*). Verify with build, vet, golangci-lint (also with the integration
 > tag), unit and integration tests. Tick boxes, update the tracker and the next
 > session prompt, commit, push, and give me the next prompt.
 
@@ -74,6 +70,7 @@ work is in right now*.
 | O15 | Accept or reject ADR-0029 (backup archive: age-encrypted tar; logical Postgres copy over a privileged DSN; every OpenBao version; node CA). Adds `filippo.io/age`. Built on already | S8c onward |
 | O16 | Accept or reject ADR-0030 (single-VPS layout: agent as a systemd unit, infra as one Compose project, control plane as an App of itself installed through a seed). Built on already | S9 |
 | O17 | Accept or reject ADR-0031 (agent-side fallback: previous workload + deadline, applied only when the control plane cannot compensate). Changes agent.proto. Built on already | S9b onward |
+| O18 | Accept or reject ADR-0032 (`App.provider_options` → `Spec.Raw`, owner-only; Docker accepts external networks and named volumes). Changes `app.proto` and agent.proto. Built on already | S9c onward |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -678,9 +675,25 @@ Split into sub-slices, one session each. Includes S7d (OpenBao auto-unseal).
 - [x] Workflow: forward assign sets health timeout + 2 min; compensation none. Tested
       in the workflow suite, agentapi, and the e2e suite (all green)
 
-#### S9c — the control plane as an image ⏳
-- [ ] `Dockerfile` for the `bohux` binary (control plane mode), config by env, data dir
-      as a mounted host path; ports published by the App
+#### S9c1 — provider options on Apps ✅
+- [x] Proposed ADR-0032 (O18): `App.provider_options` (Struct) → `Workload.provider_options`
+      (JSON) → `Spec.Raw`; owner role to set or change; the Docker provider accepts only
+      external `networks` and named `volumes` (no host paths), refuses unknown keys;
+      the control plane App gets its config as secrets (O5 stays open)
+- [x] Proto first; migration `00017`; AppService (owner check on any change, kept by
+      ScaleApp and by updates that leave them alone); deploy activity carries the
+      Release revision's options; agent passes them as `Spec.Raw`
+- [x] Docker render (external networks incl. `default`, external volumes) with unit
+      tests and a real-daemon test (attached, mounted, both left in place by Destroy;
+      CI integration now also runs `./providers/docker/...`); API and activity tests
+- [x] `BOHUX_OPENBAO_TOKEN` for the control plane when no token file is given
+- **Fixed:** `TestRegisterRefusals/wrong CA pin` failed one run in 256 (its "wrong" pin
+  was the right one when the real pin started with `00`)
+
+#### S9c2 — the control plane as an image ⏳
+- [ ] `Dockerfile` for the `bohux` binary (generated code built in, or `buf generate`
+      when `gen/` is absent); runs `bohux controlplane` listening on 0.0.0.0, data dir
+      `/var/lib/bohux`, config from env
 
 #### S9d — install bundle ⏳
 - [ ] `deploy/install/`: infra Compose (Postgres, Temporal, OpenBao with auto-unseal,
@@ -818,6 +831,9 @@ Split into sub-slices, one session each. Includes S7d (OpenBao auto-unseal).
 - **Next:** S9b.
 - S9b done: agent-side fallback (proto, reconciler, AssignApp, workflow), tested first.
 - **Next:** S9c.
+- S9c split into S9c1/S9c2. S9c1 done: ADR-0032 proposed (O18), provider options from
+  the API to the Docker provider, owner-only. Fixed a 1-in-256 flaky test.
+- **Next:** S9c2.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by

@@ -351,9 +351,10 @@ func buildWorkload(ctx context.Context, tx *store.Tx, app uuid.UUID, in AssignIn
 		sourceRef               string
 		available               bool
 		rt, secs, currentRT     []byte
+		opts                    []byte
 	)
 	err = tx.QueryRow(ctx, `SELECT a.environment_id, er.provider, r.artifact_digest, r.state,
-		r.artifact_available, r.source_ref, ar.runtime, ar.secrets, cur.runtime
+		r.artifact_available, r.source_ref, ar.runtime, ar.secrets, cur.runtime, ar.provider_options
 		FROM releases_heads h
 		JOIN releases_revisions r ON r.id = h.revision_id
 		JOIN apps_revisions ar ON ar.id = h.config_revision_id
@@ -362,7 +363,7 @@ func buildWorkload(ctx context.Context, tx *store.Tx, app uuid.UUID, in AssignIn
 		JOIN environments_heads e ON e.id = a.environment_id
 		JOIN environments_revisions er ON er.id = e.revision_id
 		WHERE h.id = $1 AND h.app_id = $2 AND NOT h.deleted`, release, app).Scan(
-		&env, &provider, &digest, &state, &available, &sourceRef, &rt, &secs, &currentRT)
+		&env, &provider, &digest, &state, &available, &sourceRef, &rt, &secs, &currentRT, &opts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, invalid("release does not exist for this app")
 	}
@@ -385,11 +386,16 @@ func buildWorkload(ctx context.Context, tx *store.Tx, app uuid.UUID, in AssignIn
 	if err != nil {
 		return nil, err
 	}
-	return &agentv1.Workload{
+	w := &agentv1.Workload{
 		AppId: app.String(), EnvironmentId: env.String(), ReleaseId: in.ReleaseID,
 		DeploymentId: in.DeploymentID, Provider: provider, Image: imageRef(sourceRef, digest),
 		Runtime: runtime, Secrets: secrets,
-	}, nil
+	}
+	// Provider options travel as the Release's App revision had them (ADR-0032).
+	if string(opts) != "{}" {
+		w.ProviderOptions = opts
+	}
+	return w, nil
 }
 
 // imageRef is what the provider runs: the pinned reference an imported Release
