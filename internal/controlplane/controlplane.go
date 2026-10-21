@@ -131,7 +131,13 @@ func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 	}()
 	defer func() { stopWorker(); <-workerDone }()
 
+	// Streams (agents, watches, logs) never go idle, so Shutdown alone would wait for
+	// them until its timeout: every handler's context ends when shutdown begins.
+	streams, endStreams := context.WithCancel(context.WithoutCancel(ctx))
+	defer endStreams()
+	base := func(net.Listener) context.Context { return streams }
 	srv := &http.Server{
+		BaseContext: base,
 		// ConnectRPC needs HTTP/2 for streaming; h2c serves it without TLS. TLS
 		// termination is in front of Bohux (Caddy, ADR-0019) or added with mTLS in S4.
 		Handler: h2c.NewHandler(newMux(st, (&api.Server{
@@ -147,7 +153,7 @@ func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 	}
 	agentMux := http.NewServeMux()
 	agentMux.Handle(agents.Handler(connect.WithInterceptors(api.NewLoggingInterceptor())))
-	agentSrv := &http.Server{Handler: agentMux, TLSConfig: agentTLS, ReadHeaderTimeout: 10 * time.Second}
+	agentSrv := &http.Server{Handler: agentMux, TLSConfig: agentTLS, ReadHeaderTimeout: 10 * time.Second, BaseContext: base}
 
 	errc := make(chan error, 2)
 	go func() { errc <- srv.Serve(ln) }()
@@ -164,6 +170,7 @@ func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 		pending--
 	case <-ctx.Done():
 	}
+	endStreams()
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 	shutdownErr := errors.Join(srv.Shutdown(shutdownCtx), agentSrv.Shutdown(shutdownCtx))
