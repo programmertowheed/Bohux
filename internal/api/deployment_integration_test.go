@@ -184,8 +184,12 @@ func (d *deployHarness) report(release string, state agentv1.WorkloadState) {
 		time.Sleep(20 * time.Millisecond)
 		gen, rel = d.latest()
 	}
-	b, err := protojson.Marshal(&agentv1.StatusReport{Generation: gen, Workloads: []*agentv1.WorkloadStatus{
-		{AppId: d.app, ReleaseId: release, State: state, ReadyReplicas: 1}}})
+	ws := &agentv1.WorkloadStatus{AppId: d.app, ReleaseId: release, State: state, ReadyReplicas: 1}
+	if state == failed {
+		// A failure the agent cannot retry away ends the health gate at once.
+		ws.Failure = &bohuxv1.ErrorDetail{Reason: "SPEC_INVALID"}
+	}
+	b, err := protojson.Marshal(&agentv1.StatusReport{Generation: gen, Workloads: []*agentv1.WorkloadStatus{ws}})
 	if err != nil {
 		d.t.Fatal(err)
 	}

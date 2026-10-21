@@ -358,6 +358,11 @@ func TestWaitHealthy(t *testing.T) {
 			{AppId: app, ReleaseId: release, State: state, ReadyReplicas: ready}}}
 	}
 	healthy := agentv1.WorkloadState_WORKLOAD_STATE_HEALTHY
+	failed := func(gen uint64, release, reason string) *agentv1.StatusReport {
+		r := status(gen, release, agentv1.WorkloadState_WORKLOAD_STATE_FAILED, 0)
+		r.Workloads[0].Failure = &bohuxv1.ErrorDetail{Reason: reason}
+		return r
+	}
 
 	if err := wait(3, 1, 50*time.Millisecond); !isType(err, ErrTypeHealthTimeout) {
 		t.Errorf("no report: %v, want %s", err, ErrTypeHealthTimeout)
@@ -373,7 +378,9 @@ func TestWaitHealthy(t *testing.T) {
 		{"previous release still running", status(3, "r1", healthy, 2), ErrTypeHealthTimeout},
 		{"not all replicas ready", status(3, "r2", healthy, 1), ErrTypeHealthTimeout},
 		{"unhealthy", status(3, "r2", agentv1.WorkloadState_WORKLOAD_STATE_UNHEALTHY, 2), ErrTypeHealthTimeout},
-		{"failed", status(3, "r2", agentv1.WorkloadState_WORKLOAD_STATE_FAILED, 0), ErrTypeWorkloadFailed},
+		{"spec invalid", failed(3, "r2", "SPEC_INVALID"), ErrTypeWorkloadFailed},
+		{"provider missing", failed(3, "r2", "PROVIDER_MISSING"), ErrTypeWorkloadFailed},
+		{"apply failed is retried by the agent", failed(3, "r2", "APPLY_FAILED"), ErrTypeHealthTimeout},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

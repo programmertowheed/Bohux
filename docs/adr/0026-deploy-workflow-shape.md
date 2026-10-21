@@ -46,7 +46,9 @@ databases and workflow histories:
 6. **Health is a polling activity with a heartbeat** (`WaitHealthy`): every 2 s it reads
    the node's stored StatusReport and succeeds when the report covers the assigned
    generation and the App's workload runs the target Release, healthy, with all
-   replicas ready. A `FAILED` workload fails it at once; otherwise the health timeout
+   replicas ready. A workload the agent cannot retry into shape (`FAILED` with
+   `SPEC_INVALID` or `PROVIDER_MISSING`) fails it at once; any other failure (an apply
+   the agent retries every pass, e.g. a port still held) waits, and the health timeout
    (default 5 min) fails it. This is an activity inside the saga, not a poller that
    drives state from outside it (rule 6).
 7. **Last healthy Release** = the Release of the newest *succeeded* Deployment of the

@@ -479,14 +479,22 @@ func (a *Activities) healthy(ctx context.Context, tenant, node uuid.UUID, in Wai
 		}
 		switch w.GetState() {
 		case agentv1.WorkloadState_WORKLOAD_STATE_FAILED:
-			return false, temporal.NewNonRetryableApplicationError(
-				"workload failed: "+w.GetFailure().GetReason(), ErrTypeWorkloadFailed, nil)
+			// Only failures the agent cannot retry away end the gate early; an apply
+			// that failed (a port still held, a pull that timed out) is retried by the
+			// agent every pass, and the deadline decides.
+			if permanentFailure[w.GetFailure().GetReason()] {
+				return false, temporal.NewNonRetryableApplicationError(
+					"workload failed: "+w.GetFailure().GetReason(), ErrTypeWorkloadFailed, nil)
+			}
 		case agentv1.WorkloadState_WORKLOAD_STATE_HEALTHY:
 			return w.GetReadyReplicas() >= in.Replicas, nil
 		}
 	}
 	return false, nil
 }
+
+// permanentFailure are the agent's failure reasons that retrying cannot fix.
+var permanentFailure = map[string]bool{"SPEC_INVALID": true, "PROVIDER_MISSING": true}
 
 // store converts the workflow's Actor back to the store's.
 func (a Actor) store() (store.Actor, error) {
