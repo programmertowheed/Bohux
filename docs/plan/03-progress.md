@@ -85,6 +85,7 @@ work is in right now*.
 | O26 | Accept or reject ADR-0039 (web UI sign-in with an API token in `sessionStorage`, strict CSP, no cookie sessions until user accounts exist) | S15 |
 | O27 | Logs in the UI: keep the plain `<pre>` (no ANSI colors) or allow xterm.js, which needs `style-src 'unsafe-inline'` or nonces in the CSP (ADR-0013 vs ADR-0039) | S15 log view |
 | O28 | Accept or reject ADR-0040 (resource view: agents sample node and workloads every 30 s, carried in status reports, no history) | S16 |
+| O29 | Web terminal (v0.2): `Exec` is bidirectional; browsers cannot stream both ways over Connect on HTTP/1.1. Options: a WebSocket bridge on the control plane (a UI-only path, rule 8), or HTTP/2 end to end via the ingress | S15 |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -961,8 +962,13 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       health, route), scale, add/remove routes. Checked in Chromium against the live
       install: an App created, deployed, scaled to 2, and given a second route in the
       UI served on both hosts over HTTPS
-- [ ] Next: release history per App; secrets (`SetSecret` takes a value: allowed in
-      the UI per ADR-0039, never as an MCP tool)
+- [x] App page: releases (state, source, pruned images), the App's deployments, the
+      environment's secrets (keys only; which the App uses) with a set-secret form
+      (password field; the value is never shown back). Checked in Chromium
+- [ ] Not in the UI yet: webhooks, notification channels, tokens (CLI has the first
+      two); the web terminal needs bidirectional streaming, which Connect over
+      HTTP/1.1 in a browser does not have (a WebSocket endpoint would be a UI-only path:
+      owner decision under rule 8, O29)
 
 ### S16 — Resource view (ADR-0040) ✅
 - [x] Proposed ADR-0040 (O28): agents sample the node (`/proc`, `statfs`) and, through

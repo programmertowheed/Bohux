@@ -10,6 +10,7 @@ import { Nodes } from "./pages/Nodes";
 import { Deployment } from "./pages/Deployment";
 import { Logs } from "./pages/Logs";
 import { Activity } from "./pages/Activity";
+import { AppPage } from "./pages/AppPage";
 import { enumName } from "./format";
 
 function Shell() {
@@ -60,10 +61,11 @@ const deployment = createRoute({
 
 const logs = createRoute({ getParentRoute: () => root, path: "/p/$project/e/$env/a/$app/logs", component: Logs });
 
+const appPage = createRoute({ getParentRoute: () => root, path: "/p/$project/e/$env/a/$app", component: AppPage });
 const activity = createRoute({ getParentRoute: () => root, path: "/p/$project/activity", component: Activity });
 
 export const router = createRouter({
-  routeTree: root.addChildren([projects, nodes, project, environment, deployment, logs, activity]),
+  routeTree: root.addChildren([projects, nodes, project, environment, deployment, logs, activity, appPage]),
   basepath: "/ui",
 });
 

@@ -47,7 +47,7 @@ export function Environment() {
           head={["App", "Replicas", "Usage", "Routes", "Source", ""]}
           empty="No apps yet. Create one with: bohux app create <slug> -e <env> --image …"
           rows={apps.data.apps.map((a) => [
-            a.slug,
+            <Link to="/p/$project/e/$env/a/$app" params={{ project, env, app: a.slug }} className="text-accent">{a.slug}</Link>,
             String(a.runtime?.replicas ?? 0),
             <AppUsage appId={a.meta?.id ?? ""} />,
             a.routes.map((r) => r.host).join(", "),
