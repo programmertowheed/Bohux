@@ -25,12 +25,14 @@ const ResourceCommands = `  project list|create      projects
   app list|show|create     apps of an environment (-p, -e)
   route list|add|remove    an app's hosts on the node's ingress
   secret list|set          an environment's secrets; set reads the value from stdin
-  node list|token          nodes, and bootstrap tokens to register one`
+  node list|token          nodes, and bootstrap tokens to register one
+  webhook list|create|remove
+                           git push webhooks of an app; create prints the secret once`
 
 // IsResource reports whether cmd is a resource noun.
 func IsResource(cmd string) bool {
 	switch cmd {
-	case "project", "env", "app", "route", "secret", "node":
+	case "project", "env", "app", "route", "secret", "node", "webhook":
 		return true
 	}
 	return false
@@ -141,6 +143,12 @@ func (c *command) runResource(ctx context.Context, noun string, args []string, s
 		return r.nodeList(ctx, rest)
 	case "node token":
 		return r.nodeToken(ctx, rest)
+	case "webhook list":
+		return r.webhookList(ctx, rest)
+	case "webhook create":
+		return r.webhookCreate(ctx, rest)
+	case "webhook remove":
+		return r.webhookRemove(ctx, rest)
 	}
 	return fmt.Errorf("unknown command %q: %w", verb, ErrUsage)
 }
@@ -670,4 +678,114 @@ func (r *resource) routeChange(ctx context.Context, args []string, add bool) err
 		return cerr
 	}
 	return uerr
+}
+
+// --- webhook ---------------------------------------------------------------------
+
+func (r *resource) hookURL(path string) string {
+	base := r.getenv(EnvAPIURL)
+	if base == "" {
+		base = DefaultAPIURL
+	}
+	return strings.TrimSuffix(base, "/") + path
+}
+
+func flavorName(f bohuxv1.WebhookFlavor) string {
+	if f == bohuxv1.WebhookFlavor_WEBHOOK_FLAVOR_GENERIC {
+		return "generic"
+	}
+	return "github"
+}
+
+func (r *resource) webhooksOf(ctx context.Context, appID string) (*bohuxv1.ListWebhooksResponse, error) {
+	resp := &bohuxv1.ListWebhooksResponse{}
+	token := ""
+	for {
+		page, err := r.webhooks.ListWebhooks(ctx, call(r.token, &bohuxv1.ListWebhooksRequest{AppId: appID, PageToken: token}))
+		if err != nil {
+			return nil, fmt.Errorf("list webhooks: %w", err)
+		}
+		resp.Webhooks = append(resp.Webhooks, page.Msg.GetWebhooks()...)
+		if token = page.Msg.GetNextPageToken(); token == "" {
+			return resp, nil
+		}
+	}
+}
+
+func (r *resource) webhookList(ctx context.Context, args []string) error {
+	pos, err := r.positional(args, 1, "an app slug")
+	if err != nil {
+		return err
+	}
+	a, err := r.app(ctx, r.t, pos[0])
+	if err != nil {
+		return err
+	}
+	resp, err := r.webhooksOf(ctx, a.GetMeta().GetId())
+	if err != nil {
+		return err
+	}
+	rows := make([][]string, 0, len(resp.GetWebhooks()))
+	for _, w := range resp.GetWebhooks() {
+		rows = append(rows, []string{w.GetMeta().GetId(), w.GetBranch(), flavorName(w.GetFlavor()), r.hookURL(w.GetPath())})
+	}
+	return r.emit(resp, []string{"ID", "BRANCH", "FLAVOR", "URL"}, rows)
+}
+
+// webhookCreate prints the URL and the signing secret: the only time the secret is
+// shown (ADR-0037).
+func (r *resource) webhookCreate(ctx context.Context, args []string) error {
+	branch := r.fs.String("branch", "main", "branch whose pushes deploy")
+	flavor := r.fs.String("flavor", "github", "github (GitHub, Gitea) or generic")
+	pos, err := r.positional(args, 1, "an app slug")
+	if err != nil {
+		return err
+	}
+	f := bohuxv1.WebhookFlavor_WEBHOOK_FLAVOR_GITHUB
+	switch *flavor {
+	case "github":
+	case "generic":
+		f = bohuxv1.WebhookFlavor_WEBHOOK_FLAVOR_GENERIC
+	default:
+		return fmt.Errorf("webhook create: --flavor must be github or generic: %w", ErrUsage)
+	}
+	a, err := r.app(ctx, r.t, pos[0])
+	if err != nil {
+		return err
+	}
+	resp, err := r.webhooks.CreateWebhook(ctx, call(r.token, &bohuxv1.CreateWebhookRequest{
+		AppId: a.GetMeta().GetId(), Branch: *branch, Flavor: f, IdempotencyKey: r.key()}))
+	if err != nil {
+		return fmt.Errorf("create webhook: %w", err)
+	}
+	w := resp.Msg.GetWebhook()
+	return r.emit(resp.Msg, []string{"ID", "BRANCH", "URL", "SECRET"},
+		[][]string{{w.GetMeta().GetId(), w.GetBranch(), r.hookURL(w.GetPath()), resp.Msg.GetSecret()}})
+}
+
+func (r *resource) webhookRemove(ctx context.Context, args []string) error {
+	pos, err := r.positional(args, 2, "an app slug and a webhook ID")
+	if err != nil {
+		return err
+	}
+	a, err := r.app(ctx, r.t, pos[0])
+	if err != nil {
+		return err
+	}
+	list, err := r.webhooksOf(ctx, a.GetMeta().GetId())
+	if err != nil {
+		return err
+	}
+	for _, w := range list.GetWebhooks() {
+		if w.GetMeta().GetId() != pos[1] {
+			continue
+		}
+		resp, err := r.webhooks.DeleteWebhook(ctx, call(r.token, &bohuxv1.DeleteWebhookRequest{Id: pos[1],
+			ExpectedRevisionId: w.GetMeta().GetRevisionId(), IdempotencyKey: r.key()}))
+		if err != nil {
+			return fmt.Errorf("remove webhook: %w", err)
+		}
+		return r.emit(resp.Msg, []string{"REMOVED"}, [][]string{{pos[1]}})
+	}
+	return fmt.Errorf("webhook remove: %s has no webhook %q", pos[0], pos[1])
 }

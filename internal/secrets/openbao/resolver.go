@@ -12,7 +12,8 @@ import (
 	"github.com/bohumix/bohux/internal/store"
 )
 
-const handlePrefix = "openbao:"
+// HandlePrefix starts every OpenBao handle; the rest is the KV path.
+const HandlePrefix = "openbao:"
 
 // ErrForeignHandle means a handle does not belong to the tenant asking for it.
 var ErrForeignHandle = errors.New("openbao: handle belongs to another tenant")
@@ -24,11 +25,11 @@ func Path(tenant, secret uuid.UUID) string {
 }
 
 // Handle is the opaque reference stored in Postgres and assignments (rule 3).
-func Handle(tenant, secret uuid.UUID) string { return handlePrefix + Path(tenant, secret) }
+func Handle(tenant, secret uuid.UUID) string { return HandlePrefix + Path(tenant, secret) }
 
 // pathOf returns the KV path a handle names, refusing one outside tenant.
 func pathOf(tenant uuid.UUID, handle string) (string, error) {
-	path, ok := strings.CutPrefix(handle, handlePrefix)
+	path, ok := strings.CutPrefix(handle, HandlePrefix)
 	if !ok || !strings.HasPrefix(path, "bohux/"+tenant.String()+"/") {
 		return "", ErrForeignHandle
 	}

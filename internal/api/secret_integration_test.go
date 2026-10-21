@@ -40,6 +40,19 @@ func (m *memBackend) Put(_ context.Context, path, value string) (int, error) {
 	return len(m.vals[path]), nil
 }
 
+func (m *memBackend) Get(_ context.Context, path string, version int) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	vs := m.vals[path]
+	if version == 0 {
+		version = len(vs)
+	}
+	if version < 1 || version > len(vs) {
+		return "", fmt.Errorf("no version %d of %s", version, path)
+	}
+	return vs[version-1], nil
+}
+
 func (m *memBackend) Destroy(_ context.Context, path string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

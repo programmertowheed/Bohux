@@ -142,4 +142,27 @@ func TestResourceCommands(t *testing.T) {
 	if _, err := bohux("", "secret", "set", "EMPTY", "-e", "prod"); err == nil {
 		t.Error("an empty value on stdin was accepted")
 	}
+
+	must("app", "create", "site", "-e", "prod", "--git", "https://example.com/acme/site.git", "--port", "8080")
+	out = must("webhook", "create", "site", "-e", "prod", "--branch", "main", "-o", "json")
+	var created struct {
+		Webhook struct {
+			Meta struct {
+				ID string `json:"id"`
+			} `json:"meta"`
+			Path string `json:"path"`
+		} `json:"webhook"`
+		Secret string `json:"secret"`
+	}
+	if err := json.Unmarshal([]byte(out), &created); err != nil || len(created.Secret) != 64 {
+		t.Fatalf("webhook create -o json: %v\n%s", err, out)
+	}
+	if out := must("webhook", "list", "site", "-e", "prod"); !strings.Contains(out, hs.URL+created.Webhook.Path) ||
+		strings.Contains(out, created.Secret) {
+		t.Errorf("webhook list:\n%s", out)
+	}
+	must("webhook", "remove", "site", created.Webhook.Meta.ID, "-e", "prod")
+	if out := must("webhook", "list", "site", "-e", "prod"); strings.Contains(out, created.Webhook.Meta.ID) {
+		t.Errorf("webhook list after remove:\n%s", out)
+	}
 }

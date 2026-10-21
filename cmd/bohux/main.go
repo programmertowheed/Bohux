@@ -330,7 +330,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 		return nil
 	case "agent":
 		return agentCommand(ctx, args[1:], getenv, d)
-	case "deploy", "rollback", "scale", "logs", "exec", "project", "env", "app", "route", "secret", "node":
+	case "deploy", "rollback", "scale", "logs", "exec", "project", "env", "app", "route", "secret", "node", "webhook":
 		if err := cli.Run(ctx, args[0], args[1:], d.stdin, stdout, getenv); err != nil {
 			if errors.Is(err, cli.ErrUsage) {
 				return fmt.Errorf("%w\n\n%w", err, errUsage)

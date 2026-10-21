@@ -38,17 +38,17 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S12 — next v0.2 item, not split yet (⏳)
+- **Slice:** S13 — next v0.2 item, not chosen yet (⏳)
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** pick the next v0.2 item with the owner (candidates: Git push /
-  webhook triggers, notifications, MCP server, read-only web UI over the API) and
-  split it here.
+- **Exact next step:** next v0.2 item. Candidates: notifications on deploy events
+  (Slack/Discord/email/webhook), the MCP server (ADR-0018), the read-only web UI
+  (ADR-0012/0013), Buildpacks/Nixpacks.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then finish slice S11 (the CLI covers the
-> API, ADR-0036) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
+> Read CLAUDE.md and docs/plan/03-progress.md, then pick and split the next v0.2 slice
+> (S13) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
 > and ADR-0034. Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*).
 > Verify with build, vet, golangci-lint (also with the integration tag), unit and
 > integration tests. Tick boxes, update the tracker and the next session prompt,
@@ -79,6 +79,8 @@ work is in right now*.
 | O20 | Accept or reject ADR-0034 (routes on Apps, hosts unique across tenants, routes are App state, the agent programs its node's Caddy, providers report endpoints). Changes app.proto and agent.proto. Built on already | S10 |
 | O21 | Accept or reject ADR-0035 (zero-downtime deploys: two slots per routed App, switched by the agent through one ingress load). Changes the provider ResourceRef. Built on already | S10f |
 | O22 | Accept or reject ADR-0036 (CLI resource commands: `bohux <noun> <verb>`, JSON output is the API's protojson, secret values only from stdin) | S11 |
+| O23 | Accept or reject ADR-0037 (Git push webhooks: Webhook resource, HMAC in OpenBao, deploys as the webhook). Adds `webhook.proto` | S12 |
+| O24 | Open a PR for this branch (or allow CI on it) so the CI matrix runs at least once; nothing has run on GitHub yet | Confidence in every slice since S6 |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -871,7 +873,27 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 - Not covered yet (no command): role bindings, API tokens, app update of source and
   runtime, environment and project update/delete, node revoke. Add with the UI work
 
+### S12 — Git push webhooks (ADR-0037) ✅
+- [x] Proposed ADR-0037 (O23): `Webhook` resource per App (branch, flavor github or
+      generic), `POST /hooks/v1/<tenant>/<webhook>`, HMAC-SHA256 with a secret kept in
+      OpenBao and shown once, the deploy runs as the webhook (new actor kind) through
+      the API's own handlers, idempotent per commit, `409` while a deploy runs
+- [x] Proto `webhook.proto` (WebhookService); migration 00019 (`webhooks` heads and
+      revisions, actor kind `webhook`); RPC permissions; `SecretBackend.Get`
+- [x] Integration test: refuses unsigned, wrongly signed, other-body, unknown and
+      revoked deliveries with `404` and starts nothing; ping and other branches `204`;
+      a push builds and deploys its commit once across redeliveries, audited as the
+      webhook, from the App's repository (never the payload's); viewer cannot create;
+      image Apps refused; the secret never reaches Postgres
+- [x] CLI `webhook list|create|remove` (ADR-0036)
+- [ ] With the owner: how a Git host reaches the API on a single VPS (a route to the
+      control plane through the ingress, ADR-0037 consequences)
+
 ## Known gaps and notes
+- **CI has not run on this branch.** `ci.yml` triggers on pushes to `main` and on
+  pull requests; there is no PR for `claude/relaxed-rubin-76m7dl`, so every check so
+  far ran locally in the cloud container (lint, unit, integration, Docker conformance,
+  the self-deploy test). Opening a PR runs the whole matrix, `selfdeploy` included.
 - **`buf.lock` missing.** Whoever has registry access (CI, or a local machine) runs
   `buf dep update`, commits `buf.lock`, and removes the "Resolve deps if buf.lock is
   missing" steps in `.github/workflows/ci.yml`.
@@ -967,7 +989,9 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 - S10f done: zero-downtime deploys by slots; 127 polled requests, none failed. S10 done.
 - S11 started: ADR-0036 proposed (O22), resource commands with tests.
 - S11 done: the CLI covers the API's main resources; the self-deploy test uses it.
-- **Next:** S12 (to be chosen and split).
+- S12 done: Git push webhooks (ADR-0037 proposed, O23), API, CLI, tests.
+- Found: CI never ran on this branch (no PR); added as O24.
+- **Next:** S13.
 
 ### 2026-10-21 (auto run 2, S6a) — branch `claude/relaxed-rubin-76m7dl`
 - Owner asked again for an automatic run, slice after slice, until the session ends.

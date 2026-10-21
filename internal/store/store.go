@@ -28,7 +28,7 @@ var (
 // accepted only for these, so table names in generated SQL never come from input.
 var versioned = map[string]bool{
 	"tenants": true, "projects": true, "role_bindings": true, "api_tokens": true,
-	"nodes": true, "environments": true, "secret_refs": true, "apps": true,
+	"nodes": true, "environments": true, "secret_refs": true, "apps": true, "webhooks": true,
 	"releases": true, "deployments": true,
 }
 
@@ -108,6 +108,8 @@ const (
 	ActorAPIToken ActorKind = "api_token"
 	ActorNode     ActorKind = "node"
 	ActorSystem   ActorKind = "system"
+	// ActorWebhook is a Git push webhook deploying as itself (ADR-0037).
+	ActorWebhook ActorKind = "webhook"
 )
 
 // SystemActorID is the actor of changes no principal made, such as tenant bootstrap.

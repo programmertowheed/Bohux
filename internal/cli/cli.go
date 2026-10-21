@@ -75,6 +75,7 @@ type command struct {
 	workloads   bohuxv1connect.WorkloadServiceClient
 	nodesAPI    bohuxv1connect.NodeServiceClient
 	secrets     bohuxv1connect.SecretServiceClient
+	webhooks    bohuxv1connect.WebhookServiceClient
 }
 
 // target is the flags every App command takes.
@@ -133,6 +134,7 @@ func (c *command) connect() error {
 	c.workloads = bohuxv1connect.NewWorkloadServiceClient(hc, base)
 	c.nodesAPI = bohuxv1connect.NewNodeServiceClient(hc, base)
 	c.secrets = bohuxv1connect.NewSecretServiceClient(hc, base)
+	c.webhooks = bohuxv1connect.NewWebhookServiceClient(hc, base)
 	return nil
 }
 

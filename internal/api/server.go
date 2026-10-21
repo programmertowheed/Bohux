@@ -75,6 +75,9 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.Handle(bohuxv1connect.NewDeploymentServiceHandler(&deploymentService{s}, opts))
 	mux.Handle(bohuxv1connect.NewSecretServiceHandler(&secretService{s}, opts))
 	mux.Handle(bohuxv1connect.NewWorkloadServiceHandler(&workloadService{s}, opts))
+	mux.Handle(bohuxv1connect.NewWebhookServiceHandler(&webhookService{s}, opts))
+	// Git hosts post here without a token; the signature authenticates (ADR-0037).
+	mux.HandleFunc(HookPrefix, s.ServeHook)
 
 	// Not written yet: mounted so every RPC is authenticated, logged, and answers
 	// Unimplemented rather than 404. Each is replaced as its slice lands.

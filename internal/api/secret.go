@@ -25,6 +25,9 @@ var errNoSecrets = connect.NewError(connect.CodeUnavailable, errors.New("the sec
 // and nowhere else (rule 3, ADR-0008).
 type SecretBackend interface {
 	Put(ctx context.Context, path, value string) (int, error)
+	// Get reads a version of path; 0 is the latest. Only webhook signing secrets are
+	// read back by the control plane (ADR-0037); App secrets resolve on the node path.
+	Get(ctx context.Context, path string, version int) (string, error)
 	Destroy(ctx context.Context, path string) error
 }
 

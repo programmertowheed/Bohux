@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package bohux.v1;
+
+import "bohux/v1/common.proto";
+import "google/api/field_behavior.proto";
+
+option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
+
+// Deploys an App with a Git source when its branch is pushed (ADR-0037). A Git host
+// posts to `path` on the API; the request is proved genuine by an HMAC-SHA256 of its
+// body with the signing secret, which lives only in OpenBao (rule 3).
+message Webhook {
+  ResourceMeta meta = 1;
+  string app_id = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+  // Pushes to this branch deploy their commit.
+  string branch = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+  WebhookFlavor flavor = 4 [(google.api.field_behavior) = IMMUTABLE];
+  // Where the Git host posts, relative to the API's base URL:
+  // /hooks/v1/<tenant>/<webhook>.
+  string path = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// How the request is signed and what it carries.
+enum WebhookFlavor {
+  // Server default: GITHUB.
+  WEBHOOK_FLAVOR_UNSPECIFIED = 0;
+  // GitHub (and Gitea): `push` events, `X-Hub-Signature-256`.
+  WEBHOOK_FLAVOR_GITHUB = 1;
+  // Any client: a JSON body {"ref": "<branch or commit>"}, `X-Bohux-Signature`.
+  WEBHOOK_FLAVOR_GENERIC = 2;
+}
+
+service WebhookService {
+  // Creates the webhook and returns its signing secret, once.
+  rpc CreateWebhook(CreateWebhookRequest) returns (CreateWebhookResponse);
+  rpc ListWebhooks(ListWebhooksRequest) returns (ListWebhooksResponse);
+  // Deleting a webhook revokes it: later requests are refused.
+  rpc DeleteWebhook(DeleteWebhookRequest) returns (DeleteWebhookResponse);
+}
+
+message CreateWebhookRequest {
+  string app_id = 1 [(google.api.field_behavior) = REQUIRED];
+  string branch = 2 [(google.api.field_behavior) = REQUIRED];
+  WebhookFlavor flavor = 3;
+  string idempotency_key = 4 [(google.api.field_behavior) = REQUIRED];
+}
+
+message CreateWebhookResponse {
+  Webhook webhook = 1;
+  // The signing secret to give the Git host. Returned only by this call (and its
+  // idempotent replays never return it again); never stored outside OpenBao.
+  string secret = 2 [debug_redact = true];
+}
+
+message ListWebhooksRequest {
+  string app_id = 1 [(google.api.field_behavior) = REQUIRED];
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListWebhooksResponse {
+  repeated Webhook webhooks = 1;
+  string next_page_token = 2;
+}
+
+message DeleteWebhookRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+  string expected_revision_id = 2 [(google.api.field_behavior) = REQUIRED];
+  string idempotency_key = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+message DeleteWebhookResponse {
+  string revision_id = 1;
+}

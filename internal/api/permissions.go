@@ -77,6 +77,10 @@ var permissions = map[string]Permission{
 	"/bohux.v1.SecretService/ListSecretRefs": viewer,
 	"/bohux.v1.SecretService/DeleteSecret":   deployer,
 
+	"/bohux.v1.WebhookService/CreateWebhook": deployer,
+	"/bohux.v1.WebhookService/ListWebhooks":  viewer,
+	"/bohux.v1.WebhookService/DeleteWebhook": deployer,
+
 	"/bohux.v1.AuditService/ListAuditEvents": viewer,
 	"/bohux.v1.AuditService/ListRevisions":   viewer,
 	"/bohux.v1.AuditService/GetRevision":     viewer,
