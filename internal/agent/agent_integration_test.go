@@ -20,6 +20,7 @@ import (
 	"github.com/bohumix/bohux/internal/auth"
 	"github.com/bohumix/bohux/internal/pki"
 	"github.com/bohumix/bohux/internal/store"
+	"github.com/bohumix/bohux/internal/store/fixture"
 	"github.com/bohumix/bohux/internal/store/storetest"
 )
 
@@ -272,7 +273,8 @@ func TestAssignmentsReachTheCache(t *testing.T) {
 	st := cp.register(t, "vps-1")
 	node := uuid.MustParse(st.NodeID())
 	system := store.Actor{ID: store.SystemActorID, Kind: store.ActorSystem}
-	work := []*agentv1.Workload{{AppId: "app-1", Provider: "docker",
+	app, _ := fixture.App(t, cp.st, cp.tenant, "api", "prod")
+	work := []*agentv1.Workload{{AppId: app.String(), Provider: "docker",
 		Secrets: []*bohuxv1.SecretRef{{Key: "DATABASE_URL", Handle: "openbao:db"}}}}
 
 	cache, err := OpenCache(st)
@@ -402,7 +404,8 @@ func TestReportsKeepTheNodeOnline(t *testing.T) {
 		defer stop()
 		cp.waitState(st.NodeID(), "online")
 		node := uuid.MustParse(st.NodeID())
-		work := []*agentv1.Workload{{AppId: "app-1", EnvironmentId: "env", Provider: "fake",
+		app, _ := fixture.App(t, cp.st, cp.tenant, "api", "prod")
+		work := []*agentv1.Workload{{AppId: app.String(), Provider: "fake",
 			Runtime: &bohuxv1.Runtime{Replicas: 1}}}
 		if _, err := cp.srv.Assign(ctx, cp.tenant, node, work,
 			store.Actor{ID: store.SystemActorID, Kind: store.ActorSystem}); err != nil {

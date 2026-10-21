@@ -28,17 +28,24 @@ var (
 	errRevokedNode     = errors.New("node is revoked")
 	errNoResolver      = errors.New("workloads reference secrets but no secret resolver is configured")
 	errSealedInRequest = errors.New("workloads must carry secret handles, not sealed values")
+	errUnknownApp      = errors.New("workload names an app that does not exist in this tenant")
+	errWrongEnv        = errors.New("workload environment does not match its app's environment")
 )
 
 // Assign writes the node's next generation: the full desired state, every workload
-// (ADR-0007). Workloads carry secret handles only. An open stream for the node is
-// woken to send it. It returns the new generation.
+// (ADR-0007). Workloads carry secret handles only. Each workload's App must exist in
+// the tenant; Assign fills its environment ID and the App and environment slugs that
+// name the provider's artifacts (ADR-0025). An open stream for the node is woken to
+// send it. It returns the new generation.
 func (s *Server) Assign(ctx context.Context, tenant, node uuid.UUID, workloads []*agentv1.Workload, actor store.Actor) (uint64, error) {
-	for _, w := range workloads {
+	named := make([]*agentv1.Workload, len(workloads))
+	for i, w := range workloads {
 		if len(w.GetSealedSecrets()) > 0 {
 			return 0, errSealedInRequest
 		}
+		named[i] = proto.Clone(w).(*agentv1.Workload)
 	}
+	workloads = named
 	var gen uint64
 	err := s.Store.InTenant(ctx, tenant, func(tx *store.Tx) error {
 		// Locking the node serializes generations per node. The head is locked alone
@@ -68,6 +75,11 @@ func (s *Server) Assign(ctx context.Context, tenant, node uuid.UUID, workloads [
 			return fmt.Errorf("read generation: %w", err)
 		}
 		gen = uint64(last) + 1
+		for _, w := range workloads {
+			if err := nameWorkload(ctx, tx, w); err != nil {
+				return err
+			}
+		}
 		payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(&agentv1.AssignmentPayload{
 			NodeId: node.String(), Generation: gen, IssuedAt: timestamppb.New(s.now()), Workloads: workloads,
 		})
@@ -86,6 +98,32 @@ func (s *Server) Assign(ctx context.Context, tenant, node uuid.UUID, workloads [
 	}
 	s.wake(node)
 	return gen, nil
+}
+
+// nameWorkload fills w's environment ID and slugs from its App's head row.
+func nameWorkload(ctx context.Context, tx *store.Tx, w *agentv1.Workload) error {
+	app, err := uuid.Parse(w.GetAppId())
+	if err != nil {
+		return fmt.Errorf("app %q: %w", w.GetAppId(), errUnknownApp)
+	}
+	var (
+		appSlug, envSlug string
+		env              uuid.UUID
+	)
+	err = tx.QueryRow(ctx, `SELECT a.slug, e.slug, e.id FROM apps_heads a
+		JOIN environments_heads e ON e.id = a.environment_id
+		WHERE a.id = $1 AND NOT a.deleted`, app).Scan(&appSlug, &envSlug, &env)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("app %s: %w", app, errUnknownApp)
+	}
+	if err != nil {
+		return fmt.Errorf("look up app %s: %w", app, err)
+	}
+	if w.GetEnvironmentId() != "" && w.GetEnvironmentId() != env.String() {
+		return fmt.Errorf("app %s: %w", app, errWrongEnv)
+	}
+	w.EnvironmentId, w.AppSlug, w.EnvironmentSlug = env.String(), appSlug, envSlug
+	return nil
 }
 
 // signedLatest builds the latest assignment for sending: resolves and seals each

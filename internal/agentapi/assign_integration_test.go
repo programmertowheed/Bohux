@@ -5,6 +5,7 @@ package agentapi
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/internal/pki"
 	"github.com/bohumix/bohux/internal/store"
+	"github.com/bohumix/bohux/internal/store/fixture"
 )
 
 type fakeSecrets map[string]string
@@ -65,8 +67,10 @@ func TestAssignments(t *testing.T) {
 	h := newHarness(t)
 	a := h.register("vps-1")
 	node := uuid.MustParse(a.node)
+	app1, env1 := fixture.App(t, h.st, h.tenant, "api", "prod")
+	app2, _ := fixture.App(t, h.st, h.tenant, "worker", "staging")
 
-	gen, err := h.srv.Assign(ctx, h.tenant, node, []*agentv1.Workload{workload("app-1")}, system)
+	gen, err := h.srv.Assign(ctx, h.tenant, node, []*agentv1.Workload{workload(app1.String())}, system)
 	if err != nil || gen != 1 {
 		t.Fatalf("Assign = %d, %v", gen, err)
 	}
@@ -116,6 +120,18 @@ func TestAssignments(t *testing.T) {
 		}
 	})
 
+	t.Run("the control plane names each workload from its App", func(t *testing.T) {
+		p := &agentv1.AssignmentPayload{}
+		if err := proto.Unmarshal(got.GetPayload(), p); err != nil {
+			t.Fatal(err)
+		}
+		w := p.GetWorkloads()[0]
+		if w.GetAppSlug() != "api" || w.GetEnvironmentSlug() != "prod" || w.GetEnvironmentId() != env1.String() {
+			t.Errorf("workload named %q/%q in %q, want api/prod in %s",
+				w.GetAppSlug(), w.GetEnvironmentSlug(), w.GetEnvironmentId(), env1)
+		}
+	})
+
 	t.Run("nothing secret is stored", func(t *testing.T) {
 		var payload []byte
 		err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
@@ -135,7 +151,7 @@ func TestAssignments(t *testing.T) {
 	})
 
 	t.Run("a new generation is pushed to the open stream", func(t *testing.T) {
-		gen, err := h.srv.Assign(ctx, h.tenant, node, []*agentv1.Workload{workload("app-1"), workload("app-2")}, system)
+		gen, err := h.srv.Assign(ctx, h.tenant, node, []*agentv1.Workload{workload(app1.String()), workload(app2.String())}, system)
 		if err != nil || gen != 2 {
 			t.Fatalf("Assign = %d, %v", gen, err)
 		}
@@ -178,7 +194,7 @@ func TestAssignments(t *testing.T) {
 	t.Run("an up-to-date agent is not sent the assignment again", func(t *testing.T) {
 		closeStream(stream, cancel)
 		b := h.register("vps-2")
-		if _, err := h.srv.Assign(ctx, h.tenant, uuid.MustParse(b.node), []*agentv1.Workload{workload("x")}, system); err != nil {
+		if _, err := h.srv.Assign(ctx, h.tenant, uuid.MustParse(b.node), []*agentv1.Workload{workload(app1.String())}, system); err != nil {
 			t.Fatal(err)
 		}
 		req := hello(b.node, "0.3.0")
@@ -199,9 +215,33 @@ func TestAssignments(t *testing.T) {
 		if err == nil {
 			t.Error("assigned to an unknown node")
 		}
-		_, err = h.srv.Assign(ctx, h.tenant, node, []*agentv1.Workload{{AppId: "x", SealedSecrets: []byte{1}}}, system)
+		_, err = h.srv.Assign(ctx, h.tenant, node, []*agentv1.Workload{{AppId: app1.String(), SealedSecrets: []byte{1}}}, system)
 		if err == nil {
 			t.Error("accepted pre-sealed secrets")
+		}
+	})
+
+	t.Run("assigning an unknown app or the wrong environment fails", func(t *testing.T) {
+		tests := []struct {
+			name string
+			w    *agentv1.Workload
+			want error
+		}{
+			{"not an ID", workload("app-1"), errUnknownApp},
+			{"no such app", workload(uuid.Must(uuid.NewV7()).String()), errUnknownApp},
+			{"other environment", func() *agentv1.Workload {
+				w := workload(app1.String())
+				w.EnvironmentId = uuid.Must(uuid.NewV7()).String()
+				return w
+			}(), errWrongEnv},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := h.srv.Assign(ctx, h.tenant, node, []*agentv1.Workload{tt.w}, system)
+				if !errors.Is(err, tt.want) {
+					t.Errorf("Assign = %v, want %v", err, tt.want)
+				}
+			})
 		}
 	})
 
