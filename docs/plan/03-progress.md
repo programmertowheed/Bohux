@@ -38,17 +38,16 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S10a — routes and ingress design, proto (⏳, next to start)
+- **Slice:** S10b — routes in the store and the API (⏳, next to start)
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** ADR-0034 (drafted, proposed, uncommitted if not in git) → proto
-  `bohux.v1.Route`, `App.routes`, `Workload.routes`, `WorkloadStatus.ingress_loaded`,
-  reason `INGRESS_FAILED`; regenerate; split S10 in this file.
+- **Exact next step:** migration 00018 (`apps_revisions.routes`, `route_hosts`), then
+  the App write path and validation (S10b list).
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S10a (routes and the node
-> ingress: ADR-0034, proto) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S10b (routes in the store and
+> the API) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
 > and ADR-0034. Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*).
 > Verify with build, vet, golangci-lint (also with the integration tag), unit and
 > integration tests. Tick boxes, update the tracker and the next session prompt,
@@ -76,6 +75,7 @@ work is in right now*.
 | O17 | Accept or reject ADR-0031 (agent-side fallback: previous workload + deadline, applied only when the control plane cannot compensate). Changes agent.proto. Built on already | S9b onward |
 | O18 | Accept or reject ADR-0032 (`App.provider_options` → `Spec.Raw`, owner-only; Docker accepts external networks and named volumes). Changes `app.proto` and agent.proto. Built on already | S9c onward |
 | O19 | Accept or reject ADR-0033 (nightly backup: Temporal schedule in the control plane, read-only `BYPASSRLS` role `bohux_backup`, local directory with retention 7; S3 deferred). Built on already | S9f |
+| O20 | Accept or reject ADR-0034 (routes on Apps, hosts unique across tenants, routes are App state, the agent programs its node's Caddy, providers report endpoints). Changes app.proto and agent.proto. Built on already | S10 |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -766,6 +766,48 @@ Split into sub-slices, one session each. Includes S7d (OpenBao auto-unseal).
       by hand, restore), `control-plane-upgrade.md`, `openbao-unseal-key.md`,
       `infra-upgrade.md`
 
+## v0.2 slices
+
+Scope: `02-roadmap.md` v0.2. Ingress first: zero-downtime deploys, TLS and domains
+build on it, and the CLI warns about host-port downtime until it lands.
+
+### S10 — Routes and the node ingress 🔄
+Shape: ADR-0034 (O20). Split into sub-slices, one session each.
+
+#### S10a — design and contract ✅
+- [x] Proposed ADR-0034 (O20): `App.routes` (host, port), hosts unique across tenants
+      via `route_hosts`, routes are App state (re-assign at once, no deploy), the agent
+      owns its node's Caddy config (one `POST /load`, written to disk), providers
+      report endpoints, Caddy in the infra project with its admin API on a Unix
+      socket, health includes the loaded route
+- [x] Proto: `bohux.v1.Route`, `App.routes`, `Create/UpdateAppRequest.routes`,
+      `Workload.routes`, `WorkloadStatus.ingress_loaded`, reason `INGRESS_FAILED`
+
+#### S10b — routes in the store and the API ⏳
+- [ ] Migration: `apps_revisions.routes` (jsonb), `route_hosts` (host primary key,
+      tenant RLS); one write path in the App create/update/delete transactions
+- [ ] Validation (lowercase DNS name, port among runtime ports), `ALREADY_EXISTS` for
+      a taken host without revealing the tenant
+- [ ] `RouteAppTx` (as `ScaleAppTx`): changed routes re-assign the running workload;
+      `AssignRelease` carries the App's current routes; rollback test first
+
+#### S10c — provider endpoints ⏳
+- [ ] `provider.Status.Endpoints`; Docker joins Apps with routes to `bohux-ingress`
+      under the project alias; conformance checks endpoints
+
+#### S10d — the agent's ingress ⏳
+- [ ] Render the node's Caddy JSON from every workload's routes; write
+      `ingress/caddy.json`; `POST /load` over the Unix socket when it changed;
+      `INGRESS_FAILED` on refusal; `ingress_loaded` in status; health gate waits on it
+- [ ] Real-Caddy integration test (`.localhost` hosts, internal CA)
+
+#### S10e — Caddy in the install bundle ⏳
+- [ ] `caddy` service (pinned), ports 80/443, `bohux-ingress` network, admin socket
+      directory, `BOHUX_ACME_EMAIL`; self-deploy test serves an App on a route
+
+#### S10f — zero-downtime deploys (needs its own ADR) ⏳
+- [ ] Two Releases live during a deploy, Caddy swaps upstreams, the old one stops after
+
 ## Known gaps and notes
 - **`buf.lock` missing.** Whoever has registry access (CI, or a local machine) runs
   `buf dep update`, commits `buf.lock`, and removes the "Resolve deps if buf.lock is
@@ -852,7 +894,8 @@ Split into sub-slices, one session each. Includes S7d (OpenBao auto-unseal).
 - S9f done: ADR-0033 proposed (O19), nightly backup schedule, read-only backup role,
   installer option, runbooks for backup/restore, control-plane upgrade, OpenBao unseal
   key, and infra upgrades. S7d closed (done in S9d). **S9 and v0.1 are done** except O2.
-- **Next:** S10a, ingress (v0.2). ADR-0034 drafted.
+- S10 split into S10a–S10f. S10a done: ADR-0034 proposed (O20), proto for routes.
+- **Next:** S10b.
 
 ### 2026-10-21 (auto run 2, S6a) — branch `claude/relaxed-rubin-76m7dl`
 - Owner asked again for an automatic run, slice after slice, until the session ends.

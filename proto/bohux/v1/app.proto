@@ -29,6 +29,19 @@ message App {
   // ADR-0032), e.g. the Docker provider's external `networks` and `volumes`. Setting
   // them requires the owner role.
   google.protobuf.Struct provider_options = 7;
+  // HTTP(S) hosts the node's ingress serves this App on (ADR-0034). App state, not
+  // Release state: changing them takes effect without a deploy, and a rollback never
+  // moves them.
+  repeated Route routes = 8;
+}
+
+// One host served by the node's ingress (Caddy, ADR-0019) with automatic HTTPS.
+message Route {
+  // Lowercase DNS name, e.g. "api.example.com". No wildcard, port, or path. Unique
+  // across all tenants.
+  string host = 1 [(google.api.field_behavior) = REQUIRED];
+  // The container port requests go to; must be one of the App's runtime ports.
+  int32 port = 2 [(google.api.field_behavior) = REQUIRED];
 }
 
 // Where a Release's artifact comes from.
@@ -120,6 +133,7 @@ message CreateAppRequest {
   string idempotency_key = 6 [(google.api.field_behavior) = REQUIRED];
   // Owner role required when non-empty (ADR-0032).
   google.protobuf.Struct provider_options = 7;
+  repeated Route routes = 8;
 }
 
 message CreateAppResponse {
@@ -154,7 +168,8 @@ message ListAppsResponse {
   string next_page_token = 2;
 }
 
-// Replaces source, runtime, and secrets as a whole.
+// Replaces source, runtime, secrets, and routes as a whole. Changed routes reach a
+// running App at once (ADR-0034); the rest waits for the next deploy.
 message UpdateAppRequest {
   string id = 1 [(google.api.field_behavior) = REQUIRED];
   Source source = 2 [(google.api.field_behavior) = REQUIRED];
@@ -164,6 +179,7 @@ message UpdateAppRequest {
   string idempotency_key = 6 [(google.api.field_behavior) = REQUIRED];
   // Replaces the App's provider options; owner role required to change them (ADR-0032).
   google.protobuf.Struct provider_options = 7;
+  repeated Route routes = 8;
 }
 
 message UpdateAppResponse {

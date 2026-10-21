@@ -143,6 +143,9 @@ message Workload {
   google.protobuf.Timestamp fallback_after = 13;
   // The App's provider options as JSON, passed to the provider as Spec.Raw (ADR-0032).
   bytes provider_options = 14;
+  // Hosts the node's ingress serves this workload on (ADR-0034). Not part of the
+  // provider spec: changing them reloads the ingress, never the containers.
+  repeated bohux.v1.Route routes = 15;
 }
 
 // The plaintext of Workload.sealed_secrets before sealing (ADR-0008, ADR-0024): the
@@ -166,8 +169,12 @@ message WorkloadStatus {
   string release_id = 2;
   WorkloadState state = 3;
   int32 ready_replicas = 4;
-  // Set when state is FAILED.
+  // Set when state is FAILED. Reasons include SPEC_INVALID and PROVIDER_MISSING
+  // (permanent), and INGRESS_FAILED (the ingress refused the config; retried).
   bohux.v1.ErrorDetail failure = 5;
+  // The ingress serves this workload's routes from its endpoints (ADR-0034). Always
+  // false for a workload without routes.
+  bool ingress_loaded = 6;
 }
 
 enum WorkloadState {
