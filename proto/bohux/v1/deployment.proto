@@ -3,6 +3,7 @@ syntax = "proto3";
 package bohux.v1;
 
 import "bohux/v1/common.proto";
+import "bohux/v1/options.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -61,15 +62,27 @@ enum DeploymentState {
 }
 
 service DeploymentService {
-  rpc CreateDeployment(CreateDeploymentRequest) returns (CreateDeploymentResponse);
-  rpc GetDeployment(GetDeploymentRequest) returns (GetDeploymentResponse);
-  rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse);
+  rpc CreateDeployment(CreateDeploymentRequest) returns (CreateDeploymentResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
+  rpc GetDeployment(GetDeploymentRequest) returns (GetDeploymentResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
   // Sends the current state, then every change until the Deployment is terminal.
-  rpc WatchDeployment(WatchDeploymentRequest) returns (stream WatchDeploymentResponse);
+  rpc WatchDeployment(WatchDeploymentRequest) returns (stream WatchDeploymentResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_HIDDEN;
+  }
   // Convenience: CreateDeployment of an earlier Release with `rollback_of` set. There is
   // no other rollback path (ADR-0010).
-  rpc Rollback(RollbackRequest) returns (RollbackResponse);
-  rpc CancelDeployment(CancelDeploymentRequest) returns (CancelDeploymentResponse);
+  rpc Rollback(RollbackRequest) returns (RollbackResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
+  rpc CancelDeployment(CancelDeploymentRequest) returns (CancelDeploymentResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
 }
 
 message CreateDeploymentRequest {

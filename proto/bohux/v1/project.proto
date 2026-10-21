@@ -4,6 +4,7 @@ package bohux.v1;
 
 import "bohux/v1/common.proto";
 import "bohux/v1/identity.proto";
+import "bohux/v1/options.proto";
 import "google/api/field_behavior.proto";
 
 option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
@@ -34,16 +35,32 @@ message RoleBinding {
 }
 
 service ProjectService {
-  rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse);
-  rpc GetProject(GetProjectRequest) returns (GetProjectResponse);
-  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse);
-  rpc UpdateProject(UpdateProjectRequest) returns (UpdateProjectResponse);
-  rpc DeleteProject(DeleteProjectRequest) returns (DeleteProjectResponse);
+  rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_MUTATING;
+  }
+  rpc GetProject(GetProjectRequest) returns (GetProjectResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  rpc UpdateProject(UpdateProjectRequest) returns (UpdateProjectResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_MUTATING;
+  }
+  rpc DeleteProject(DeleteProjectRequest) returns (DeleteProjectResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
 
   // Creates the binding, or changes the role of an existing one for the same principal.
-  rpc SetRoleBinding(SetRoleBindingRequest) returns (SetRoleBindingResponse);
-  rpc DeleteRoleBinding(DeleteRoleBindingRequest) returns (DeleteRoleBindingResponse);
-  rpc ListRoleBindings(ListRoleBindingsRequest) returns (ListRoleBindingsResponse);
+  rpc SetRoleBinding(SetRoleBindingRequest) returns (SetRoleBindingResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
+  rpc DeleteRoleBinding(DeleteRoleBindingRequest) returns (DeleteRoleBindingResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
+  rpc ListRoleBindings(ListRoleBindingsRequest) returns (ListRoleBindingsResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
 }
 
 message CreateProjectRequest {

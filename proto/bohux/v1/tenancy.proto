@@ -3,6 +3,7 @@ syntax = "proto3";
 package bohux.v1;
 
 import "bohux/v1/common.proto";
+import "bohux/v1/options.proto";
 import "google/api/field_behavior.proto";
 
 option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
@@ -16,7 +17,9 @@ message Tenant {
 
 service TenantService {
   // Returns the caller's tenant. There is no tenant_id in the request (rule 10).
-  rpc GetTenant(GetTenantRequest) returns (GetTenantResponse);
+  rpc GetTenant(GetTenantRequest) returns (GetTenantResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
 }
 
 message GetTenantRequest {}

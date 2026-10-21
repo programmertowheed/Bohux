@@ -3,6 +3,7 @@ syntax = "proto3";
 package bohux.v1;
 
 import "bohux/v1/identity.proto";
+import "bohux/v1/options.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
@@ -50,9 +51,15 @@ message Revision {
 }
 
 service AuditService {
-  rpc ListAuditEvents(ListAuditEventsRequest) returns (ListAuditEventsResponse);
-  rpc ListRevisions(ListRevisionsRequest) returns (ListRevisionsResponse);
-  rpc GetRevision(GetRevisionRequest) returns (GetRevisionResponse);
+  rpc ListAuditEvents(ListAuditEventsRequest) returns (ListAuditEventsResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  rpc ListRevisions(ListRevisionsRequest) returns (ListRevisionsResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  rpc GetRevision(GetRevisionRequest) returns (GetRevisionResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
 }
 
 // Newest first. Filters are optional and combine with AND.

@@ -3,6 +3,7 @@ syntax = "proto3";
 package bohux.v1;
 
 import "bohux/v1/common.proto";
+import "bohux/v1/options.proto";
 import "google/api/field_behavior.proto";
 
 option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
@@ -39,10 +40,16 @@ enum WebhookFlavor {
 
 service WebhookService {
   // Creates the webhook and returns its signing secret, once.
-  rpc CreateWebhook(CreateWebhookRequest) returns (CreateWebhookResponse);
-  rpc ListWebhooks(ListWebhooksRequest) returns (ListWebhooksResponse);
+  rpc CreateWebhook(CreateWebhookRequest) returns (CreateWebhookResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_HIDDEN;
+  }
+  rpc ListWebhooks(ListWebhooksRequest) returns (ListWebhooksResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
   // Deleting a webhook revokes it: later requests are refused.
-  rpc DeleteWebhook(DeleteWebhookRequest) returns (DeleteWebhookResponse);
+  rpc DeleteWebhook(DeleteWebhookRequest) returns (DeleteWebhookResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
 }
 
 message CreateWebhookRequest {

@@ -3,6 +3,7 @@ syntax = "proto3";
 package bohux.v1;
 
 import "bohux/v1/common.proto";
+import "bohux/v1/options.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -50,12 +51,20 @@ enum NodeState {
 
 service NodeService {
   // Returns a one-time token the agent installer passes to AgentService.Register.
-  rpc CreateBootstrapToken(CreateBootstrapTokenRequest) returns (CreateBootstrapTokenResponse);
-  rpc GetNode(GetNodeRequest) returns (GetNodeResponse);
-  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+  rpc CreateBootstrapToken(CreateBootstrapTokenRequest) returns (CreateBootstrapTokenResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_HIDDEN;
+  }
+  rpc GetNode(GetNodeRequest) returns (GetNodeResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
   // Revokes the node's certificate. Rotating the secrets it held is a separate step
   // (ADR-0008).
-  rpc RevokeNode(RevokeNodeRequest) returns (RevokeNodeResponse);
+  rpc RevokeNode(RevokeNodeRequest) returns (RevokeNodeResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
 }
 
 message CreateBootstrapTokenRequest {

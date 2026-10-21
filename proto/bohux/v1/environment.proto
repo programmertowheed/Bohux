@@ -3,6 +3,7 @@ syntax = "proto3";
 package bohux.v1;
 
 import "bohux/v1/common.proto";
+import "bohux/v1/options.proto";
 import "google/api/field_behavior.proto";
 
 option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
@@ -37,11 +38,21 @@ message ProviderBinding {
 }
 
 service EnvironmentService {
-  rpc CreateEnvironment(CreateEnvironmentRequest) returns (CreateEnvironmentResponse);
-  rpc GetEnvironment(GetEnvironmentRequest) returns (GetEnvironmentResponse);
-  rpc ListEnvironments(ListEnvironmentsRequest) returns (ListEnvironmentsResponse);
-  rpc UpdateEnvironment(UpdateEnvironmentRequest) returns (UpdateEnvironmentResponse);
-  rpc DeleteEnvironment(DeleteEnvironmentRequest) returns (DeleteEnvironmentResponse);
+  rpc CreateEnvironment(CreateEnvironmentRequest) returns (CreateEnvironmentResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_MUTATING;
+  }
+  rpc GetEnvironment(GetEnvironmentRequest) returns (GetEnvironmentResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  rpc ListEnvironments(ListEnvironmentsRequest) returns (ListEnvironmentsResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  rpc UpdateEnvironment(UpdateEnvironmentRequest) returns (UpdateEnvironmentResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
+  rpc DeleteEnvironment(DeleteEnvironmentRequest) returns (DeleteEnvironmentResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
 }
 
 message CreateEnvironmentRequest {

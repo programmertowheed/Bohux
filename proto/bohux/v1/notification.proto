@@ -4,6 +4,7 @@ package bohux.v1;
 
 import "bohux/v1/common.proto";
 import "bohux/v1/deployment.proto";
+import "bohux/v1/options.proto";
 import "google/api/field_behavior.proto";
 
 option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
@@ -33,14 +34,20 @@ enum NotificationKind {
   NOTIFICATION_KIND_SLACK = 1;
   // A Discord channel webhook.
   NOTIFICATION_KIND_DISCORD = 2;
-  // Any HTTPS endpoint: the Deployment as JSON, signed with X-Bohux-Signature.
+  // Any HTTPS endpoint: a JSON summary of the outcome, signed with X-Bohux-Signature.
   NOTIFICATION_KIND_WEBHOOK = 3;
 }
 
 service NotificationService {
-  rpc CreateNotificationChannel(CreateNotificationChannelRequest) returns (CreateNotificationChannelResponse);
-  rpc ListNotificationChannels(ListNotificationChannelsRequest) returns (ListNotificationChannelsResponse);
-  rpc DeleteNotificationChannel(DeleteNotificationChannelRequest) returns (DeleteNotificationChannelResponse);
+  rpc CreateNotificationChannel(CreateNotificationChannelRequest) returns (CreateNotificationChannelResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_HIDDEN;
+  }
+  rpc ListNotificationChannels(ListNotificationChannelsRequest) returns (ListNotificationChannelsResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  rpc DeleteNotificationChannel(DeleteNotificationChannelRequest) returns (DeleteNotificationChannelResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
 }
 
 message CreateNotificationChannelRequest {

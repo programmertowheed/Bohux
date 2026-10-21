@@ -21,6 +21,7 @@ import (
 	"github.com/bohumix/bohux/internal/cli"
 	"github.com/bohumix/bohux/internal/controlplane"
 	"github.com/bohumix/bohux/internal/ingress"
+	"github.com/bohumix/bohux/internal/mcp"
 	"github.com/bohumix/bohux/internal/provider"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/version"
@@ -41,7 +42,8 @@ commands:
   admin backup    write an encrypted archive of Bohux's state
   admin restore   restore an archive onto an empty install
   agent register  enroll this node with a bootstrap token (once)
-  agent run       run the node agent`)
+  agent run       run the node agent
+  mcp             serve the API as MCP tools over stdio, for AI agents`)
 
 // Environment fallbacks for flags. See docs/reference/config.md.
 const (
@@ -330,6 +332,17 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 		return nil
 	case "agent":
 		return agentCommand(ctx, args[1:], getenv, d)
+	case "mcp":
+		// An MCP server over stdio for AI agents (ADR-0018); a client of the API.
+		token := getenv(cli.EnvToken)
+		if token == "" {
+			return fmt.Errorf("mcp: set %s to an API token (a scoped, short-lived one)", cli.EnvToken)
+		}
+		base := getenv(cli.EnvAPIURL)
+		if base == "" {
+			base = cli.DefaultAPIURL
+		}
+		return mcp.Run(ctx, mcp.Config{APIURL: base, Token: token, HTTP: cli.HTTPClient(base)})
 	case "deploy", "rollback", "scale", "logs", "exec", "project", "env", "app", "route", "secret", "node", "webhook", "channel":
 		if err := cli.Run(ctx, args[0], args[1:], d.stdin, stdout, getenv); err != nil {
 			if errors.Is(err, cli.ErrUsage) {

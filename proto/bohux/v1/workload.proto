@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package bohux.v1;
 
+import "bohux/v1/options.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -11,9 +12,13 @@ option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
 // (ADR-0007). Exec is bidirectional, so browsers cannot use it; the CLI can. That is
 // allowed: rule 8 forbids the UI having more than the CLI, not less.
 service WorkloadService {
-  rpc StreamLogs(StreamLogsRequest) returns (stream StreamLogsResponse);
+  rpc StreamLogs(StreamLogsRequest) returns (stream StreamLogsResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_HIDDEN;
+  }
   // The first request must carry `start`. Every session is audited.
-  rpc Exec(stream ExecRequest) returns (stream ExecResponse);
+  rpc Exec(stream ExecRequest) returns (stream ExecResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_HIDDEN;
+  }
 }
 
 message StreamLogsRequest {

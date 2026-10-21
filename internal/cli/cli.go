@@ -127,7 +127,7 @@ func (c *command) connect() error {
 	if base == "" {
 		base = DefaultAPIURL
 	}
-	hc := httpClient(base)
+	hc := HTTPClient(base)
 	c.projects = bohuxv1connect.NewProjectServiceClient(hc, base)
 	c.envs = bohuxv1connect.NewEnvironmentServiceClient(hc, base)
 	c.apps = bohuxv1connect.NewAppServiceClient(hc, base)
@@ -141,9 +141,9 @@ func (c *command) connect() error {
 	return nil
 }
 
-// httpClient speaks HTTP/2 to the API: cleartext (h2c) for http:// URLs, which the
+// HTTPClient speaks HTTP/2 to the API: cleartext (h2c) for http:// URLs, which the
 // control plane serves (streams need HTTP/2), and TLS otherwise.
-func httpClient(base string) *http.Client {
+func HTTPClient(base string) *http.Client {
 	if strings.HasPrefix(base, "http://") {
 		return &http.Client{Transport: &http2.Transport{
 			AllowHTTP: true,

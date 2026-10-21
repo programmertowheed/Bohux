@@ -155,3 +155,42 @@ Apps are named by slug: `bohux deploy api -p shop -e prod`.
 - `bohux exec <app> -e <env> [--instance <name>] -- <command> [args…]` runs a command in
   one of the App's instances and exits with its status. v0.1 forwards no standard input
   and has no TTY. Every session is audited; its input and output are not recorded.
+
+## CLI: resource commands (ADR-0036)
+
+`bohux <noun> <verb>`, with `-p` (or `BOHUX_PROJECT`) and `-e` as above, `-o json` for
+the API's own JSON, and `--idempotency-key` for safe retries:
+
+- `project list|create`, `env list|create --node <slug>`, `node list|token <slug>`
+- `app list|show|create` (`--image` or `--git`, `--port C[:H]`, `--health PATH[:PORT]`,
+  `--route HOST[:PORT]`, `--replicas`)
+- `route list|add|remove <app> <host[:port]>`: takes effect without a deploy
+- `secret list|set <KEY> [--app <app>]`: the value is read from stdin, never an argument
+- `webhook list|create|remove <app>` (`--branch`, `--flavor github|generic`): create
+  prints the URL and the signing secret, once (ADR-0037)
+- `channel list|create|remove` (`--kind slack|discord|webhook`, `--state …`): the URL
+  is read from stdin (ADR-0038)
+
+## `bohux mcp` (ADR-0018)
+
+| Environment | Default | Meaning |
+|---|---|---|
+| `BOHUX_API_URL` | `http://127.0.0.1:7400` | The API, as for the CLI. |
+| `BOHUX_TOKEN` | none, required | The token every tool call uses. |
+
+Serves the Model Context Protocol on stdin/stdout for AI agents (Claude Code, Cursor,
+…): one tool per API RPC, named after it (`ListApps`, `Rollback`, …), with its request
+message as the input schema. Each RPC's `ToolPolicy` in `proto/` sets the hints:
+read-only tools say so, destructive ones (deploy, rollback, scale, delete, revoke) ask
+the client to confirm with a human. RPCs that carry a credential (`SetSecret`, token,
+webhook, and channel creation) and streams (`StreamLogs`, `Exec`, `WatchDeployment`)
+are never tools: secret values never pass through a model's context.
+
+**Give the agent its own token, scoped to one project and the lowest role that does
+the job, with an expiry** (`viewer` to look, `deployer` to deploy). Everything it does
+is checked and audited as that token, like any other client (rules 8 and 10).
+
+```json
+{"mcpServers": {"bohux": {"command": "bohux", "args": ["mcp"],
+  "env": {"BOHUX_API_URL": "https://bohux.example.com", "BOHUX_TOKEN": "bxa_…"}}}}
+```

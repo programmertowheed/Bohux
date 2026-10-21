@@ -4,6 +4,7 @@ package bohux.v1;
 
 import "bohux/v1/app.proto";
 import "bohux/v1/common.proto";
+import "bohux/v1/options.proto";
 import "google/api/field_behavior.proto";
 
 option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
@@ -47,9 +48,15 @@ enum ReleaseState {
 // Build is not its own service in v0.1: CreateRelease from a Git ref starts the build
 // workflow.
 service ReleaseService {
-  rpc CreateRelease(CreateReleaseRequest) returns (CreateReleaseResponse);
-  rpc GetRelease(GetReleaseRequest) returns (GetReleaseResponse);
-  rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse);
+  rpc CreateRelease(CreateReleaseRequest) returns (CreateReleaseResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_MUTATING;
+  }
+  rpc GetRelease(GetReleaseRequest) returns (GetReleaseResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
 }
 
 // With no `from`, builds or imports from the App's current source.

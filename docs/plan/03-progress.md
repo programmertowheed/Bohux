@@ -38,16 +38,16 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S14 — next v0.2 item, not chosen yet (⏳)
+- **Slice:** S15 — next v0.2 item, not chosen yet (⏳)
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** next v0.2 item. Candidates: the MCP server (ADR-0018), the
-  read-only web UI (ADR-0012/0013), Buildpacks/Nixpacks, team invites.
+- **Exact next step:** next v0.2 item. Candidates: the read-only web UI
+  (ADR-0012/0013), team invites, Buildpacks/Nixpacks, the resource view.
 
 ## Next session prompt
 
 > Read CLAUDE.md and docs/plan/03-progress.md, then pick and split the next v0.2 slice
-> (S14) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
+> (S15) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
 > and ADR-0034. Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*).
 > Verify with build, vet, golangci-lint (also with the integration tag), unit and
 > integration tests. Tick boxes, update the tracker and the next session prompt,
@@ -903,6 +903,20 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       Postgres or a response) and the activities (real TLS posts, the webhook's
       signature, other projects and states skipped)
 
+### S14 — MCP server (ADR-0018, accepted) ✅
+- [x] `proto/bohux/v1/options.proto`: method option `ToolPolicy` (read-only, mutating,
+      destructive, hidden), set on every RPC; credentials and streams hidden
+- [x] `internal/mcp`: tools read from the proto registry at run time (no hand list),
+      JSON Schema from the request message (output-only fields left out, required
+      kept, idempotency key filled in), dynamic Connect calls with the user's token,
+      API errors as tool errors; `bohux mcp` over stdio. Dependency
+      `github.com/modelcontextprotocol/go-sdk` v1.2.0 (the newest on Go 1.23; ADR-0018
+      took the dependency)
+- [x] Tests: every RPC has a policy and no tool carries a credential; schemas; a real
+      MCP client against a real API (list, create without a key, invalid input, bad
+      token); stdio smoke test against the live install
+- [x] Docs: `docs/reference/config.md` (`bohux mcp`, scoped tokens; the resource commands)
+
 ## Known gaps and notes
 - **CI has not run on this branch.** `ci.yml` triggers on pushes to `main` and on
   pull requests; there is no PR for `claude/relaxed-rubin-76m7dl`, so every check so
@@ -1006,7 +1020,8 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 - S12 done: Git push webhooks (ADR-0037 proposed, O23), API, CLI, tests.
 - Found: CI never ran on this branch (no PR); added as O24.
 - S13 done: deploy notifications (ADR-0038 proposed, O25), API, workflow, CLI, tests.
-- **Next:** S14.
+- S14 done: `bohux mcp` (ADR-0018), tool policies in proto, tests.
+- **Next:** S15.
 
 ### 2026-10-21 (auto run 2, S6a) — branch `claude/relaxed-rubin-76m7dl`
 - Owner asked again for an automatic run, slice after slice, until the session ends.
