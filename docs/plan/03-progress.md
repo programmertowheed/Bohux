@@ -38,27 +38,27 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S4c — agent process and stream (⏳, next to start)
-- **Exact next step:** `internal/agent` state directory (keys, cert, CA, node id) and
-  `bohux agent register`, then the `Connect` stream with `Hello` and the version check.
+- **Slice:** S4c2 — agent process (⏳, next to start)
+- **Exact next step:** `internal/agent` state directory (keys, cert, pinned CA, node
+  id, signing key) and `bohux agent register`.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S4c (agent process and
-> stream) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0003, ADR-0020 items
-> 8-9, ADR-0024. Build internal/agent: a 0700 state directory holding the ECDSA key,
-> X25519 sealing key, client cert, pinned CA, node id, and signing public key;
-> `bohux agent register` (pins the CA by --ca-cert-sha256, refuses without Docker
-> live-restore, behind an interface so tests need no Docker); `bohux agent run` dialing
-> Connect over mTLS and sending Hello. On the control plane, implement Connect: require
-> a node-CA client cert, map it to the node (refuse revoked nodes), accept protocol N
-> and N-1 and agent versions of the same or previous minor, else send VersionRejected
-> and close; update last_seen_at and the node's online/offline state. Reconnect with
-> backoff in the agent. Test over real mTLS on the local Postgres (accepted, rejected
-> version, revoked node, no client cert). If the slice is too big, stop at a clean
-> point and split it in the tracker. Verify with build, vet, golangci-lint (also with
-> the integration tag) and tests. Tick boxes, update the tracker and the next session
-> prompt, commit, push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S4c2 (agent process) on
+> branch `claude/relaxed-rubin-76m7dl`, following ADR-0003, ADR-0020 item 9, ADR-0024.
+> Build internal/agent: a 0700 state directory holding the ECDSA key, X25519 sealing
+> key, client cert, pinned CA, node id, and assignment signing public key;
+> `bohux agent register --control-plane <addr> --token <bxb_...> --ca-cert-sha256 <hex>`
+> (pins the CA by hash on the first TLS handshake, refuses without Docker live-restore
+> via an interface so tests need no Docker); `bohux agent run` dialing Connect over
+> mTLS, sending Hello, handling Ping and VersionRejected (keep running, retry later),
+> reconnecting with capped exponential backoff, and closing the stream with
+> CloseRequest on shutdown (see the S4c1 note). Document the flags in
+> docs/reference/config.md. Test against a real control-plane agent listener on the
+> local Postgres: register, connect, node online, agent stopped, node offline, wrong CA
+> pin refused, live-restore off refused. Verify with build, vet, golangci-lint (also
+> with the integration tag) and tests. Tick boxes, update the tracker and the next
+> session prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -298,9 +298,21 @@ Split into sub-slices, one session each.
       transaction. Tested over real TLS: bad CSR leaves the token unspent; reuse,
       expiry, wrong kind, slug conflict, short sealing key refused
 
-#### S4c — agent process and stream ⏳
-- [ ] `bohux agent`: register once, keep keys and cert on disk, dial `Connect` over
-      mTLS, `Hello`; version skew check N-1 minor with `VersionRejected` (ADR-0020)
+#### S4c1 — control-plane Connect ✅
+- [x] `Connect`: identity from the verified client cert (`WithPeerCert`), first message
+      must be `Hello` for that node, revoked/unknown nodes refused; skew policy in
+      `internal/version` (protocol N and N-1; agent minor equal or one behind, same
+      major; newer agents refused; `dev` control plane accepts any) →
+      `VersionRejected` and node state `rejected`; online while open, pinged, offline
+      when the newest stream for the node ends (a quick reconnect is not marked offline)
+- **Note:** a client that only cancels its context does not reset an HTTP/2 stream
+  whose request body is open; the agent must `CloseRequest` on shutdown. A crashed
+  agent drops TCP, which the server sees. Half-open links: once StatusReports flow
+  (S4d/S4e), close streams silent for 3 report intervals.
+
+#### S4c2 — agent process ⏳
+- [ ] `bohux agent register` / `bohux agent run`: state dir, CA pin, mTLS `Connect`,
+      `Hello`, reconnect with backoff, `VersionRejected` handled without stopping
 - [ ] Refuse to register without Docker `live-restore` (ADR-0020)
 
 #### S4d — assignments ⏳
@@ -377,6 +389,7 @@ Split into sub-slices, one session each.
 - S2a done: ADR-0021 (goose on pgx).
 - S3e split into S3e1–S3e3, all done: Project, Environment, App services. **S3 done.**
 - Split S4 into S4a–S4e. S4a done: ADR-0024 proposed (O9).
+- S4c split; S4c1 done: control-plane `Connect` with skew policy and online state.
 - S4b split into S4b1/S4b2, both done: `internal/pki`, NodeService, data dir, agent
   TLS listener, Register.
 - S3d done: `internal/secrets` redaction, access-log interceptor, rule 3 test.

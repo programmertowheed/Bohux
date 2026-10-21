@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -34,6 +35,16 @@ type Server struct {
 	PKI   *pki.Authority
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
+	// Version is the control plane version agents are checked against; empty means
+	// version.Version (ADR-0020 item 8).
+	Version string
+	// PingInterval is how often an open stream is pinged and last_seen_at written;
+	// zero means 30 seconds.
+	PingInterval time.Duration
+
+	// sessions maps a node ID to its newest open stream. One control-plane process
+	// owns all streams in v0.1 (ADR-0024 revisits this with HA).
+	sessions sync.Map
 }
 
 func (s *Server) now() time.Time {
@@ -59,9 +70,11 @@ func (s *Server) TLSConfig() (*tls.Config, error) {
 	}, nil
 }
 
-// Handler returns the path and handler to mount.
+// Handler returns the path and handler to mount, with the client certificate made
+// available to Connect.
 func (s *Server) Handler(opts ...connect.HandlerOption) (string, http.Handler) {
-	return agentv1connect.NewAgentServiceHandler(s, opts...)
+	path, h := agentv1connect.NewAgentServiceHandler(s, opts...)
+	return path, WithPeerCert(h)
 }
 
 var (

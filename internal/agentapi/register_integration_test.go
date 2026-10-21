@@ -34,6 +34,7 @@ type harness struct {
 	st     *store.Store
 	pki    *pki.Authority
 	tenant uuid.UUID
+	addr   string
 	client agentv1connect.AgentServiceClient
 }
 
@@ -57,7 +58,7 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{Store: st, PKI: authority}
+	s := &Server{Store: st, PKI: authority, Version: "0.3.0", PingInterval: 50 * time.Millisecond}
 	tlsCfg, err := s.TLSConfig()
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +78,7 @@ func newHarness(t *testing.T) *harness {
 		TLSClientConfig:   &tls.Config{RootCAs: authority.CAPool(), ServerName: pki.ServerName, MinVersion: tls.VersionTLS13},
 		ForceAttemptHTTP2: true,
 	}}
-	return &harness{t: t, st: st, pki: authority, tenant: tenant,
+	return &harness{t: t, st: st, pki: authority, tenant: tenant, addr: ln.Addr().String(),
 		client: agentv1connect.NewAgentServiceClient(httpClient, "https://"+ln.Addr().String())}
 }
 
@@ -106,6 +107,11 @@ func newCSR(t *testing.T) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return csrFor(t, key)
+}
+
+func csrFor(t *testing.T, key *ecdsa.PrivateKey) []byte {
+	t.Helper()
 	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
 	if err != nil {
 		t.Fatal(err)
