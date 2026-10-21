@@ -38,27 +38,24 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S5c — Docker provider lifecycle (🔄 in progress: code and unit tests in;
-  first full Docker conformance run pending)
-- **Exact next step:** `providers/docker` Describe (CLI version checks), Compose
-  rendering (artifact + 0600 secrets.env, labels, logging), Apply, Status, Destroy.
+- **Slice:** S5e — ADR-0020 duties and agent wiring (⏳, next to start)
+- **Exact next step:** make `bohux agent run` use the Docker provider (artifact root in
+  the agent state dir), then image retention and disk-pressure fail-closed.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S5c (Docker provider
-> lifecycle) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0025, ADR-0008,
-> ADR-0020, docs/specs/provider-interface.md, and .claude/skills/new-provider/ (one file
-> per verb). Start the local Docker daemon (tracker *Known gaps*). In providers/docker:
-> Describe (checks the docker CLI and Compose versions), Plan, Apply (render
-> compose.yaml + 0600 secrets.env with env_file, labels including the spec hash,
-> json-file log rotation, then `docker compose up -d --remove-orphans`), Status (compose
-> ps JSON + labels + an agent-side HTTP health check), Destroy (`down --volumes`, remove
-> the directory); Logs/Exec/Scale may return ErrUnsupported until S5d but must be
-> declared honestly. Add an Inspector and a busybox-httpd fixture, register "docker" in
-> providers/_conformance, and make every lifecycle case green against the local daemon
-> (the logs/exec/scale cases may wait for S5d: mark that in the tracker). Add a CI job
-> that runs Docker conformance. Verify with build, vet, golangci-lint (also with the
-> integration tag) and tests. Tick boxes, update the tracker and the next session
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S5e (ADR-0020 duties and
+> agent wiring) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0020 items 3-4,
+> ADR-0025, and docs/providers/docker.md. Start the local Docker daemon and Postgres
+> (tracker *Known gaps*). Wire `bohux agent run` to the Docker provider through an
+> internal/provider Registry (artifact root `<state dir>/workloads`), and have the
+> control plane fill Workload.app_slug/environment_slug when it assigns. Add image
+> retention as an agent task (keep images of the current plus the last 5 Releases per
+> App, by the io.bohux labels; never an image a running container uses) and
+> disk-pressure fail-closed (below 10% free, report the node degraded in StatusReport
+> and refuse builds later). Test with the real daemon where it matters. Verify with
+> build, vet, golangci-lint (also with the integration tag), unit and integration
+> tests, and Docker conformance. Tick boxes, update the tracker and the next session
 > prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
@@ -397,16 +394,19 @@ Split into sub-slices, one session each.
       variants each fail exactly the case meant to catch them (runs in `go test ./...`)
 - [x] `providers/_conformance`: `go test ./providers/_conformance -provider=memory`
 
-#### S5c — Docker: Describe, Plan, Apply, Status, Destroy 🔄
-- Written: all eight methods (`providers/docker`, one file per verb), Inspector,
-  busybox-httpd fixture in `providers/_conformance`, render/quantity/name/log unit
-  tests, `docs/providers/docker.md`, CI job `conformance-docker`. **Pending:** a green
-  `go test ./providers/_conformance -provider=docker` against the local daemon.
+#### S5c — Docker: Describe, Plan, Apply, Status, Destroy ✅
+- [x] All eight methods (`providers/docker`, one file per verb), Inspector,
+      busybox-httpd fixture, unit tests, `docs/providers/docker.md`, CI job
+      `conformance-docker`
+- [x] **Docker conformance: all 13 cases green** against Docker 29.9 / Compose 5.6 in
+      the cloud container (91 s; recreate steps take ~10 s because busybox httpd
+      ignores SIGTERM and waits for the stop timeout). No leftovers afterwards
 - [ ] Compose artifact + 0600 `secrets.env` (rule 2, ADR-0008), labels, spec hash,
       HTTP health; lifecycle conformance cases green against the local daemon
 
-#### S5d — Docker: Logs, Exec, Scale ⏳
-- [ ] Remaining verbs; full conformance green
+#### S5d — Docker: Logs, Exec, Scale ✅ (done within S5c)
+- [x] Logs, Exec (no TTY yet, documented), Scale (rewrites the artifact); their
+      conformance cases are green
 
 #### S5e — ADR-0020 duties and wiring ⏳
 - [ ] Image retention (current + last 5 Releases per App), disk-pressure fail-closed
@@ -487,6 +487,7 @@ Split into sub-slices, one session each.
   done: the agent verifies, caches, and acks them.
 - S4e split; S4e1 done: provider interface (O10) and the offline reconcile loop. S4e2
   done: status reports and silent-stream detection. **S4 done.**
+- S5c/S5d done: Docker provider, all 13 conformance cases green on a real daemon.
 - S5b done: conformance suite, memory provider, runner.
 - S5 split into S5a–S5e. S5a done: ADR-0025 proposed (O11), Docker runs locally,
   provider interface moved to `internal/provider`.
