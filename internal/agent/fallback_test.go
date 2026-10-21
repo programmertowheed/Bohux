@@ -175,11 +175,12 @@ func TestRouteChangeDoesNotReapply(t *testing.T) {
 
 type link bool
 
-func (l *link) Up() bool { return bool(*l) }
+func (l *link) Rejected() bool { return bool(*l) }
 
 // A release that turns healthy while the control plane refuses this agent, as a new
 // control plane that rejects its own node's agent does, is not seen healthy by the
-// control plane; it still falls back at the deadline (ADR-0042).
+// control plane; it still falls back at the deadline (ADR-0042). An unreachable
+// control plane is not a rejection: a healthy release stays (rule 1).
 func TestFallbackNeedsAcceptedLink(t *testing.T) {
 	ctx := context.Background()
 	signer, err := pki.LoadOrCreate(t.TempDir(), nil)
@@ -193,27 +194,27 @@ func TestFallbackNeedsAcceptedLink(t *testing.T) {
 	}
 	fake := newFake()
 	now := time.Unix(1_000_000, 0)
-	up := link(true)
-	r := &Reconciler{State: st, Cache: c, Provider: fake, Now: func() time.Time { return now }, Link: &up}
+	rejected := link(false)
+	r := &Reconciler{State: st, Cache: c, Provider: fake, Now: func() time.Time { return now }, Link: &rejected}
 
 	good := deployed("r1", "d1")
 	cacheWorkloads(t, signer, st, c, 1, good)
 	only(t, r.Once(ctx))
 
 	tests := []struct {
-		name    string
-		up      bool
-		release string
-		failure string
+		name     string
+		rejected bool
+		release  string
+		failure  string
 	}{
-		{"rejected while healthy: falls back", false, "r1", "FALLBACK_APPLIED"},
-		{"accepted while healthy: stays", true, "r2", ""},
+		{"rejected while healthy: falls back", true, "r1", "FALLBACK_APPLIED"},
+		{"accepted, or unreachable, while healthy: stays", false, "r2", ""},
 	}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dep := fmt.Sprintf("d%d", i+2)
 			cacheWorkloads(t, signer, st, c, uint64(10*i+2), withFallback(deployed("r2", dep), good, now.Add(5*time.Minute)))
-			up = link(tt.up)
+			rejected = link(tt.rejected)
 			if ws := only(t, r.Once(ctx)); ws.GetReleaseId() != "r2" || ws.GetState() != agentv1.WorkloadState_WORKLOAD_STATE_HEALTHY {
 				t.Fatalf("new release: %v", ws)
 			}
@@ -225,7 +226,7 @@ func TestFallbackNeedsAcceptedLink(t *testing.T) {
 			}
 			// The control plane takes over again with a plain assignment.
 			cacheWorkloads(t, signer, st, c, uint64(10*i+5), deployed("r1", dep+"-back"))
-			up = link(true)
+			rejected = link(false)
 			only(t, r.Once(ctx))
 		})
 	}

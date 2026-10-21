@@ -31,9 +31,11 @@ func (r *Reconciler) Ref(appID string) (provider.ResourceRef, bool) {
 			ref := provider.ResourceRef{Environment: w.GetEnvironmentId(), App: w.GetAppId(),
 				EnvironmentSlug: w.GetEnvironmentSlug(), AppSlug: w.GetAppSlug()}
 			// The slot that serves (ADR-0035); none for an App that never switched.
-			if slots, err := r.loadSlots(); err == nil {
-				ref.Slot = slots[slotKey(ref)].Slot
+			slots, err := r.loadSlots()
+			if err != nil {
+				slog.Warn("read slot record for logs or exec; using the unslotted workload", "app", appID, "err", err)
 			}
+			ref.Slot = slots[slotKey(ref)].Slot
 			return ref, true
 		}
 	}

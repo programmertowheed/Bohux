@@ -271,7 +271,7 @@ func TestRunLifecycle(t *testing.T) {
 }
 
 func TestRunSurvivesRejectionAndOutage(t *testing.T) {
-	t.Run("rejected version keeps running, and its link is down", func(t *testing.T) {
+	t.Run("rejected version keeps running, and the link records the rejection", func(t *testing.T) {
 		cp := newControlPlane(t, "0.3.0") // this test binary's agent version is "dev"
 		st := cp.register(t, "vps-old")
 		cache, err := OpenCache(st)
@@ -282,13 +282,13 @@ func TestRunSurvivesRejectionAndOutage(t *testing.T) {
 		stop := startRunLinked(t, st, cache, link)
 		cp.waitState(st.NodeID(), "rejected")
 		time.Sleep(200 * time.Millisecond) // several rejected attempts
-		if link.Up() {
-			t.Error("link is up while the control plane rejects the agent (ADR-0042)")
+		if !link.Rejected() {
+			t.Error("the link does not record the rejection (ADR-0042)")
 		}
 		stop()
 	})
 
-	t.Run("an accepted stream raises the link; its end drops it", func(t *testing.T) {
+	t.Run("an accepted stream is no rejection, nor is the control plane going away", func(t *testing.T) {
 		cp := newControlPlane(t, "")
 		st := cp.register(t, "vps-link")
 		cache, err := OpenCache(st)
@@ -296,21 +296,20 @@ func TestRunSurvivesRejectionAndOutage(t *testing.T) {
 			t.Fatal(err)
 		}
 		link := &Link{}
+		link.set(true) // as if an earlier control plane had rejected it
 		stop := startRunLinked(t, st, cache, link)
 		cp.waitState(st.NodeID(), "online")
 		deadline := time.Now().Add(5 * time.Second)
-		for !link.Up() && time.Now().Before(deadline) {
+		for link.Rejected() && time.Now().Before(deadline) {
 			time.Sleep(10 * time.Millisecond)
 		}
-		if !link.Up() {
-			t.Fatal("link never came up on an accepted stream")
+		if link.Rejected() {
+			t.Fatal("an accepted stream did not clear the rejection")
 		}
 		cp.stop()
-		for link.Up() && time.Now().Before(deadline.Add(5*time.Second)) {
-			time.Sleep(10 * time.Millisecond)
-		}
-		if link.Up() {
-			t.Error("link stayed up after the control plane went away")
+		time.Sleep(300 * time.Millisecond) // several failed attempts
+		if link.Rejected() {
+			t.Error("an unreachable control plane counted as a rejection (rule 1)")
 		}
 		stop()
 	})

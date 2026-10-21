@@ -82,9 +82,11 @@ func (s *session) Wait() (int, error) {
 	return 0, nil
 }
 
+// Close ends the session. It may run while another goroutine waits, so it never
+// reads cmd.ProcessState: Kill on a reaped process is a harmless ErrProcessDone.
 func (s *session) Close() error {
 	_ = s.stdin.Close()
-	if s.cmd.ProcessState == nil && s.cmd.Process != nil {
+	if s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
 	}
 	return nil
@@ -136,8 +138,9 @@ func (s *ttySession) Wait() (int, error) {
 	return 0, nil
 }
 
+// Close ends the session; as session.Close, it is safe beside Wait.
 func (s *ttySession) Close() error {
-	if s.cmd.ProcessState == nil && s.cmd.Process != nil {
+	if s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
 	}
 	return s.pty.Close()

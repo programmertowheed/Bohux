@@ -57,22 +57,23 @@ type RunOptions struct {
 	Workloads WorkloadAccess
 	// MinBackoff and MaxBackoff bound reconnect delays; zero means 1s and 1m.
 	MinBackoff, MaxBackoff time.Duration
-	// Link, if set, tracks whether the control plane currently accepts this agent.
+	// Link, if set, records whether the control plane last rejected this agent.
 	Link *Link
 }
 
-// Link reports whether the agent has a stream the control plane accepted: a first
-// message arrived and was not a version rejection. The reconciler counts a new
-// release as healthy only while it is up, since only then can the control plane see
-// it healthy (ADR-0042).
-type Link struct{ up atomic.Bool }
+// Link records the control plane's last verdict on this agent: rejected (a version it
+// refuses) or accepted (any other message). A release that is healthy while the
+// control plane rejects its agent cannot be seen healthy there, so the reconciler
+// does not let it cancel its fallback (ADR-0042). An unreachable control plane is no
+// verdict: rule 1, its outage changes nothing on the node.
+type Link struct{ rejected atomic.Bool }
 
-// Up reports whether the control plane accepts this agent now.
-func (l *Link) Up() bool { return l != nil && l.up.Load() }
+// Rejected reports whether the control plane's last answer was a version rejection.
+func (l *Link) Rejected() bool { return l != nil && l.rejected.Load() }
 
-func (l *Link) set(v bool) {
+func (l *Link) set(rejected bool) {
 	if l != nil {
-		l.up.Store(v)
+		l.rejected.Store(rejected)
 	}
 }
 
@@ -217,7 +218,6 @@ func session(ctx context.Context, client agentv1connect.AgentServiceClient, o Ru
 	outbox := make(chan *agentv1.ConnectRequest, 16)
 	rl := newRelays(streamCtx, o.Workloads, outbox)
 	defer rl.closeAll()
-	defer o.Link.set(false)
 	first := true
 	for {
 		select {
@@ -260,12 +260,10 @@ func session(ctx context.Context, client agentv1connect.AgentServiceClient, o Ru
 				slog.InfoContext(ctx, "connected to control plane", "node", o.State.NodeID())
 				first = false
 			}
-			if _, rejected := msg.GetMsg().(*agentv1.ConnectResponse_VersionRejected); !rejected {
-				o.Link.set(true)
-			}
+			_, rejected := msg.GetMsg().(*agentv1.ConnectResponse_VersionRejected)
+			o.Link.set(rejected)
 			switch m := msg.GetMsg().(type) {
 			case *agentv1.ConnectResponse_VersionRejected:
-				o.Link.set(false)
 				return &rejectedError{m.VersionRejected}
 			case *agentv1.ConnectResponse_Ping:
 			case *agentv1.ConnectResponse_Assignment:
