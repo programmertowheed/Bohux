@@ -38,22 +38,26 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S4a — node PKI and crypto ADR (⏳, next to start)
-- **Exact next step:** write a *proposed* ADR for the node CA (where its key lives,
-  certificate lifetime and renewal), the assignment signing key, and the secret
-  sealing scheme (ADR-0008), then build on it.
+- **Slice:** S4b — registration (⏳, next to start)
+- **Exact next step:** `internal/pki` (CA create/load from the data dir, CSR signing
+  with the URI SAN, Ed25519 signing key) per ADR-0024, with unit tests.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S4a (node PKI and crypto
-> ADR) on branch `claude/relaxed-rubin-76m7dl`. Using .claude/skills/write-adr/, write a
-> *proposed* ADR covering: where the node CA private key and the assignment signing
-> key live (never Postgres, rule 3; consider OpenBao and a 0600 file, and what backup
-> and restore (ADR-0020) need), certificate lifetime and renewal over the Connect
-> stream, the client-cert URI SAN from ADR-0022, the assignment signature algorithm,
-> and the secret sealing scheme for ADR-0008 (prefer standard-library or x/crypto
-> primitives). Add it to *Waiting on the owner*, tick the S4a box, update the tracker
-> and the next session prompt, commit, push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S4b (registration) on
+> branch `claude/relaxed-rubin-76m7dl`, following ADR-0024 and ADR-0022. Build
+> `internal/pki` (create or load the node CA and Ed25519 signing key in `--data-dir`,
+> 0600; sign CSRs into 90-day client certs with the `bohux://tenant/<t>/node/<n>` URI
+> SAN; issue the agent listener's server cert), add `ca_cert_sha256` to
+> CreateBootstrapTokenResponse in proto first, then NodeService (CreateBootstrapToken,
+> Get, List, Revoke) and AgentService.Register (single-use bootstrap token, node row,
+> audit events) on a separate TLS listener (`--agent-listen`), documented in
+> docs/reference/config.md. Test with unit tests and integration tests on the local
+> Postgres, including a reused or expired bootstrap token and a CSR whose key does not
+> match. If the slice is too big, stop at a clean point and split it in the tracker.
+> Verify with buf lint/generate (tracker recipe), build, vet, golangci-lint (also with
+> the integration tag) and tests. Tick boxes, update the tracker and the next session
+> prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -66,6 +70,7 @@ work is in right now*.
 | O6 | Accept or reject ADR-0021 (migrations: goose on pgx). Owner allowed building on it before acceptance | S2b onward is built on it |
 | O7 | Accept or reject ADR-0022 (token format `bxa_<tenant>_<id>_<secret>`, tenant-first lookup, SHA-256, idempotency records). Owner allowed building on it before acceptance | S3c onward is built on it |
 | O8 | Accept or reject ADR-0023 (tenant-wide API tokens when `project_id` is empty; two-step authorization). Changed `identity.proto`. Owner allowed building on it | S3c3 onward |
+| O9 | Accept or reject ADR-0024 (node CA + signing key as 0600 files in `--data-dir`, CA pinning by hash at install, 90-day node certs, Ed25519 assignment signatures, nacl/box sealing). Owner allowed building on it | S4b onward |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -268,9 +273,9 @@ Split into sub-slices, one session each.
 ### S4 — Agent ⏳
 Split into sub-slices, one session each.
 
-#### S4a — node PKI and crypto ⏳
-- [ ] Proposed ADR: node CA key storage, cert lifetime/renewal, URI SAN, assignment
-      signing, secret sealing
+#### S4a — node PKI and crypto ✅
+- [x] Proposed ADR-0024 (O9): node CA key storage, cert lifetime/renewal, URI SAN,
+      assignment signing, secret sealing
 
 #### S4b — registration ⏳
 - [ ] `internal/pki`; NodeService.CreateBootstrapToken; AgentService.Register (CSR →
@@ -354,7 +359,7 @@ Split into sub-slices, one session each.
   the owner* (O6 onward).
 - S2a done: ADR-0021 (goose on pgx).
 - S3e split into S3e1–S3e3, all done: Project, Environment, App services. **S3 done.**
-- Split S4 into S4a–S4e.
+- Split S4 into S4a–S4e. S4a done: ADR-0024 proposed (O9).
 - S3d done: `internal/secrets` redaction, access-log interceptor, rule 3 test.
 - S3c3 done: bootstrap command, Identity/Tenant handlers, idempotency records, all
   tested over real ConnectRPC; end-to-end binary smoke test passed.
