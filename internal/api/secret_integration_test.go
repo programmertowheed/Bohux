@@ -178,6 +178,33 @@ func TestSecrets(t *testing.T) {
 			t.Error("the value outlived its secret")
 		}
 	})
+	t.Run("a pull secret or deploy key in use cannot be deleted (ADR-0041)", func(t *testing.T) {
+		registry, err := set(deployer, "REGISTRY", `{"auths":{}}`, "", "reg")
+		if err != nil {
+			t.Fatal(err)
+		}
+		deployKey, err := set(deployer, "DEPLOY_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----", "", "dk")
+		if err != nil {
+			t.Fatal(err)
+		}
+		rt := &bohuxv1.Runtime{Replicas: 1}
+		if _, err := apps.CreateApp(ctx, req(deployer, &bohuxv1.CreateAppRequest{EnvironmentId: env, Slug: "puller",
+			IdempotencyKey: "puller", Runtime: rt, ImagePullSecret: "REGISTRY",
+			Source: &bohuxv1.Source{Kind: &bohuxv1.Source_Image{Image: &bohuxv1.ImageSource{
+				Repository: "registry.example.com/acme/api", Digest: "sha256:" + strings.Repeat("cd", 32)}}}})); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := apps.CreateApp(ctx, req(deployer, &bohuxv1.CreateAppRequest{EnvironmentId: env, Slug: "fetcher",
+			IdempotencyKey: "fetcher", Runtime: rt, Source: &bohuxv1.Source{Kind: &bohuxv1.Source_Git{Git: &bohuxv1.GitSource{
+				RepoUrl: "git@example.com:acme/private.git", SshKeySecret: "DEPLOY_KEY"}}}})); err != nil {
+			t.Fatal(err)
+		}
+		for i, sec := range []*bohuxv1.Secret{registry, deployKey} {
+			_, err := secrets.DeleteSecret(ctx, req(deployer, &bohuxv1.DeleteSecretRequest{Id: sec.GetMeta().GetId(),
+				ExpectedRevisionId: sec.GetMeta().GetRevisionId(), IdempotencyKey: fmt.Sprintf("del-cred-%d", i)}))
+			wantCode(t, err, connect.CodeFailedPrecondition)
+		}
+	})
 	t.Run("values never reach Postgres", func(t *testing.T) {
 		err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
 			rows, err := tx.Query(ctx, `SELECT table_name FROM information_schema.tables

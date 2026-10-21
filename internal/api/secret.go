@@ -257,12 +257,16 @@ func (ss *secretService) DeleteSecret(ctx context.Context, req *connect.Request[
 		if err := authorizeProject(ctx, project, auth.RoleDeployer); err != nil {
 			return err
 		}
+		// In use as an environment variable, or by key as an image pull secret or a Git
+		// deploy key (ADR-0041).
 		var used bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM apps_heads a
 			JOIN apps_revisions r ON r.id = a.revision_id
 			WHERE NOT a.deleted AND a.environment_id = $1
-			  AND r.secrets @> jsonb_build_array(jsonb_build_object('handle', $2::text)))`,
-			env, sec.GetHandle()).Scan(&used); err != nil {
+			  AND (r.secrets @> jsonb_build_array(jsonb_build_object('handle', $2::text))
+			    OR r.image_pull_secret = $3
+			    OR r.source->'git'->>'ssh_key_secret' = $3))`,
+			env, sec.GetHandle(), sec.GetKey()).Scan(&used); err != nil {
 			return fmt.Errorf("check secret use: %w", err)
 		}
 		if used {
