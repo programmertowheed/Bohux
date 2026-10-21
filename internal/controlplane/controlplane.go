@@ -16,6 +16,7 @@ import (
 
 	"github.com/bohumix/bohux/internal/api"
 	"github.com/bohumix/bohux/internal/auth"
+	"github.com/bohumix/bohux/internal/pki"
 	"github.com/bohumix/bohux/internal/store"
 )
 
@@ -26,6 +27,9 @@ type Config struct {
 	// DatabaseURL is the Postgres DSN. Its role must own the schema and must not bypass
 	// row-level security (ADR-0021, data-model.md).
 	DatabaseURL string
+	// DataDir holds the node CA and assignment signing key (ADR-0024). It must be
+	// backed up with the database.
+	DataDir string
 }
 
 // shutdownTimeout bounds how long in-flight requests get after the context ends.
@@ -37,6 +41,9 @@ func Run(ctx context.Context, cfg Config) error {
 	if cfg.DatabaseURL == "" {
 		return errors.New("controlplane: database URL is required")
 	}
+	if cfg.DataDir == "" {
+		return errors.New("controlplane: data directory is required")
+	}
 	ln, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", cfg.ListenAddr, err)
@@ -47,6 +54,10 @@ func Run(ctx context.Context, cfg Config) error {
 // Serve is Run on an existing listener, which it closes.
 func Serve(ctx context.Context, ln net.Listener, cfg Config) error {
 	defer func() { _ = ln.Close() }()
+	authority, err := pki.LoadOrCreate(cfg.DataDir, nil)
+	if err != nil {
+		return fmt.Errorf("load node PKI: %w", err)
+	}
 	if err := store.MigrateDSN(ctx, cfg.DatabaseURL); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
@@ -60,7 +71,7 @@ func Serve(ctx context.Context, ln net.Listener, cfg Config) error {
 		// ConnectRPC needs HTTP/2 for streaming; h2c serves it without TLS. TLS
 		// termination is in front of Bohux (Caddy, ADR-0019) or added with mTLS in S4.
 		Handler: h2c.NewHandler(newMux(st, (&api.Server{
-			Store: st, Authn: &auth.Authenticator{Store: st},
+			Store: st, Authn: &auth.Authenticator{Store: st}, PKI: authority,
 		}).Mount), &http2.Server{}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

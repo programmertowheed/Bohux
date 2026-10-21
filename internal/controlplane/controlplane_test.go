@@ -33,7 +33,7 @@ func TestHealthz(t *testing.T) {
 }
 
 func TestRunRequiresDatabaseURL(t *testing.T) {
-	if err := Run(context.Background(), Config{ListenAddr: "127.0.0.1:0"}); err == nil {
+	if err := Run(context.Background(), Config{ListenAddr: "127.0.0.1:0", DataDir: t.TempDir()}); err == nil {
 		t.Fatal("Run without a database URL: got nil error")
 	}
 }

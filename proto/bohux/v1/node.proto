@@ -71,6 +71,9 @@ message CreateBootstrapTokenResponse {
   // and traces (rule 3).
   string token = 1 [debug_redact = true];
   google.protobuf.Timestamp expires_at = 2;
+  // Hex SHA-256 of the node CA certificate. The installer passes it with the token so
+  // the agent pins the CA on its first call (ADR-0024).
+  string ca_cert_sha256 = 3;
 }
 
 message GetNodeRequest {

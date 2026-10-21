@@ -9,6 +9,7 @@ Adding a setting means adding it here in the same commit.
 |---|---|---|---|
 | `--listen` | `BOHUX_LISTEN_ADDR` | `127.0.0.1:7400` | TCP address for the API (ConnectRPC over h2c) and `GET /healthz`. |
 | `--database-url` | `BOHUX_DATABASE_URL` | none, required | Postgres DSN. |
+| `--data-dir` | `BOHUX_DATA_DIR` | `/var/lib/bohux` | Holds `pki/`: the node CA and assignment signing key, created on first start, mode 0600 (ADR-0024). **Back it up with the database**; losing it means every node re-registers. |
 
 On start it applies pending migrations, then serves. `SIGINT`/`SIGTERM` stop it, giving
 in-flight requests up to 10 seconds.

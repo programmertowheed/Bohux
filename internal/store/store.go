@@ -284,21 +284,33 @@ func (t *Tx) moveHead(ctx context.Context, resource string, id, expected uuid.UU
 	return uuid.Nil, fmt.Errorf("%s %s: %w", resource, id, ErrNotFound)
 }
 
+// AuditOnly records an audit event for an action that writes no revision, such as
+// issuing a bootstrap token or opening an exec session.
+func (t *Tx) AuditOnly(ctx context.Context, a Audit, resourceID uuid.UUID) error {
+	if a.Actor.ID == uuid.Nil || a.Actor.Kind == "" || a.Action == "" || a.ResourceType == "" {
+		return errors.New("store: audit actor, action, and resource type are required")
+	}
+	return t.audit(ctx, a, resourceID, uuid.Nil)
+}
+
 func (t *Tx) audit(ctx context.Context, a Audit, resourceID, rev uuid.UUID) error {
 	id, err := uuid.NewV7()
 	if err != nil {
 		return fmt.Errorf("new audit event id: %w", err)
 	}
-	var project *uuid.UUID
+	var project, revision *uuid.UUID
 	if a.ProjectID != uuid.Nil {
 		project = &a.ProjectID
+	}
+	if rev != uuid.Nil {
+		revision = &rev
 	}
 	_, err = t.tx.Exec(ctx, `INSERT INTO audit_events
 		(id, tenant_id, actor_id, actor_kind, action, resource_type, resource_id,
 		 revision_id, project_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		id, t.tenant, a.Actor.ID, string(a.Actor.Kind), a.Action, a.ResourceType,
-		resourceID, rev, project)
+		resourceID, revision, project)
 	if err != nil {
 		return fmt.Errorf("write audit event: %w", mapError(err))
 	}

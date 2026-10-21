@@ -10,6 +10,7 @@ import (
 
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/gen/bohux/v1/bohuxv1connect"
+	"github.com/bohumix/bohux/internal/pki"
 	"github.com/bohumix/bohux/internal/store"
 )
 
@@ -17,6 +18,8 @@ import (
 type Server struct {
 	Store *store.Store
 	Authn Authenticator
+	// PKI issues node credentials (ADR-0024). Nil disables node registration.
+	PKI *pki.Authority
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 }
@@ -37,13 +40,13 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.Handle(bohuxv1connect.NewProjectServiceHandler(&projectService{s}, opts))
 	mux.Handle(bohuxv1connect.NewEnvironmentServiceHandler(&environmentService{s}, opts))
 	mux.Handle(bohuxv1connect.NewAppServiceHandler(&appService{s}, opts))
+	mux.Handle(bohuxv1connect.NewNodeServiceHandler(&nodeService{s}, opts))
 
 	// Not written yet: mounted so every RPC is authenticated, logged, and answers
 	// Unimplemented rather than 404. Each is replaced as its slice lands.
 	mux.Handle(bohuxv1connect.NewReleaseServiceHandler(bohuxv1connect.UnimplementedReleaseServiceHandler{}, opts))
 	mux.Handle(bohuxv1connect.NewDeploymentServiceHandler(bohuxv1connect.UnimplementedDeploymentServiceHandler{}, opts))
 	mux.Handle(bohuxv1connect.NewWorkloadServiceHandler(bohuxv1connect.UnimplementedWorkloadServiceHandler{}, opts))
-	mux.Handle(bohuxv1connect.NewNodeServiceHandler(bohuxv1connect.UnimplementedNodeServiceHandler{}, opts))
 	mux.Handle(bohuxv1connect.NewSecretServiceHandler(bohuxv1connect.UnimplementedSecretServiceHandler{}, opts))
 	mux.Handle(bohuxv1connect.NewAuditServiceHandler(bohuxv1connect.UnimplementedAuditServiceHandler{}, opts))
 }

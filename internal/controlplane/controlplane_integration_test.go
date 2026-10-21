@@ -22,7 +22,7 @@ func TestServeMigratesServesAndShutsDown(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- Serve(ctx, ln, Config{DatabaseURL: storetest.NewAppDSN(t)})
+		done <- Serve(ctx, ln, Config{DatabaseURL: storetest.NewAppDSN(t), DataDir: t.TempDir()})
 	}()
 
 	url := "http://" + ln.Addr().String() + "/healthz"

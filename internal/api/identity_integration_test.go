@@ -14,6 +14,7 @@ import (
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/gen/bohux/v1/bohuxv1connect"
 	"github.com/bohumix/bohux/internal/auth"
+	"github.com/bohumix/bohux/internal/pki"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/store/storetest"
 )
@@ -21,6 +22,7 @@ import (
 type harness struct {
 	t        *testing.T
 	st       *store.Store
+	pki      *pki.Authority
 	tenant   uuid.UUID
 	root     string // tenant-wide owner token from bootstrap
 	identity bohuxv1connect.IdentityServiceClient
@@ -43,12 +45,16 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
+	authority, err := pki.LoadOrCreate(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	mux := http.NewServeMux()
-	(&Server{Store: st, Authn: &auth.Authenticator{Store: st}}).Mount(mux)
+	(&Server{Store: st, Authn: &auth.Authenticator{Store: st}, PKI: authority}).Mount(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return &harness{
-		t: t, st: st, tenant: tenant, root: root,
+		t: t, st: st, pki: authority, tenant: tenant, root: root,
 		identity: bohuxv1connect.NewIdentityServiceClient(srv.Client(), srv.URL),
 		tenants:  bohuxv1connect.NewTenantServiceClient(srv.Client(), srv.URL),
 	}

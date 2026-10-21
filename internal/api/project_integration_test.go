@@ -19,7 +19,7 @@ import (
 func (h *harness) server() *httptest.Server {
 	h.t.Helper()
 	mux := http.NewServeMux()
-	(&Server{Store: h.st, Authn: &auth.Authenticator{Store: h.st}}).Mount(mux)
+	(&Server{Store: h.st, Authn: &auth.Authenticator{Store: h.st}, PKI: h.pki}).Mount(mux)
 	srv := httptest.NewServer(mux)
 	h.t.Cleanup(srv.Close)
 	return srv

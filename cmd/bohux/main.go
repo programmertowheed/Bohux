@@ -32,8 +32,10 @@ commands:
 const (
 	envListenAddr  = "BOHUX_LISTEN_ADDR"
 	envDatabaseURL = "BOHUX_DATABASE_URL"
+	envDataDir     = "BOHUX_DATA_DIR"
 
 	defaultListenAddr = "127.0.0.1:7400"
+	defaultDataDir    = "/var/lib/bohux"
 )
 
 func main() {
@@ -88,13 +90,16 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 			"API listen address (env "+envListenAddr+")")
 		dbURL := fs.String("database-url", getenv(envDatabaseURL),
 			"Postgres DSN (env "+envDatabaseURL+")")
+		dataDir := fs.String("data-dir", envOr(getenv, envDataDir, defaultDataDir),
+			"directory for the node CA and signing key; back it up (env "+envDataDir+")")
 		if err := fs.Parse(args[1:]); err != nil {
 			return fmt.Errorf("controlplane: %w", err)
 		}
 		if *dbURL == "" {
 			return fmt.Errorf("controlplane: --database-url or %s is required", envDatabaseURL)
 		}
-		if err := d.runControlPlane(ctx, controlplane.Config{ListenAddr: *listen, DatabaseURL: *dbURL}); err != nil {
+		cfg := controlplane.Config{ListenAddr: *listen, DatabaseURL: *dbURL, DataDir: *dataDir}
+		if err := d.runControlPlane(ctx, cfg); err != nil {
 			return fmt.Errorf("controlplane: %w", err)
 		}
 		return nil
