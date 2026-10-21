@@ -14,7 +14,7 @@ import { enumName, short } from "../format";
 // state only. A channel's URL is sent once and never shown back (ADR-0038).
 
 // Once shows a secret the API returns a single time.
-function Once({ label, value, onDone }: { label: string; value: string; onDone: () => void }) {
+export function Once({ label, value, onDone }: { label: string; value: string; onDone: () => void }) {
   return (
     <div className="rounded border border-border p-3 text-sm" role="status">
       <p className="text-muted">{label}. It is shown only now: copy it before you close this.</p>

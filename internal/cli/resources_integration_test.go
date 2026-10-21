@@ -217,4 +217,29 @@ func TestResourceCommands(t *testing.T) {
 	if out := must("webhook", "list", "site", "-e", "prod"); strings.Contains(out, created.Webhook.Meta.ID) {
 		t.Errorf("webhook list after remove:\n%s", out)
 	}
+
+	// API tokens: created with the secret shown once, listed without it, revoked.
+	out = must("token", "create", "ci", "--role", "deployer", "--expires", "24h", "-o", "json")
+	var tok struct {
+		APIToken struct {
+			Meta struct {
+				ID string `json:"id"`
+			} `json:"meta"`
+		} `json:"api_token"`
+		Secret string `json:"secret"`
+	}
+	if err := json.Unmarshal([]byte(out), &tok); err != nil || !strings.HasPrefix(tok.Secret, "bx") {
+		t.Fatalf("token create -o json: %v\n%s", err, out)
+	}
+	if out := must("token", "list"); !strings.Contains(out, "ci") || !strings.Contains(out, "shop") ||
+		!strings.Contains(out, "deployer") || strings.Contains(out, tok.Secret) {
+		t.Errorf("token list:\n%s", out)
+	}
+	if _, err := bohux("", "token", "create", "bad", "--role", "admin"); err == nil {
+		t.Error("an unknown role was accepted")
+	}
+	must("token", "revoke", tok.APIToken.Meta.ID)
+	if out := must("token", "list", "-o", "json"); !strings.Contains(out, "revoked_at") {
+		t.Errorf("token list after revoke:\n%s", out)
+	}
 }

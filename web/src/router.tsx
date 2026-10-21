@@ -11,6 +11,7 @@ import { Deployment } from "./pages/Deployment";
 import { Logs } from "./pages/Logs";
 import { Activity } from "./pages/Activity";
 import { AppPage } from "./pages/AppPage";
+import { Tokens } from "./pages/Tokens";
 import { enumName } from "./format";
 
 function Shell() {
@@ -28,6 +29,7 @@ function SignedIn() {
         <Link to="/" className="font-semibold">Bohux</Link>
         <Link to="/" className="text-muted [&.active]:text-foreground">Projects</Link>
         <Link to="/nodes" className="text-muted [&.active]:text-foreground">Nodes</Link>
+        <Link to="/tokens" className="text-muted [&.active]:text-foreground">Tokens</Link>
         <span className="ml-auto text-sm text-muted">
           {p ? `${p.displayName || p.id} (${enumName("PRINCIPAL_KIND_", PrincipalKind[p.kind])})` : ""}
         </span>
@@ -51,6 +53,7 @@ function SignedIn() {
 const root = createRootRoute({ component: Shell });
 const projects = createRoute({ getParentRoute: () => root, path: "/", component: Projects });
 const nodes = createRoute({ getParentRoute: () => root, path: "/nodes", component: Nodes });
+const tokens = createRoute({ getParentRoute: () => root, path: "/tokens", component: Tokens });
 const project = createRoute({ getParentRoute: () => root, path: "/p/$project", component: Environments });
 const environment = createRoute({ getParentRoute: () => root, path: "/p/$project/e/$env", component: Environment });
 const deployment = createRoute({
@@ -65,7 +68,7 @@ const appPage = createRoute({ getParentRoute: () => root, path: "/p/$project/e/$
 const activity = createRoute({ getParentRoute: () => root, path: "/p/$project/activity", component: Activity });
 
 export const router = createRouter({
-  routeTree: root.addChildren([projects, nodes, project, environment, deployment, logs, activity, appPage]),
+  routeTree: root.addChildren([projects, nodes, tokens, project, environment, deployment, logs, activity, appPage]),
   basepath: "/ui",
 });
 

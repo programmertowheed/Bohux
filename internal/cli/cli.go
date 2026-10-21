@@ -79,6 +79,7 @@ type command struct {
 	// notifications is NotificationService (ADR-0038).
 	notifications bohuxv1connect.NotificationServiceClient
 	audit         bohuxv1connect.AuditServiceClient
+	identity      bohuxv1connect.IdentityServiceClient
 }
 
 // target is the flags every App command takes.
@@ -140,6 +141,7 @@ func (c *command) connect() error {
 	c.webhooks = bohuxv1connect.NewWebhookServiceClient(hc, base)
 	c.notifications = bohuxv1connect.NewNotificationServiceClient(hc, base)
 	c.audit = bohuxv1connect.NewAuditServiceClient(hc, base)
+	c.identity = bohuxv1connect.NewIdentityServiceClient(hc, base)
 	return nil
 }
 

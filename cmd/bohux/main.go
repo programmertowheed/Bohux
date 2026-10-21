@@ -346,17 +346,25 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 			base = cli.DefaultAPIURL
 		}
 		return mcp.Run(ctx, mcp.Config{APIURL: base, Token: token, HTTP: cli.HTTPClient(base)})
-	case "deploy", "rollback", "scale", "logs", "exec", "project", "env", "app", "route", "secret", "node", "webhook", "channel", "audit":
-		if err := cli.Run(ctx, args[0], args[1:], d.stdin, stdout, getenv); err != nil {
-			if errors.Is(err, cli.ErrUsage) {
-				return fmt.Errorf("%w\n\n%w", err, errUsage)
-			}
-			return err
-		}
-		return nil
+	case "deploy", "rollback", "scale", "logs", "exec":
+		return runCLI(ctx, args, stdout, getenv, d)
 	default:
+		if cli.IsResource(args[0]) {
+			return runCLI(ctx, args, stdout, getenv, d)
+		}
 		return fmt.Errorf("unknown command %q: %w", args[0], errUsage)
 	}
+}
+
+// runCLI runs an API client command: the app verbs and the resource nouns (ADR-0036).
+func runCLI(ctx context.Context, args []string, stdout io.Writer, getenv func(string) string, d deps) error {
+	if err := cli.Run(ctx, args[0], args[1:], d.stdin, stdout, getenv); err != nil {
+		if errors.Is(err, cli.ErrUsage) {
+			return fmt.Errorf("%w\n\n%w", err, errUsage)
+		}
+		return err
+	}
+	return nil
 }
 
 func agentCommand(ctx context.Context, args []string, getenv func(string) string, d deps) error {

@@ -42,8 +42,11 @@ work is in right now*.
   (webhooks, channels, tokens, terminal not in the UI); S16 done
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** finish checking the pull-secret and deploy-key fields in Chromium
-  on an upgraded install, then the next v0.2 item. Buildpacks/Nixpacks needs an owner choice
+- **Exact next step:** the remaining v0.2 items each need an owner decision or an ADR
+  first: Buildpacks/Nixpacks (O32), team invites (user accounts), web terminal (O29),
+  email notifications (SMTP settings), managed Postgres/Redis (a new resource type),
+  envelope encryption (per-environment keys). Next proposed: an ADR for envelope
+  encryption of secret values with OpenBao transit, the smallest of them. Buildpacks/Nixpacks needs an owner choice
   (O32); team invites need user accounts (identity model): ask the owner first.
 
 ## Next session prompt
@@ -974,10 +977,18 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       list, create (the secret shown once, as the CLI prints it once; a channel's URL
       sent once and never shown back), remove with a confirmation. Checked in
       Chromium against the live install
-- [ ] Not in the UI yet: tokens (the CLI has `bohux token` already); the web terminal
-      needs bidirectional streaming, which Connect over HTTP/1.1 in a browser does not
-      have (a WebSocket endpoint would be a UI-only path: owner decision under rule 8,
-      O29)
+- [x] API tokens: the CLI lacked them, so first `bohux token list|create|revoke`
+      (`-p` scopes, `--expires`, secret printed once), then a Tokens page (create with
+      role, project, lifetime; secret shown once; revoke). The binary's own noun list
+      had drifted from the CLI's (`token` was "unknown command" though the CLI tests
+      passed); it now asks the CLI, with a test over every noun in the usage text.
+      Checked on the live install in Chromium and with the CLI: a project-scoped viewer
+      token sees only its project and is refused once revoked
+- [x] The pull-secret and deploy-key fields clicked through in Chromium on the upgraded
+      install (server refusals shown; the good value saved)
+- [ ] Not in the UI: the web terminal needs bidirectional streaming, which Connect over
+      HTTP/1.1 in a browser does not have (a WebSocket endpoint would be a UI-only path:
+      owner decision under rule 8, O29)
 
 ### S16 — Resource view (ADR-0040) ✅
 - [x] Proposed ADR-0040 (O28): agents sample the node (`/proc`, `statfs`) and, through
@@ -1122,6 +1133,10 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   healthy locally, so the agent never fell back and the rollback could not reach it.
   Fixed (ADR-0042 proposed, O33): healthy counts only while the control plane accepts
   the agent. Verified on the install: the new agent fell back on its own.
+- Tokens in the CLI (they were missing) and the UI; a dispatch drift bug found on the
+  live install and fixed with a test over every noun. The test install now runs this
+  branch's control plane (upgraded with `bohux deploy controlplane`, migration 00021
+  applied).
 - **Next:** see Current focus.
 
 ### 2026-10-21 (auto run, S9e–S9f) — branch `claude/relaxed-rubin-76m7dl`

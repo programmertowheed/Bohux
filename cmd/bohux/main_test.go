@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/bohumix/bohux/internal/agent"
+	"github.com/bohumix/bohux/internal/cli"
 	"github.com/bohumix/bohux/internal/controlplane"
 	backupwf "github.com/bohumix/bohux/internal/workflow/backup"
 	"github.com/bohumix/bohux/internal/workflow/deploy"
@@ -154,3 +157,22 @@ const bootstrapOut = "Tenant \"acme\" created.\n" +
 
 // errMissing marks cases that must fail validation without calling a dependency.
 var errMissing = errors.New("missing")
+
+// Every resource noun in the usage text reaches the CLI, not "unknown command": the
+// binary's dispatch and the CLI's noun list cannot drift apart.
+func TestResourceNounsDispatch(t *testing.T) {
+	for _, line := range strings.Split(cli.ResourceCommands, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || !strings.Contains(fields[1], "list") {
+			continue
+		}
+		noun := fields[0]
+		t.Run(noun, func(t *testing.T) {
+			// No token set: the CLI itself refuses, which proves the command reached it.
+			err := run(context.Background(), []string{noun, "list"}, io.Discard, func(string) string { return "" })
+			if err == nil || strings.Contains(err.Error(), "unknown command") {
+				t.Errorf("%s list: %v", noun, err)
+			}
+		})
+	}
+}

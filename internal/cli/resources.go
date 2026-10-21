@@ -13,6 +13,7 @@ import (
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 )
@@ -32,12 +33,13 @@ const ResourceCommands = `  project list|create      projects
                            git push webhooks of an app; create prints the secret once
   channel list|create|remove
                            a project's deploy notifications; create reads the URL from stdin
-  audit list               who changed what, newest first (-p for one project)`
+  audit list               who changed what, newest first (-p for one project)
+  token list|create|revoke API tokens; create prints the secret once (-p scopes it)`
 
 // IsResource reports whether cmd is a resource noun.
 func IsResource(cmd string) bool {
 	switch cmd {
-	case "project", "env", "app", "route", "secret", "node", "webhook", "channel", "audit":
+	case "project", "env", "app", "route", "secret", "node", "webhook", "channel", "audit", "token":
 		return true
 	}
 	return false
@@ -166,6 +168,12 @@ func (c *command) runResource(ctx context.Context, noun string, args []string, s
 		return r.channelRemove(ctx, rest)
 	case "audit list":
 		return r.auditList(ctx, rest)
+	case "token list":
+		return r.tokenList(ctx, rest)
+	case "token create":
+		return r.tokenCreate(ctx, rest)
+	case "token revoke":
+		return r.tokenRevoke(ctx, rest)
 	}
 	return fmt.Errorf("unknown command %q: %w", verb, ErrUsage)
 }
@@ -1049,6 +1057,121 @@ func shortID(id string) string {
 }
 
 // bytesHuman prints a byte count as KiB, MiB, or GiB.
+// --- token -----------------------------------------------------------------------
+
+var tokenHeader = []string{"ID", "NAME", "PROJECT", "ROLE", "EXPIRES", "LAST USED", "REVOKED"}
+
+func stamp(t interface{ AsTime() time.Time }, set bool) string {
+	if !set {
+		return "-"
+	}
+	return t.AsTime().UTC().Format(time.RFC3339)
+}
+
+func roleName(role bohuxv1.Role) string {
+	return strings.ToLower(strings.TrimPrefix(role.String(), "ROLE_"))
+}
+
+// tokenRow names the token's project by slug when it is known; a tenant-wide token
+// shows "*".
+func tokenRow(t *bohuxv1.ApiToken, slugs map[string]string) []string {
+	project := "*"
+	if id := t.GetProjectId(); id != "" {
+		if project = slugs[id]; project == "" {
+			project = id
+		}
+	}
+	return []string{t.GetMeta().GetId(), t.GetName(), project, roleName(t.GetRole()),
+		stamp(t.GetExpiresAt(), t.GetExpiresAt() != nil), stamp(t.GetLastUsedAt(), t.GetLastUsedAt() != nil),
+		stamp(t.GetRevokedAt(), t.GetRevokedAt() != nil)}
+}
+
+// projectSlugs maps the projects this token can see, by ID, to their slugs.
+func (r *resource) projectSlugs(ctx context.Context) map[string]string {
+	out := map[string]string{}
+	token := ""
+	for {
+		page, err := r.projects.ListProjects(ctx, call(r.token, &bohuxv1.ListProjectsRequest{PageToken: token}))
+		if err != nil {
+			return out // IDs are shown instead
+		}
+		for _, p := range page.Msg.GetProjects() {
+			out[p.GetMeta().GetId()] = p.GetSlug()
+		}
+		if token = page.Msg.GetNextPageToken(); token == "" {
+			return out
+		}
+	}
+}
+
+func (r *resource) tokenList(ctx context.Context, args []string) error {
+	if _, err := r.positional(args, 0, "no arguments"); err != nil {
+		return err
+	}
+	resp := &bohuxv1.ListApiTokensResponse{}
+	token := ""
+	for {
+		page, err := r.identity.ListApiTokens(ctx, call(r.token, &bohuxv1.ListApiTokensRequest{PageToken: token}))
+		if err != nil {
+			return fmt.Errorf("list tokens: %w", err)
+		}
+		resp.ApiTokens = append(resp.ApiTokens, page.Msg.GetApiTokens()...)
+		if token = page.Msg.GetNextPageToken(); token == "" {
+			break
+		}
+	}
+	slugs := r.projectSlugs(ctx)
+	rows := make([][]string, 0, len(resp.GetApiTokens()))
+	for _, t := range resp.GetApiTokens() {
+		rows = append(rows, tokenRow(t, slugs))
+	}
+	return r.emit(resp, tokenHeader, rows)
+}
+
+func (r *resource) tokenCreate(ctx context.Context, args []string) error {
+	role := r.fs.String("role", "", "viewer, deployer, or owner (required)")
+	expires := r.fs.Duration("expires", 0, "lifetime, e.g. 720h; none by default")
+	pos, err := r.positional(args, 1, "a token name")
+	if err != nil {
+		return err
+	}
+	v, ok := bohuxv1.Role_value["ROLE_"+strings.ToUpper(*role)]
+	if !ok || v == 0 {
+		return fmt.Errorf("token create: --role must be viewer, deployer, or owner: %w", ErrUsage)
+	}
+	if *expires < 0 {
+		return fmt.Errorf("token create: --expires must be positive: %w", ErrUsage)
+	}
+	req := &bohuxv1.CreateApiTokenRequest{Name: pos[0], Role: bohuxv1.Role(v), IdempotencyKey: r.key()}
+	if *r.t.project != "" {
+		if req.ProjectId, err = r.projectID(ctx); err != nil {
+			return err
+		}
+	}
+	if *expires > 0 {
+		req.ExpiresAt = timestamppb.New(time.Now().Add(*expires))
+	}
+	resp, err := r.identity.CreateApiToken(ctx, call(r.token, req))
+	if err != nil {
+		return fmt.Errorf("create token: %w", err)
+	}
+	// The secret is returned this once (ADR-0022); it goes to stdout, never a log.
+	row := append(tokenRow(resp.Msg.GetApiToken(), map[string]string{req.GetProjectId(): *r.t.project}), resp.Msg.GetSecret())
+	return r.emit(resp.Msg, append(append([]string{}, tokenHeader...), "SECRET"), [][]string{row})
+}
+
+func (r *resource) tokenRevoke(ctx context.Context, args []string) error {
+	pos, err := r.positional(args, 1, "a token ID")
+	if err != nil {
+		return err
+	}
+	resp, err := r.identity.RevokeApiToken(ctx, call(r.token, &bohuxv1.RevokeApiTokenRequest{Id: pos[0], IdempotencyKey: r.key()}))
+	if err != nil {
+		return fmt.Errorf("revoke token %s: %w", pos[0], err)
+	}
+	return r.emit(resp.Msg, tokenHeader, [][]string{tokenRow(resp.Msg.GetApiToken(), r.projectSlugs(ctx))})
+}
+
 func bytesHuman(n int64) string {
 	switch {
 	case n >= 1<<30:
