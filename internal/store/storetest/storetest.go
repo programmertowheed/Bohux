@@ -78,3 +78,19 @@ func randomHex(t testing.TB, n int) string {
 	}
 	return hex.EncodeToString(b)
 }
+
+// AdminDSNFor returns the admin role's DSN for the database appDSN names: a role
+// that bypasses row-level security, as backup and restore need (ADR-0029).
+func AdminDSNFor(t testing.TB, appDSN string) string {
+	t.Helper()
+	app, err := url.Parse(appDSN)
+	if err != nil {
+		t.Fatalf("parse app DSN: %v", err)
+	}
+	u, err := url.Parse(AdminDSN(t))
+	if err != nil {
+		t.Fatalf("parse %s: %v", AdminEnv, err)
+	}
+	u.Path = app.Path
+	return u.String()
+}

@@ -98,6 +98,26 @@ BOHUX_DATABASE_URL='postgres://bohux_app:bohux-dev@localhost:5432/bohux_app?sslm
 |---|---|---|
 | `BOHUX_TEST_POSTGRES_URL` | `go test -tags=integration` | DSN of a role that can create roles and databases. Each test creates and drops its own. |
 
+## `bohux admin backup` and `bohux admin restore` (ADR-0029)
+
+| Flag | Environment | Meaning |
+|---|---|---|
+| `--admin-database-url` | `BOHUX_ADMIN_DATABASE_URL` | Postgres DSN of a **superuser or `BYPASSRLS`** role on Bohux's database. Row-level security hides every row from Bohux's own role outside a tenant, so backup and restore need one that bypasses it. Never give it to `bohux controlplane`, which refuses such roles. |
+| `--data-dir` | `BOHUX_DATA_DIR` | The control plane's data directory; its `pki/` (node CA, signing key) is in the archive. |
+| `--openbao-address`, `--openbao-token-file`, `--openbao-kv-mount` | as for `bohux controlplane` | Where secret values are read from (backup) or written to (restore). Leave the address empty when no secrets are configured. |
+| `--recipient` (backup) | | age public key (`age1…`) the archive is encrypted to. Only its private key can restore it; keep that key away from the host. |
+| `--out` (backup) | | Archive to create, mode 0600. Never overwritten. |
+| `--database-url` (restore) | `BOHUX_DATABASE_URL` | The role Bohux runs as; it creates and owns the restored schema. |
+| `--identity` (restore) | | age identity file (`AGE-SECRET-KEY-…`). |
+| `--in` (restore) | | Archive to restore. |
+
+Restore needs an empty target: a fresh database, no node CA in `--data-dir`, no secret
+paths in the mount. It recreates the schema at the archive's migration version, copies
+every row back, rewrites every secret version so version numbers match, and restores
+the node CA, so registered agents reconnect without re-registering. Start
+`bohux controlplane` afterwards to finish migrating. The archive holds every secret
+value: store it, and the key, accordingly.
+
 ## CLI: `bohux deploy | rollback | scale | logs | exec`
 
 The CLI is a client of the public API (CLAUDE.md rule 8). It has no config file in

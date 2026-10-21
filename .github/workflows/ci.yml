@@ -145,7 +145,8 @@ jobs:
         run: go test -count=1 -v -timeout 20m ./providers/_conformance -provider=docker
 
   # Control plane + agent + Docker + Temporal in one process tree: deploy, recreate,
-  # and roll back a broken Release (S6d, CLAUDE.md rule 5).
+  # roll back a broken Release (rule 5), build from Git, and the backup → wipe →
+  # restore → rollback drill (ADR-0020 item 7).
   e2e:
     runs-on: ubuntu-latest
     services:
@@ -192,8 +193,8 @@ jobs:
           nohup /tmp/temporal server start-dev --headless --ip 127.0.0.1 --port 7233 > /tmp/temporal.log 2>&1 &
           for i in $(seq 60); do /tmp/temporal operator cluster health --address 127.0.0.1:7233 && exit 0; sleep 1; done
           cat /tmp/temporal.log; exit 1
-      - name: End-to-end deploy
-        run: go test -tags=integration,e2e -count=1 -v -timeout 15m -run TestDeployEndToEnd ./cmd/bohux
+      - name: End to end (deploy, build, restore drill)
+        run: go test -tags=integration,e2e -count=1 -v -timeout 25m ./cmd/bohux
 
   compose:
     runs-on: ubuntu-latest

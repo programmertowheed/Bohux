@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"filippo.io/age"
 	"github.com/google/uuid"
 
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
@@ -109,6 +110,38 @@ type stack struct {
 	tenant uuid.UUID
 	st     *store.Store
 	hc     *http.Client
+
+	dsn, dataDir, apiAddr, agentAddr, temporal string
+	// stopCP stops the running control plane and waits for it.
+	stopCP func()
+}
+
+// controlPlane starts `bohux controlplane` on the stack's addresses with dsn and
+// dataDir, and waits until it answers.
+func (s *stack) controlPlane(dsn, dataDir string) {
+	s.t.Helper()
+	ctx, cancel := context.WithCancel(s.ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		err := runWith(ctx, []string{"controlplane", "--listen", s.apiAddr, "--agent-listen", s.agentAddr,
+			"--database-url", dsn, "--data-dir", dataDir, "--temporal-address", s.temporal,
+			"--deploy-health-timeout", "45s"}, io.Discard, func(string) string { return "" }, defaultDeps)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			s.t.Errorf("control plane: %v", err)
+		}
+	}()
+	s.dsn, s.dataDir = dsn, dataDir
+	s.stopCP = func() { cancel(); <-done }
+	for i := 0; ; i++ {
+		if _, err := get("http://" + s.apiAddr + "/healthz"); err == nil {
+			return
+		}
+		if i > 100 {
+			s.t.Fatal("control plane never became healthy")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func startStack(t *testing.T) *stack {
@@ -128,7 +161,8 @@ func startStack(t *testing.T) *stack {
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	token := lines[len(lines)-1]
 
-	apiAddr, agentAddr := freeAddr(t), freeAddr(t)
+	s := &stack{t: t, ctx: ctx, apiAddr: freeAddr(t), agentAddr: freeAddr(t), temporal: temporal}
+	agentAddr := s.agentAddr
 	var wg sync.WaitGroup
 	run := func(name string, args ...string) {
 		wg.Add(1)
@@ -139,24 +173,15 @@ func startStack(t *testing.T) *stack {
 			}
 		}()
 	}
-	run("control plane", "controlplane", "--listen", apiAddr, "--agent-listen", agentAddr, "--database-url", dsn,
-		"--data-dir", t.TempDir(), "--temporal-address", temporal, "--deploy-health-timeout", "45s")
+	s.controlPlane(dsn, t.TempDir())
 	stateDir := t.TempDir()
 	t.Cleanup(func() {
 		cancel()
+		s.stopCP()
 		wg.Wait()
 		removeWorkloads(t, stateDir)
 	})
-	base := "http://" + apiAddr
-	for i := 0; ; i++ {
-		if _, err := get(base + "/healthz"); err == nil {
-			break
-		}
-		if i > 100 {
-			t.Fatal("control plane never became healthy")
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	base := "http://" + s.apiAddr
 
 	hc := http.DefaultClient
 	nodes := bohuxv1connect.NewNodeServiceClient(hc, base)
@@ -192,8 +217,9 @@ func startStack(t *testing.T) *stack {
 		t.Fatal(err)
 	}
 	t.Cleanup(st.Close)
-	return &stack{t: t, ctx: ctx, token: token, base: base, env: er.Msg.GetEnvironment().GetMeta().GetId(),
-		tenant: uuid.MustParse(node.GetMeta().GetTenantId()), st: st, hc: hc}
+	s.token, s.base, s.env, s.st, s.hc = token, base, er.Msg.GetEnvironment().GetMeta().GetId(), st, hc
+	s.tenant = uuid.MustParse(node.GetMeta().GetTenantId())
+	return s
 }
 
 // app creates an App serving /healthz on 8080, published on hostPort.
@@ -442,4 +468,76 @@ func removeWorkloads(t *testing.T, stateDir string) {
 		}
 		return nil
 	})
+}
+
+// TestRestoreDrill is ADR-0020 item 7's drill: deploy two Releases, back up, wipe the
+// control plane (new database, new data directory), restore, and roll back with the
+// CLI against the restored state. The agent never re-registers: the restored node CA
+// still vouches for it.
+func TestRestoreDrill(t *testing.T) {
+	s := startStack(t)
+	hostPort := freePort(t)
+	app := s.app("web", &bohuxv1.Source{Kind: &bohuxv1.Source_Image{Image: &bohuxv1.ImageSource{
+		Repository: "example.invalid/web", Digest: "sha256:" + strings.Repeat("0", 64)}}}, hostPort)
+	release := func(version string) string {
+		return fixture.BuiltRelease(t, s.st, s.tenant, uuid.MustParse(app), buildImage(t, version, false), "commit-"+version).String()
+	}
+	v1, v2 := release("v1"), release("v2")
+	s.deploy(v1, "d1", bohuxv1.DeploymentState_DEPLOYMENT_STATE_SUCCEEDED)
+	s.deploy(v2, "d2", bohuxv1.DeploymentState_DEPLOYMENT_STATE_SUCCEEDED)
+	served := fmt.Sprintf("http://127.0.0.1:%d/version", hostPort)
+	if got, err := get(served); got != "v2" {
+		t.Fatalf("serving %q (%v), want v2", got, err)
+	}
+
+	identity, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	idFile := filepath.Join(t.TempDir(), "backup.key")
+	if err := os.WriteFile(idFile, []byte(identity.String()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(t.TempDir(), "bohux.backup")
+	admin := func(args ...string) {
+		t.Helper()
+		var out bytes.Buffer
+		if err := runWith(s.ctx, append([]string{"admin"}, args...), &out, func(string) string { return "" }, defaultDeps); err != nil {
+			t.Fatalf("bohux admin %s: %v", args[0], err)
+		}
+		t.Logf("bohux admin %s: %s", args[0], strings.TrimSpace(out.String()))
+	}
+	admin("backup", "--admin-database-url", storetest.AdminDSNFor(t, s.dsn), "--data-dir", s.dataDir,
+		"--recipient", identity.Recipient().String(), "--out", archive)
+
+	// Wipe: the control plane goes away with its database and data directory; the
+	// node keeps serving v2 meanwhile (rule 1).
+	s.stopCP()
+	if got, err := get(served); got != "v2" {
+		t.Fatalf("with the control plane gone, serving %q (%v), want v2", got, err)
+	}
+	newDSN, newDir := storetest.NewAppDSN(t), t.TempDir()
+	restored := time.Now()
+	admin("restore", "--admin-database-url", storetest.AdminDSNFor(t, newDSN), "--database-url", newDSN,
+		"--data-dir", newDir, "--identity", idFile, "--in", archive)
+	s.controlPlane(newDSN, newDir)
+
+	nodes := bohuxv1connect.NewNodeServiceClient(s.hc, s.base)
+	// The restored rows still say "online"; a report newer than the restore is the
+	// agent actually back.
+	waitFor(t, func() bool {
+		r, err := nodes.ListNodes(s.ctx, call(s.token, &bohuxv1.ListNodesRequest{}))
+		return err == nil && len(r.Msg.GetNodes()) == 1 &&
+			r.Msg.GetNodes()[0].GetLastSeenAt().AsTime().After(restored)
+	}, "the agent to reconnect to the restored control plane")
+
+	var out bytes.Buffer
+	env := map[string]string{"BOHUX_API_URL": s.base, "BOHUX_TOKEN": s.token, "BOHUX_PROJECT": "shop"}
+	if err := runWith(s.ctx, []string{"rollback", "web", "-e", "prod"}, &out, func(k string) string { return env[k] }, defaultDeps); err != nil {
+		t.Fatalf("rollback after restore: %v\n%s", err, out.String())
+	}
+	t.Logf("bohux rollback after restore:\n%s", out.String())
+	if got, err := get(served); got != "v1" {
+		t.Fatalf("after rollback on the restored control plane, serving %q (%v), want v1", got, err)
+	}
 }

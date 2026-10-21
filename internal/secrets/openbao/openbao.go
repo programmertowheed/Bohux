@@ -140,3 +140,58 @@ func (c *Client) client() *http.Client {
 	}
 	return &http.Client{Timeout: 10 * time.Second}
 }
+
+// List returns the keys under prefix (one level; folders end with "/").
+func (c *Client) List(ctx context.Context, prefix string) ([]string, error) {
+	var out struct {
+		Data struct {
+			Keys []string `json:"keys"`
+		} `json:"data"`
+	}
+	err := c.do(ctx, http.MethodGet, "metadata/"+strings.TrimSuffix(prefix, "/"), url.Values{"list": {"true"}}, nil, &out)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	return out.Data.Keys, err
+}
+
+// Version is one version's metadata.
+type Version struct {
+	// Gone is true when the version was deleted or destroyed: it has no value.
+	Gone bool
+}
+
+// Versions returns the metadata of every version of path, by version number, and
+// the current version.
+func (c *Client) Versions(ctx context.Context, path string) (map[int]Version, int, error) {
+	var out struct {
+		Data struct {
+			CurrentVersion int `json:"current_version"`
+			Versions       map[string]struct {
+				DeletionTime string `json:"deletion_time"`
+				Destroyed    bool   `json:"destroyed"`
+			} `json:"versions"`
+		} `json:"data"`
+	}
+	if err := c.do(ctx, http.MethodGet, "metadata/"+path, nil, nil, &out); err != nil {
+		return nil, 0, err
+	}
+	vs := make(map[int]Version, len(out.Data.Versions))
+	for k, v := range out.Data.Versions {
+		var n int
+		if _, err := fmt.Sscan(k, &n); err != nil {
+			return nil, 0, fmt.Errorf("openbao: version %q of %s", k, path)
+		}
+		vs[n] = Version{Gone: v.Destroyed || v.DeletionTime != ""}
+	}
+	return vs, out.Data.CurrentVersion, nil
+}
+
+// DestroyVersions permanently removes the given versions of path.
+func (c *Client) DestroyVersions(ctx context.Context, path string, versions []int) error {
+	body, err := json.Marshal(map[string][]int{"versions": versions})
+	if err != nil {
+		return errors.New("openbao: encode versions")
+	}
+	return c.do(ctx, http.MethodPost, "destroy/"+path, nil, body, nil)
+}

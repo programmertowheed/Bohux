@@ -52,3 +52,17 @@ func hasSQL(s string) bool {
 	}
 	return false
 }
+
+func TestLatestMigration(t *testing.T) {
+	latest, err := LatestMigration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := fs.ReadDir(Migrations(), ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest != int64(len(entries)) {
+		t.Errorf("LatestMigration = %d, want %d (one file per version)", latest, len(entries))
+	}
+}

@@ -95,3 +95,41 @@ func checkRole(ctx context.Context, db *sql.DB) error {
 	}
 	return nil
 }
+
+// LatestMigration is the newest migration version this binary has.
+func LatestMigration() (int64, error) {
+	entries, err := fs.ReadDir(Migrations(), ".")
+	if err != nil {
+		return 0, fmt.Errorf("read migrations: %w", err)
+	}
+	var latest int64
+	for _, e := range entries {
+		v, err := goose.NumericComponent(e.Name())
+		if err != nil {
+			return 0, fmt.Errorf("migration %s: %w", e.Name(), err)
+		}
+		latest = max(latest, v)
+	}
+	return latest, nil
+}
+
+// MigrateTo applies migrations up to and including version, as Migrate does. Restore
+// uses it to recreate the schema an archive was taken at (ADR-0029).
+func MigrateTo(ctx context.Context, dsn string, version int64) (err error) {
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return fmt.Errorf("open postgres: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := checkRole(ctx, db); err != nil {
+		return err
+	}
+	p, err := newProvider(db)
+	if err != nil {
+		return err
+	}
+	if _, err := p.UpTo(ctx, version); err != nil {
+		return fmt.Errorf("apply migrations up to %d: %w", version, err)
+	}
+	return nil
+}

@@ -35,6 +35,8 @@ commands:
   controlplane    run the control plane API
   admin migrate   apply database migrations and exit
   admin bootstrap create a tenant and print its first owner token
+  admin backup    write an encrypted archive of Bohux's state
+  admin restore   restore an archive onto an empty install
   agent register  enroll this node with a bootstrap token (once)
   agent run       run the node agent`)
 
@@ -256,6 +258,10 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 		case "migrate":
 		case "bootstrap":
 			return adminBootstrap(ctx, args[2:], stdout, getenv, d)
+		case "backup":
+			return adminBackup(ctx, args[2:], stdout, getenv)
+		case "restore":
+			return adminRestore(ctx, args[2:], stdout, getenv)
 		default:
 			return fmt.Errorf("admin: unknown subcommand %q: %w", args[1], errUsage)
 		}

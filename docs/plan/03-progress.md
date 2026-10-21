@@ -38,16 +38,20 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S8c — backup and restore (⏳, next to start). S7d (OpenBao auto-unseal)
-  belongs with the install bundle in S9
-- **Exact next step:** decide the archive format and its encryption (operator-held key,
-  ADR-0020 item 7) — an ADR if it adds a dependency — then `bohux admin backup`.
+- **Slice:** S9 — exit: Bohux deploys Bohux (⏳, next to start; split it first).
+  Includes S7d (OpenBao auto-unseal), the install bundle, the nightly backup schedule,
+  runbooks, and the footprint re-measure
+- **Exact next step:** split S9; the first sub-slice is the install bundle shape
+  (what runs where on one VPS: Postgres, Temporal, OpenBao, the control plane, the
+  agent), which needs an ADR.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S8c (backup and restore)
-> on branch `claude/relaxed-rubin-76m7dl`, following ADR-0020 item 7 and CLAUDE.md
-> rule 3. Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*). Verify with build, vet, golangci-lint (also with the integration
+> Read CLAUDE.md and docs/plan/03-progress.md, then split slice S9 (exit: Bohux deploys
+> Bohux) into sub-slices and do the first on branch `claude/relaxed-rubin-76m7dl`,
+> following ADR-0011, ADR-0020 (items 1, 6, 7), and the `write-adr` and
+> `write-runbook` skills. Start Postgres, Docker, Temporal and OpenBao (tracker *Known
+> gaps*). Verify with build, vet, golangci-lint (also with the integration
 > tag), unit and integration tests. Tick boxes, update the tracker and the next
 > session prompt, commit, push, and give me the next prompt.
 
@@ -68,6 +72,7 @@ work is in right now*.
 | O12 | Accept or reject ADR-0026 (deploy workflow shape: worker in the control plane, workflow ID per App, row written by API and workflow, per-App assign, polling health activity, compensation by reassignment). Built on already | S6b onward |
 | O13 | Accept or reject ADR-0027 (replicas are not part of a Release; ScaleApp writes the App revision and the assignment in one transaction). Built on already | S6e onward |
 | O14 | Accept or reject ADR-0028 (builds run in the agent over its stream, on a resource-limited buildx `docker-container` builder named `bohux`, `--load` into dockerd; public Git only in v0.1). Built on already | S7c onward |
+| O15 | Accept or reject ADR-0029 (backup archive: age-encrypted tar; logical Postgres copy over a privileged DSN; every OpenBao version; node CA). Adds `filippo.io/age`. Built on already | S8c onward |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -589,7 +594,7 @@ Split into sub-slices, one session each.
 #### S7d — OpenBao in the install bundle ⏳
 - [ ] Auto-unseal with a node-local key (ADR-0020 item 6), in the install bundle (S9)
 
-### S8 — CLI 🔄
+### S8 — CLI ✅
 Split into sub-slices, one session each.
 
 #### S8a — deploy, rollback, scale ✅
@@ -619,10 +624,32 @@ Split into sub-slices, one session each.
       tests for the relays; the CLI drives both in `TestBuildEndToEnd`, which also
       checks each exec session is audited
 
-#### S8c — backup and restore ⏳
-- [ ] `bohux admin backup | restore` (Postgres dump, OpenBao snapshot, node CA;
-      encrypted with an operator key, never logged); restore tested in CI (ADR-0020
-      item 7)
+#### S8c — backup and restore ✅
+- [x] Proposed ADR-0029 (O15): tar stream encrypted with age (`filippo.io/age` v1.2.1,
+      last for Go 1.23) to an operator-held X25519 recipient; Postgres copied
+      logically per table (`COPY`, one repeatable-read snapshot) over a privileged
+      DSN; every version of every OpenBao value under `bohux/<tenant>/` (restored in
+      order so version numbers match what Postgres records; destroyed versions
+      re-destroyed); the node CA
+- [x] `internal/backup` (`Write`, `Restore`: empty target only, schema recreated at the
+      archive's migration with `store.MigrateTo`, rows copied with
+      `session_replication_role = replica`); `store.LatestMigration`; OpenBao client
+      `List`, `Versions`, `DestroyVersions`; `storetest.AdminDSNFor`
+- [x] `bohux admin backup | restore` (`--admin-database-url` /
+      `BOHUX_ADMIN_DATABASE_URL`), documented in config.md
+- [x] Round trip tested (rows, secret at its recorded version, destroyed version gone,
+      node CA identical and loading, wrong identity and non-empty target refused,
+      nothing readable in the archive), and the **drill end to end** (`TestRestoreDrill`,
+      CI job `e2e`): deploy v1 and v2, back up, wipe the control plane, restore, the
+      same agent reconnects, `bohux rollback` → v1 serves
+- **Fixed on the way:** the control plane's shutdown waited 10 s on open streams and
+  reported an error; every handler's context now ends when shutdown begins
+- **Known gap:** node state stays "online" in Postgres after the control plane dies
+  until the agent reconnects (no stream ends to mark it offline). Status only;
+  workloads unaffected. Fix with a start-up sweep once tenants can be listed by the
+  control plane (RLS blocks it today)
+- **Not done (ADR-0020 item 7):** the scheduled nightly backup (a Temporal schedule)
+  and S3 targets. Planned with the install bundle (S9)
 
 ### S9 — Exit: Bohux deploys Bohux ⏳
 - [ ] Bohux deploys itself and rolls itself back, end to end
@@ -744,6 +771,9 @@ Split into sub-slices, one session each.
 - S8b done: logs and exec through WorkloadService and the agent stream, CLI commands,
   exec audited.
 - **Next:** S8c.
+- S8c done: ADR-0029 proposed (O15), `bohux admin backup | restore`, the restore drill
+  end to end; control-plane shutdown no longer waits on streams. **S8 done.**
+- **Next:** S9, split first.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by
