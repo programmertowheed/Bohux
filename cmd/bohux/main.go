@@ -343,7 +343,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 			base = cli.DefaultAPIURL
 		}
 		return mcp.Run(ctx, mcp.Config{APIURL: base, Token: token, HTTP: cli.HTTPClient(base)})
-	case "deploy", "rollback", "scale", "logs", "exec", "project", "env", "app", "route", "secret", "node", "webhook", "channel":
+	case "deploy", "rollback", "scale", "logs", "exec", "project", "env", "app", "route", "secret", "node", "webhook", "channel", "audit":
 		if err := cli.Run(ctx, args[0], args[1:], d.stdin, stdout, getenv); err != nil {
 			if errors.Is(err, cli.ErrUsage) {
 				return fmt.Errorf("%w\n\n%w", err, errUsage)

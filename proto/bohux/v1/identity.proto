@@ -21,6 +21,12 @@ enum PrincipalKind {
   PRINCIPAL_KIND_UNSPECIFIED = 0;
   PRINCIPAL_KIND_USER = 1;
   PRINCIPAL_KIND_API_TOKEN = 2;
+  // A node's agent, acting on its own state (audit records only).
+  PRINCIPAL_KIND_NODE = 3;
+  // Bohux itself: installs, migrations, scheduled work (audit records only).
+  PRINCIPAL_KIND_SYSTEM = 4;
+  // A Git push webhook deploying as itself (ADR-0037).
+  PRINCIPAL_KIND_WEBHOOK = 5;
 }
 
 // Who is calling. Derived from authentication on every request.

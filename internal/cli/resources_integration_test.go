@@ -173,6 +173,9 @@ func TestResourceCommands(t *testing.T) {
 	if out := must("channel", "list"); !strings.Contains(out, "slack") || !strings.Contains(out, "failed") {
 		t.Errorf("channel list:\n%s", out)
 	}
+	if out := must("audit", "list", "--limit", "5"); !strings.Contains(out, "NotificationService/CreateNotificationChannel") {
+		t.Errorf("audit list:\n%s", out)
+	}
 	if out := must("webhook", "list", "site", "-e", "prod"); strings.Contains(out, created.Webhook.Meta.ID) {
 		t.Errorf("webhook list after remove:\n%s", out)
 	}

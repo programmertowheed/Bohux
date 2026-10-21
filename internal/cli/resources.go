@@ -29,12 +29,13 @@ const ResourceCommands = `  project list|create      projects
   webhook list|create|remove
                            git push webhooks of an app; create prints the secret once
   channel list|create|remove
-                           a project's deploy notifications; create reads the URL from stdin`
+                           a project's deploy notifications; create reads the URL from stdin
+  audit list               who changed what, newest first (-p for one project)`
 
 // IsResource reports whether cmd is a resource noun.
 func IsResource(cmd string) bool {
 	switch cmd {
-	case "project", "env", "app", "route", "secret", "node", "webhook", "channel":
+	case "project", "env", "app", "route", "secret", "node", "webhook", "channel", "audit":
 		return true
 	}
 	return false
@@ -157,6 +158,8 @@ func (c *command) runResource(ctx context.Context, noun string, args []string, s
 		return r.channelCreate(ctx, rest)
 	case "channel remove":
 		return r.channelRemove(ctx, rest)
+	case "audit list":
+		return r.auditList(ctx, rest)
 	}
 	return fmt.Errorf("unknown command %q: %w", verb, ErrUsage)
 }
@@ -923,4 +926,42 @@ func (r *resource) channelRemove(ctx context.Context, args []string) error {
 		return r.emit(resp.Msg, []string{"REMOVED"}, [][]string{{pos[0]}})
 	}
 	return fmt.Errorf("channel remove: project %s has no channel %q", *r.t.project, pos[0])
+}
+
+// --- audit -----------------------------------------------------------------------
+
+// auditList prints the trail, newest first: a project's with -p, else the tenant's
+// (which needs a tenant-wide token).
+func (r *resource) auditList(ctx context.Context, args []string) error {
+	limit := r.fs.Int("limit", 50, "how many events")
+	if _, err := r.positional(args, 0, "no arguments"); err != nil {
+		return err
+	}
+	req := &bohuxv1.ListAuditEventsRequest{PageSize: int32(*limit)}
+	if *r.t.project != "" {
+		project, err := r.projectID(ctx)
+		if err != nil {
+			return err
+		}
+		req.ProjectId = project
+	}
+	resp, err := r.audit.ListAuditEvents(ctx, call(r.token, req))
+	if err != nil {
+		return fmt.Errorf("list audit events: %w", err)
+	}
+	rows := make([][]string, 0, len(resp.Msg.GetAuditEvents()))
+	for _, e := range resp.Msg.GetAuditEvents() {
+		kind := strings.ToLower(strings.TrimPrefix(e.GetActor().GetKind().String(), "PRINCIPAL_KIND_"))
+		rows = append(rows, []string{e.GetOccurredAt().AsTime().UTC().Format(time.RFC3339),
+			kind + ":" + shortID(e.GetActor().GetId()), e.GetAction(),
+			strings.TrimPrefix(e.GetResource().GetType(), "bohux.v1.") + ":" + shortID(e.GetResource().GetId())})
+	}
+	return r.emit(resp.Msg, []string{"TIME", "ACTOR", "ACTION", "RESOURCE"}, rows)
+}
+
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[len(id)-8:]
+	}
+	return id
 }

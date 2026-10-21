@@ -16,7 +16,10 @@ export function Environments() {
   if (envs.error) return <Failed error={envs.error} />;
   return (
     <section>
-      <h1 className="mb-4 text-xl font-semibold">{project}</h1>
+      <div className="mb-4 flex items-baseline gap-4">
+        <h1 className="text-xl font-semibold">{project}</h1>
+        <Link to="/p/$project/activity" params={{ project }} className="text-sm text-accent">activity</Link>
+      </div>
       <Table
         head={["Environment", "Provider", "Node"]}
         empty="No environments yet. Create one with: bohux env create <slug> --node <node>"

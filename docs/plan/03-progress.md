@@ -41,8 +41,8 @@ work is in right now*.
 - **Slice:** S15 — web UI (🔄, read-only first cut done)
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** release history per App in the UI, then create/scale/route
-  forms mirroring the CLI.
+- **Exact next step:** revisions (`ListRevisions`/`GetRevision` with snapshots), then
+  release history per App in the UI and create/scale/route forms mirroring the CLI.
 
 ## Next session prompt
 
@@ -946,8 +946,13 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       through the CLI's RPCs, then following the new deployment. Checked in Chromium
       against the live install: a UI deploy and a UI rollback both succeeded and the
       route served each release
+- [x] `AuditService.ListAuditEvents` (newest first; a project's viewer reads that
+      project's events, the tenant's trail needs a tenant-wide token; filter by
+      resource; pagination), `PrincipalKind` gains NODE, SYSTEM, WEBHOOK; CLI `bohux
+      audit list [-p]`; UI project activity page. `ListRevisions`/`GetRevision` still
+      answer Unimplemented: snapshots need a reader per resource type
 - [ ] Next: release history per App, environment and App creation (mirroring `bohux
-      env|app create`), routes and scale, an audit view once `AuditService` exists
+      env|app create`), routes and scale; revisions with snapshots
 
 ## Known gaps and notes
 - **CI has not run on this branch.** `ci.yml` triggers on pushes to `main` and on
