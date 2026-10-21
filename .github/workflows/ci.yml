@@ -25,9 +25,17 @@ jobs:
         run: test -f buf.lock || buf dep update
       - name: Lint
         run: buf lint
+      # Until the S1 contract reaches the base branch, the base holds only the
+      # pre-contract draft (never released), which S1 replaces wholesale. Skip the
+      # check in that case only; it runs on every PR once common.proto is on the base.
       - name: Breaking
         if: github.event_name == 'pull_request'
-        run: buf breaking --against "${{ github.event.repository.clone_url }}#branch=${{ github.base_ref }}"
+        run: |
+          if ! git cat-file -e "origin/${{ github.base_ref }}:proto/bohux/v1/common.proto" 2>/dev/null; then
+            echo "Base has no S1 contract yet; skipping buf breaking."
+            exit 0
+          fi
+          buf breaking --against "${{ github.event.repository.clone_url }}#branch=${{ github.base_ref }}"
 
   go:
     runs-on: ubuntu-latest
