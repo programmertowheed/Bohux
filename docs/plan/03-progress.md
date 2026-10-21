@@ -38,19 +38,19 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S2a — storage: migration tool choice (⏳, next to start)
-- **Exact next step:** pick the migration tool and write its ADR with
-  `.claude/skills/write-adr/` (status *proposed*); add it to *Waiting on the owner*.
+- **Slice:** S2b — storage: schema (⏳, next to start)
+- **Exact next step:** add pgx v5.7.6 + goose v3.26.0 (ADR-0021), write the first
+  migration in `internal/store/migrations/` and a migrate runner in `internal/store`.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S2a (storage: migration tool
-> choice) on branch `claude/relaxed-rubin-76m7dl`. Compare the realistic options against
-> CLAUDE.md's migration conventions (forward-only, one file per change, reversible or
-> marked irreversible) and ADR-0004/ADR-0017, write the decision as a *proposed* ADR using
-> .claude/skills/write-adr/, add it to *Waiting on the owner*, and do not add the
-> dependency or any schema yet. Tick the S2a box, update the tracker and the next session
-> prompt, commit, push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S2b (storage: schema) on
+> branch `claude/relaxed-rubin-76m7dl`. Follow ADR-0021 (goose on pgx, embedded SQL
+> migrations), ADR-0004 and ADR-0017 (revisions + heads), and docs/specs/data-model.md;
+> every table gets `tenant_id` and row-level security. Verify the migrations apply on the
+> local Postgres 16 (see "Local Postgres" in the tracker) with an `integration`-tagged
+> test, run go build, vet, and unit tests, tick the S2b box, update the tracker and the
+> next session prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -60,6 +60,7 @@ work is in right now*.
 | O2 | Run `make run-dev && make footprint` on a 2GB VPS; record results in `docs/footprint.md` | ADR-0002 stays or reopens; nothing before S6 |
 | O3 | Create the `bohumix` GitHub org and move the repo (ADR-0015). Code already uses `github.com/bohumix/bohux` | Public `go get`, not local work |
 | O4 | Confirm the vision change: parity is demand-driven, not the goal | Nothing technical |
+| O6 | Accept or reject ADR-0021 (migrations: goose on pgx). Owner allowed building on it before acceptance | S2b onward is built on it |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -152,8 +153,9 @@ sub-slices, one session each.
 ### S2 — Storage ⏳
 Split into sub-slices, one session each.
 
-#### S2a — migration tool ⏳
-- [ ] Migration tool choice, as a proposed ADR (it is a new dependency)
+#### S2a — migration tool ✅
+- [x] Migration tool choice, as a proposed ADR (it is a new dependency): ADR-0021,
+      goose v3.26.0 on pgx v5.7.6 (last versions supporting Go 1.23)
 
 #### S2b — schema ⏳
 - [ ] Schema: tenants, projects, environments, apps, releases, deployments, nodes,
@@ -218,10 +220,21 @@ Split into sub-slices, one session each.
   `go build ./...`. CI does this.
 - The Buf Schema Registry was unreachable from the cloud container on 2026-10-21; S1
   may need to run `buf dep update` where the registry is reachable (CI or locally).
-- The cloud container has no running Docker daemon, so `make run-dev` and integration
-  tests cannot run there. Integration slices (S2+) need CI or a local machine.
+- The cloud container has no running Docker daemon, so `make run-dev` cannot run there.
+- **Local Postgres in the cloud container:** Postgres 16 binaries are in
+  `/usr/lib/postgresql/16/bin`. As a non-root user (`postgres` exists), `initdb` a
+  scratch dir, `pg_ctl start`, and point integration tests at it. This is enough for
+  the S2 storage tests; Temporal/OpenBao still need CI or a local machine.
+- **Go 1.23 pin holds dependencies back** (goose ≤ v3.26, pgx ≤ v5.7.6; newer need Go
+  1.24–1.26). Raising the `go` directive is cheap and its own commit when wanted.
 
 ## Session log (newest first)
+
+### 2026-10-21 (auto run) — branch `claude/relaxed-rubin-76m7dl`
+- Owner asked for an automatic run, slice after slice, until the session ends. Owner
+  rule for gates: write the ADR as *proposed*, build on it, list it under *Waiting on
+  the owner* (O6 onward).
+- S2a done: ADR-0021 (goose on pgx).
 
 ### 2026-10-21 (S1c) — branch `claude/relaxed-rubin-76m7dl`
 - S1c done, so S1 is done: node, secret, audit protos and
