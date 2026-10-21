@@ -38,24 +38,22 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S3e3 — AppService (⏳, next to start)
-- **Exact next step:** AppService in `internal/api`, following `environment.go`, with
-  the validation listed under S3e3.
+- **Slice:** S4a — node PKI and crypto ADR (⏳, next to start)
+- **Exact next step:** write a *proposed* ADR for the node CA (where its key lives,
+  certificate lifetime and renewal), the assignment signing key, and the secret
+  sealing scheme (ADR-0008), then build on it.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S3e3 (AppService) on branch `claude/relaxed-rubin-76m7dl`, in internal/api,
-> replacing their Unimplemented stubs and following internal/api/project.go: store write
-> path with audit events, ADR-0022 idempotency, `expected_revision_id`, ADR-0023
-> two-step authorization (authorizeProject in every handler, resolving the project
-> through the parent), lookup by id or slug, paging, and FailedPrecondition when
-> deleting a parent with live children. App source/runtime/secrets are stored as
-> protojson (data-model.md "Schema rules"); validate them (see the S3e notes in the
-> tracker). Test over real ConnectRPC on the local Postgres, including a token from
-> another project and a stale revision. Commit each service separately. Verify with
-> build, vet, golangci-lint (also with the integration tag) and tests. Tick boxes,
-> update the tracker and the next session prompt, commit, push, and give me the next
-> prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S4a (node PKI and crypto
+> ADR) on branch `claude/relaxed-rubin-76m7dl`. Using .claude/skills/write-adr/, write a
+> *proposed* ADR covering: where the node CA private key and the assignment signing
+> key live (never Postgres, rule 3; consider OpenBao and a 0600 file, and what backup
+> and restore (ADR-0020) need), certificate lifetime and renewal over the Connect
+> stream, the client-cert URI SAN from ADR-0022, the assignment signature algorithm,
+> and the secret sealing scheme for ADR-0008 (prefer standard-library or x/crypto
+> primitives). Add it to *Waiting on the owner*, tick the S4a box, update the tracker
+> and the next session prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -190,7 +188,7 @@ Split into sub-slices, one session each.
       nothing, failed transaction rolls back the audit event, cross-tenant writes are
       `ErrNotFound`, delete keeps the snapshot and frees the slug
 
-### S3 — API and access ⏳
+### S3 — API and access ✅
 Split into sub-slices, one session each.
 
 #### S3a — access design ✅
@@ -257,20 +255,39 @@ Split into sub-slices, one session each.
 - [x] CRUD per api-contract.md; `node_id` must name a live node in the tenant;
       delete refuses live apps; config stored as a JSON object
 
-#### S3e3 — AppService ⏳
-- [ ] CRUD + ScaleApp. Validation to write: source is git (repo_url) or image
+#### S3e3 — AppService ✅
+- [x] CRUD + ScaleApp. Validation to write: source is git (repo_url) or image
       (repository + `sha256:` digest); replicas ≥ 0; ports 1–65535, host ports
       0–65535 and unique; health port is one of the container ports; secret keys are
       env-var names (`^[A-Z_][A-Z0-9_]*$`), unique, and each (key, handle) is a live
       secret_ref in the app's environment. ScaleApp writes a revision only; the new
       assignment comes with S4/S6
+- Not validated (the provider will): `cpu`/`memory` quantity syntax. DeleteApp does
+  not yet remove the workload from nodes; that is an assignment change (S4/S6)
 
 ### S4 — Agent ⏳
-- [ ] Bootstrap-token registration, mTLS, outbound `Connect` stream
-- [ ] Signed, generation-numbered assignments; sealed secret cache (ADR-0008)
-- [ ] Offline reconcile loop (rule 1) — test with the control plane killed
-- [ ] Version skew check, N-1 minor (ADR-0020)
+Split into sub-slices, one session each.
+
+#### S4a — node PKI and crypto ⏳
+- [ ] Proposed ADR: node CA key storage, cert lifetime/renewal, URI SAN, assignment
+      signing, secret sealing
+
+#### S4b — registration ⏳
+- [ ] `internal/pki`; NodeService.CreateBootstrapToken; AgentService.Register (CSR →
+      client cert, node row, bootstrap token single use); NodeService Get/List/Revoke
+
+#### S4c — agent process and stream ⏳
+- [ ] `bohux agent`: register once, keep keys and cert on disk, dial `Connect` over
+      mTLS, `Hello`; version skew check N-1 minor with `VersionRejected` (ADR-0020)
 - [ ] Refuse to register without Docker `live-restore` (ADR-0020)
+
+#### S4d — assignments ⏳
+- [ ] Assignments table; signed, generation-numbered full-state assignments pushed on
+      the stream; agent verifies, caches to disk, `Ack`s; sealed secret values (ADR-0008)
+
+#### S4e — offline reconcile ⏳
+- [ ] Reconcile loop against the cached assignment with a fake provider; test with
+      the control plane killed (rule 1)
 
 ### S5 — Docker provider ⏳
 - [ ] Conformance suite in `providers/_conformance`
@@ -336,7 +353,8 @@ Split into sub-slices, one session each.
   rule for gates: write the ADR as *proposed*, build on it, list it under *Waiting on
   the owner* (O6 onward).
 - S2a done: ADR-0021 (goose on pgx).
-- S3e split into S3e1–S3e3. S3e1 done: ProjectService. S3e2 done: EnvironmentService.
+- S3e split into S3e1–S3e3, all done: Project, Environment, App services. **S3 done.**
+- Split S4 into S4a–S4e.
 - S3d done: `internal/secrets` redaction, access-log interceptor, rule 3 test.
 - S3c3 done: bootstrap command, Identity/Tenant handlers, idempotency records, all
   tested over real ConnectRPC; end-to-end binary smoke test passed.
