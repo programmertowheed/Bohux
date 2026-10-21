@@ -30,7 +30,8 @@ const ResourceCommands = `  project list|create      projects
   secret list|set          an environment's secrets; set reads the value from stdin
   node list|token          nodes, and bootstrap tokens to register one
   webhook list|create|remove
-                           git push webhooks of an app; create prints the secret once
+                           git push webhooks of an app (--path: only when files under it
+                           change); create prints the secret once
   channel list|create|remove
                            a project's deploy notifications; create reads the URL (or,
                            for email, mailto:a@x,b@y) from stdin
@@ -830,9 +831,13 @@ func (r *resource) webhookList(ctx context.Context, args []string) error {
 	}
 	rows := make([][]string, 0, len(resp.GetWebhooks()))
 	for _, w := range resp.GetWebhooks() {
-		rows = append(rows, []string{w.GetMeta().GetId(), w.GetBranch(), flavorName(w.GetFlavor()), r.hookURL(w.GetPath())})
+		paths := strings.Join(w.GetPaths(), ",")
+		if paths == "" {
+			paths = "*"
+		}
+		rows = append(rows, []string{w.GetMeta().GetId(), w.GetBranch(), flavorName(w.GetFlavor()), paths, r.hookURL(w.GetPath())})
 	}
-	return r.emit(resp, []string{"ID", "BRANCH", "FLAVOR", "URL"}, rows)
+	return r.emit(resp, []string{"ID", "BRANCH", "FLAVOR", "PATHS", "URL"}, rows)
 }
 
 // webhookCreate prints the URL and the signing secret: the only time the secret is
@@ -840,6 +845,8 @@ func (r *resource) webhookList(ctx context.Context, args []string) error {
 func (r *resource) webhookCreate(ctx context.Context, args []string) error {
 	branch := r.fs.String("branch", "main", "branch whose pushes deploy")
 	flavor := r.fs.String("flavor", "github", "github (GitHub, Gitea) or generic")
+	var paths repeated
+	r.fs.Var(&paths, "path", "deploy only when a push changes files under this path, e.g. services/api; repeatable (ADR-0044)")
 	pos, err := r.positional(args, 1, "an app slug")
 	if err != nil {
 		return err
@@ -857,7 +864,7 @@ func (r *resource) webhookCreate(ctx context.Context, args []string) error {
 		return err
 	}
 	resp, err := r.webhooks.CreateWebhook(ctx, call(r.token, &bohuxv1.CreateWebhookRequest{
-		AppId: a.GetMeta().GetId(), Branch: *branch, Flavor: f, IdempotencyKey: r.key()}))
+		AppId: a.GetMeta().GetId(), Branch: *branch, Flavor: f, Paths: paths, IdempotencyKey: r.key()}))
 	if err != nil {
 		return fmt.Errorf("create webhook: %w", err)
 	}

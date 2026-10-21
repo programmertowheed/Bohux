@@ -41,17 +41,17 @@ rule.** Scope is fixed by ADR-0011, extended by ADR-0020.
 - [ ] Buildpacks + Nixpacks auto-detection
 - [ ] Secrets: envelope encryption, per-env keys
 - [ ] Managed Postgres/Redis as Resources, with backups
-- [ ] Ingress: Caddy via admin API, automatic TLS, DNS, zero-downtime deploys (ADR-0019)
-- [ ] Web UI (read-only first, then mutations)
-- [ ] Audit log and RBAC surfaced in the UI
-- [ ] Git push and webhook triggers
-- [ ] MCP server: `bohux mcp` over stdio, tools generated from `proto/` (ADR-0018)
-- [ ] Notifications on deploy/failure/rollback (Slack, Discord, email, webhook)
+- [x] Ingress: Caddy via admin API, automatic TLS, DNS, zero-downtime deploys (ADR-0019) — S10; Bohux does not manage DNS records: users point them at the node
+- [x] Web UI (read-only first, then mutations) — S15
+- [x] Audit log and RBAC surfaced in the UI — S15 (activity page, tokens page)
+- [x] Git push and webhook triggers — S12
+- [x] MCP server: `bohux mcp` over stdio, tools generated from `proto/` (ADR-0018) — S14
+- [x] Notifications on deploy/failure/rollback (Slack, Discord, email, webhook) — S13, S19
 - [ ] Team invites and member management (CLI + UI)
 - [ ] Web terminal into a running container (UI over the existing `Exec` verb)
-- [ ] Private registry credentials, SSH key and Git source management
-- [ ] Basic server and app resource view (CPU/memory/disk) from node agents — current
-      values only; history goes to the user's OTLP backend (non-goal: metrics storage)
+- [x] Private registry credentials, SSH key and Git source management — S17
+- [x] Basic server and app resource view (CPU/memory/disk) from node agents — current
+      values only; history goes to the user's OTLP backend (non-goal: metrics storage) — S16
 
 ## v0.3 — The reason to choose this (weeks 21–30)
 - [ ] Preview environments per PR, with seeded data
@@ -64,7 +64,7 @@ rule.** Scope is fixed by ADR-0011, extended by ADR-0020.
 - [ ] Scheduled jobs (cron) per app, run as Temporal schedules (rule 6) — needs workflow design
 - [ ] Docker Compose apps (multi-container) as an App source — needs an ADR (changes App)
 - [ ] Volume management and volume backups to S3-compatible storage
-- [ ] Monorepo watch paths: only deploy when files under given paths change
+- [x] Monorepo watch paths: only deploy when files under given paths change (S20, ADR-0044 proposed)
 
 ## v1.0 — Trustworthy
 - [ ] Kubernetes provider

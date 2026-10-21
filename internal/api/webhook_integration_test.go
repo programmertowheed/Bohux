@@ -212,4 +212,44 @@ func TestWebhooks(t *testing.T) {
 	if got, _ := post(hook.GetPath(), "push", sign(secret, []byte(third)), third); got != http.StatusNotFound {
 		t.Errorf("a revoked webhook: %d, want 404", got)
 	}
+
+	// Watch paths (ADR-0044): a push deploys only when it changes a watched file.
+	deployer.mu.Lock()
+	deployer.running = false
+	deployer.mu.Unlock()
+	_, err = hooks.CreateWebhook(ctx, req(h.root, &bohuxv1.CreateWebhookRequest{AppId: gitApp, Branch: "main",
+		Flavor: bohuxv1.WebhookFlavor_WEBHOOK_FLAVOR_GENERIC, Paths: []string{"services/api"}, IdempotencyKey: "gp"}))
+	wantCode(t, err, connect.CodeInvalidArgument)
+	_, err = hooks.CreateWebhook(ctx, req(h.root, &bohuxv1.CreateWebhookRequest{AppId: gitApp, Branch: "main",
+		Paths: []string{"../etc"}, IdempotencyKey: "bp"}))
+	wantCode(t, err, connect.CodeInvalidArgument)
+	watching, err := hooks.CreateWebhook(ctx, req(h.root, &bohuxv1.CreateWebhookRequest{AppId: gitApp, Branch: "main",
+		Paths: []string{"./services/api/", "go.mod"}, IdempotencyKey: "wp"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wh, wsecret := watching.Msg.GetWebhook(), watching.Msg.GetSecret()
+	if strings.Join(wh.GetPaths(), ",") != "services/api,go.mod" {
+		t.Errorf("stored paths %v", wh.GetPaths())
+	}
+	listed, err := hooks.ListWebhooks(ctx, req(viewer.GetSecret(), &bohuxv1.ListWebhooksRequest{AppId: gitApp}))
+	if err != nil || len(listed.Msg.GetWebhooks()) != 1 || len(listed.Msg.GetWebhooks()[0].GetPaths()) != 2 {
+		t.Fatalf("list = %v, %v", listed, err)
+	}
+	pushed := func(sha string, files ...string) string {
+		return `{"ref": "refs/heads/main", "after": "` + sha + `", "commits": [{"modified": ["` +
+			strings.Join(files, `", "`) + `"]}]}`
+	}
+	before, _ := deployer.count()
+	other := pushed(strings.Repeat("f", 40), "web/index.html")
+	if got, body := post(wh.GetPath(), "push", sign(wsecret, []byte(other)), other); got != http.StatusNoContent {
+		t.Errorf("a push outside the paths: %d %q", got, body)
+	}
+	inside := pushed(strings.Repeat("1", 40), "web/index.html", "services/api/main.go")
+	if got, _ := post(wh.GetPath(), "push", sign(wsecret, []byte(inside)), inside); got != http.StatusAccepted {
+		t.Errorf("a push inside the paths: %d", got)
+	}
+	if b, _ := deployer.count(); b != before+1 {
+		t.Errorf("builds %d → %d, want one for the watched push", before, b)
+	}
 }

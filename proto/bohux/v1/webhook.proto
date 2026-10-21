@@ -26,6 +26,9 @@ message Webhook {
   // Where the Git host posts, relative to the API's base URL:
   // /hooks/v1/<tenant>/<webhook>.
   string path = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // Repository-relative path prefixes; a push deploys only when it changes a file
+  // under one of them (ADR-0044). Empty: every push deploys. github flavor only.
+  repeated string paths = 6 [(google.api.field_behavior) = IMMUTABLE];
 }
 
 // How the request is signed and what it carries.
@@ -57,6 +60,8 @@ message CreateWebhookRequest {
   string branch = 2 [(google.api.field_behavior) = REQUIRED];
   WebhookFlavor flavor = 3;
   string idempotency_key = 4 [(google.api.field_behavior) = REQUIRED];
+  // Up to 20 path prefixes, e.g. "services/api" or "go.mod" (ADR-0044).
+  repeated string paths = 5;
 }
 
 message CreateWebhookResponse {

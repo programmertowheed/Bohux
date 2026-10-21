@@ -38,14 +38,15 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S17 — private images and Git credentials (ADR-0041) done; S15 web UI 🔄
-  (webhooks, channels, tokens, terminal not in the UI); S16 done
+- **Slice:** S20 — webhook watch paths (v0.3, ADR-0044) done. v0.2 is done except the
+  items O35 lists; S15's web terminal is ⛔ on O29
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** every remaining v0.2 item needs a product call first (O35, O32,
-  O29). Until the owner answers, harden what exists: run the build e2e and the
-  self-deploy test where the disk allows (CI, via a PR: O24), and keep testing flows on
-  a live install, which found three bugs this session. Buildpacks/Nixpacks needs an owner choice
+- **Exact next step:** the rest of v0.2 needs product calls (O35, O32, O29). Of v0.3,
+  the items that need no product call first are done (S20); restore drills need the
+  age private key, which is kept off the host by design (a product call), and the
+  others need workflow or data-model designs. Ask the owner which to design next;
+  meanwhile harden what exists (CI via a PR: O24; live-install checks). Buildpacks/Nixpacks needs an owner choice
   (O32); team invites need user accounts (identity model): ask the owner first.
 
 ## Next session prompt
@@ -95,6 +96,7 @@ work is in right now*.
 | O33 | Accept or reject ADR-0042 (refines ADR-0031: a release healthy while the control plane *rejects* its agent does not cancel its fallback; an unreachable control plane changes nothing, rule 1; found when a new control plane refused its own agent) | S15 check |
 | O34 | Accept or reject ADR-0043 (email notifications: `EMAIL` channels with a `mailto:` list in OpenBao; one SMTP relay per install, TLS required). Adds a proto enum value, migration 00022, four control-plane settings | S19 |
 | O35 | Remaining v0.2 items need a product call before code: **managed Postgres/Redis** (needs app-to-app networking in an environment, which does not exist: each App is its own Compose network; plus image pinning, volume lifecycle, backups); **envelope encryption** (what threat beyond OpenBao's own barrier: crypto-shredding environments? its backups then need the keys); **team invites** (user accounts); **Buildpacks/Nixpacks** (O32); **web terminal** (O29) | next v0.2 items |
+| O36 | Accept or reject ADR-0044 (webhook watch paths: path prefixes, no globs; changed files from the push payload; deploys anyway when the list may be incomplete). Adds `Webhook.paths`, migration 00023 | S20 |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -931,7 +933,7 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       token); stdio smoke test against the live install
 - [x] Docs: `docs/reference/config.md` (`bohux mcp`, scoped tokens; the resource commands)
 
-### S15 — Web UI, read-only (ADR-0012, ADR-0013, ADR-0039) 🔄
+### S15 — Web UI, read-only (ADR-0012, ADR-0013, ADR-0039) ✅ (web terminal ⛔ on O29)
 - [x] Proposed ADR-0039 (O26): sign in with an API token kept in `sessionStorage`
       only, no new auth path on the API, strict CSP; the first UI is read-only
 - [x] `web/`: Vite + React 18 + TypeScript, Tailwind (tokens as CSS variables, light
@@ -1070,6 +1072,19 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       untrusted certificate fails before auth; recipients parsing; API; the activity
       end to end; flags; config
 
+## v0.3 slices
+
+### S20 — Monorepo watch paths (ADR-0044) ✅
+- [x] Proposed ADR-0044 (O36): up to 20 repository-relative prefixes per `github`
+      webhook; the push's commits' added/modified/removed files decide; no file list,
+      GitHub's 2048-commit cap, or a shorter Gitea list than `total_commits` deploys
+      anyway; `generic` webhooks cannot have paths
+- [x] Proto `Webhook.paths`, migration 00023, API (normalized: `./` and trailing `/`
+      dropped; absolute, `..`, `.`, empty refused), receiver, CLI `--path` and a PATHS
+      column, UI field and column
+- [x] Tests: prefix matching and the fail-open cases (unit), create validation and
+      signed deliveries inside and outside the paths (integration), CLI
+
 ## Known gaps and notes
 - **CI has not run on this branch.** `ci.yml` triggers on pushes to `main` and on
   pull requests; there is no PR for `claude/relaxed-rubin-76m7dl`, so every check so
@@ -1184,6 +1199,7 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   exec follows the serving slot. The UI's new pages pass the installed CSP.
 - One unexplained failure: a Docker conformance run right after the integration suite
   failed once (log not kept); three reruns, including the same ordering, passed.
+- S20 (v0.3): webhook watch paths (ADR-0044 proposed, O36).
 - **Next:** see Current focus.
 
 ### 2026-10-21 (auto run, S9e–S9f) — branch `claude/relaxed-rubin-76m7dl`

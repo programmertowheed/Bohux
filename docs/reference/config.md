@@ -174,8 +174,11 @@ the API's own JSON, and `--idempotency-key` for safe retries:
   `--route HOST[:PORT]`, `--replicas`)
 - `route list|add|remove <app> <host[:port]>`: takes effect without a deploy
 - `secret list|set <KEY> [--app <app>]`: the value is read from stdin, never an argument
-- `webhook list|create|remove <app>` (`--branch`, `--flavor github|generic`): create
-  prints the URL and the signing secret, once (ADR-0037)
+- `webhook list|create|remove <app>` (`--branch`, `--flavor github|generic`, `--path`):
+  create prints the URL and the signing secret, once (ADR-0037). Each `--path` is a
+  repository-relative prefix (`services/api`, `go.mod`); with any, a push deploys only
+  when it changes a file under one, and deploys anyway when the payload's file list may
+  be incomplete (ADR-0044). `github` flavor only
 - `channel list|create|remove` (`--kind slack|discord|webhook|email`, `--state …`): the
   URL is read from stdin (ADR-0038); for `email`, the recipients, as `ops@example.com,
   dev@example.com` or `mailto:…`, up to ten, through the install's relay (ADR-0043)

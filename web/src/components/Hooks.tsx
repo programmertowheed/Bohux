@@ -35,6 +35,7 @@ export function Webhooks({ appId }: { appId: string }) {
   const remove = useMutation(WebhookService.method.deleteWebhook);
   const qc = useQueryClient();
   const [branch, setBranch] = useState("main");
+  const [paths, setPaths] = useState("");
   const [flavor, setFlavor] = useState(WebhookFlavor.GITHUB);
   const [secret, setSecret] = useState<string>();
   const [error, setError] = useState<string>();
@@ -43,12 +44,13 @@ export function Webhooks({ appId }: { appId: string }) {
     <div>
       <h2 className="mb-2 font-semibold">Git push webhooks</h2>
       <Table
-        head={["Webhook", "Branch", "Flavor", "Payload URL", ""]}
+        head={["Webhook", "Branch", "Flavor", "Paths", "Payload URL", ""]}
         empty="No webhooks. A push to a watched branch builds and deploys it."
         rows={(list.data?.webhooks ?? []).map((w) => [
           short(w.meta?.id),
           w.branch,
           enumName("WEBHOOK_FLAVOR_", WebhookFlavor[w.flavor]),
+          w.paths.length ? w.paths.join(", ") : "every push",
           <code className="break-all">{url(w.path)}</code>,
           <button className="text-danger" onClick={async () => {
             if (!window.confirm(`Remove the webhook for ${w.branch}? Pushes stop deploying.`)) return;
@@ -71,7 +73,8 @@ export function Webhooks({ appId }: { appId: string }) {
               e.preventDefault();
               setError(undefined);
               try {
-                const r = await create.mutateAsync({ appId, branch: branch.trim(), flavor, idempotencyKey: key() });
+                const r = await create.mutateAsync({ appId, branch: branch.trim(), flavor, idempotencyKey: key(),
+                  paths: paths.split(",").map((p) => p.trim()).filter((p) => p !== "") });
                 setSecret(r.secret);
                 await qc.invalidateQueries();
                 close();
@@ -81,6 +84,9 @@ export function Webhooks({ appId }: { appId: string }) {
             }}>
               <Field id="hook-branch" label="Branch">
                 <input id="hook-branch" className={input} value={branch} onChange={(e) => setBranch(e.target.value)} />
+              </Field>
+              <Field id="hook-paths" label="Only for changes under (comma-separated, optional)">
+                <input id="hook-paths" className={input} value={paths} onChange={(e) => setPaths(e.target.value)} />
               </Field>
               <Field id="hook-flavor" label="Git host">
                 <select id="hook-flavor" className={input} value={flavor} onChange={(e) => setFlavor(Number(e.target.value))}>

@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -48,6 +49,32 @@ func webhookSecretPath(tenant, id uuid.UUID) string {
 	return "bohux/" + tenant.String() + "/webhooks/" + id.String()
 }
 
+// maxWatchPaths bounds a webhook's watch paths (ADR-0044).
+const maxWatchPaths = 20
+
+// watchPaths normalizes a webhook's path prefixes: "./" and a trailing "/" are
+// dropped; absolute paths, "..", and empty entries are refused.
+func watchPaths(in []string) ([]string, error) {
+	if len(in) > maxWatchPaths {
+		return nil, invalidArgument("paths", "INVALID", fmt.Sprintf("at most %d paths", maxWatchPaths))
+	}
+	out := make([]string, 0, len(in))
+	seen := map[string]bool{}
+	for i, p := range in {
+		p = strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(p), "./"), "/")
+		field := fmt.Sprintf("paths[%d]", i)
+		if p == "" || strings.HasPrefix(p, "/") || strings.ContainsAny(p, "\x00\n") ||
+			slices.Contains(strings.Split(p, "/"), "..") || slices.Contains(strings.Split(p, "/"), ".") {
+			return nil, invalidArgument(field, "INVALID", "a path is relative to the repository root, e.g. services/api")
+		}
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
 func validBranch(b string) error {
 	if b == "" || strings.ContainsAny(b, " \t\n~^:?*[\\") || strings.Contains(b, "..") ||
 		strings.HasPrefix(b, "/") || strings.HasSuffix(b, "/") || strings.HasPrefix(b, "refs/") {
@@ -79,6 +106,13 @@ func (ws *webhookService) CreateWebhook(ctx context.Context, req *connect.Reques
 		flavor = "generic"
 	default:
 		return nil, invalidArgument("flavor", "INVALID", "unknown flavor")
+	}
+	paths, err := watchPaths(msg.GetPaths())
+	if err != nil {
+		return nil, err
+	}
+	if len(paths) > 0 && flavor == "generic" {
+		return nil, invalidArgument("paths", "INVALID", "a generic webhook sends no list of changed files; paths need the github flavor")
 	}
 	idem, err := newIdempotency(ctx, bohuxv1connect.WebhookServiceCreateWebhookProcedure, msg.GetIdempotencyKey(), msg)
 	if err != nil {
@@ -130,6 +164,7 @@ func (ws *webhookService) CreateWebhook(ctx context.Context, req *connect.Reques
 		rev, err := tx.CreateWithID(ctx, "webhooks", id, []store.Col{
 			{Name: "app_id", Value: app}, {Name: "branch", Value: msg.GetBranch()}, {Name: "flavor", Value: flavor},
 			{Name: "secret_handle", Value: openbao.HandlePrefix + webhookSecretPath(p.Tenant, id)},
+			{Name: "paths", Value: paths},
 		}, nil, store.Audit{Actor: p.Actor(), Action: bohuxv1connect.WebhookServiceCreateWebhookProcedure,
 			ResourceType: webhookType, ProjectID: project})
 		if err != nil {
@@ -256,7 +291,7 @@ func (ws *webhookService) DeleteWebhook(ctx context.Context, req *connect.Reques
 	return connect.NewResponse(resp), nil
 }
 
-const webhookSelect = `SELECT ` + metaColumns + `, h.app_id, h.branch, h.flavor
+const webhookSelect = `SELECT ` + metaColumns + `, h.app_id, h.branch, h.flavor, h.paths
 	FROM webhooks_heads h JOIN webhooks_revisions r ON r.id = h.revision_id`
 
 func getWebhook(ctx context.Context, tx *store.Tx, id uuid.UUID) (*bohuxv1.Webhook, error) {
@@ -274,7 +309,7 @@ func scanWebhook(row pgx.Row) (*bohuxv1.Webhook, error) {
 		w      bohuxv1.Webhook
 		flavor string
 	)
-	if err := row.Scan(append(m.dest(), &app, &w.Branch, &flavor)...); err != nil {
+	if err := row.Scan(append(m.dest(), &app, &w.Branch, &flavor, &w.Paths)...); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
 		}
@@ -445,8 +480,9 @@ func validSignature(secret string, body []byte, header string) bool {
 	return hmac.Equal(sig, mac.Sum(nil))
 }
 
-// pushedCommit reads only the ref and commit (ADR-0037 item 4). It reports whether
-// the delivery deploys, and why not when it does not.
+// pushedCommit reads only the ref, the commit, and, for a webhook with watch paths,
+// the commits' changed files (ADR-0037 item 4, ADR-0044). It reports whether the
+// delivery deploys, and why not when it does not.
 func pushedCommit(hook *bohuxv1.Webhook, event string, body []byte) (commit string, deploys bool, why string) {
 	if hook.GetFlavor() == bohuxv1.WebhookFlavor_WEBHOOK_FLAVOR_GENERIC {
 		var p struct {
@@ -468,6 +504,13 @@ func pushedCommit(hook *bohuxv1.Webhook, event string, body []byte) (commit stri
 		Ref     string `json:"ref"`
 		After   string `json:"after"`
 		Deleted bool   `json:"deleted"`
+		Commits []struct {
+			Added    []string `json:"added"`
+			Modified []string `json:"modified"`
+			Removed  []string `json:"removed"`
+		} `json:"commits"`
+		// Gitea's count of pushed commits, when its list is shorter.
+		TotalCommits *int `json:"total_commits"`
 	}
 	if err := json.Unmarshal(body, &p); err != nil {
 		return "", false, "unreadable push payload"
@@ -478,7 +521,37 @@ func pushedCommit(hook *bohuxv1.Webhook, event string, body []byte) (commit stri
 	if p.Deleted || strings.Trim(p.After, "0") == "" {
 		return "", false, "branch deleted"
 	}
-	return p.After, true, ""
+	if len(hook.GetPaths()) == 0 {
+		return p.After, true, ""
+	}
+	// An incomplete list deploys: a missed deploy ships stale code (ADR-0044 item 3).
+	if len(p.Commits) == 0 || len(p.Commits) >= githubCommitCap ||
+		(p.TotalCommits != nil && *p.TotalCommits > len(p.Commits)) {
+		return p.After, true, ""
+	}
+	for _, c := range p.Commits {
+		for _, files := range [][]string{c.Added, c.Modified, c.Removed} {
+			for _, f := range files {
+				if watched(hook.GetPaths(), f) {
+					return p.After, true, ""
+				}
+			}
+		}
+	}
+	return "", false, "no watched path changed"
+}
+
+// githubCommitCap is the most commits a GitHub push payload lists.
+const githubCommitCap = 2048
+
+// watched reports whether file is one of the prefixes or under one.
+func watched(prefixes []string, file string) bool {
+	for _, p := range prefixes {
+		if file == p || strings.HasPrefix(file, p+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // httpStatus maps a Connect code to the status a Git host shows for a delivery.
