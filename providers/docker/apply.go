@@ -2,6 +2,8 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -88,35 +90,91 @@ func (p *Provider) ensureIngressNetwork(ctx context.Context) error {
 
 // pullEnv puts a registry credential where `docker compose` reads it for this one
 // command: a fresh 0700 DOCKER_CONFIG directory, removed by done (ADR-0041). The
-// daemon's and root's own Docker config are never touched. Per-user CLI plugins
-// (compose itself, possibly) are linked in so the command still finds them.
+// daemon's and root's own Docker config are never written. The operator's config is
+// carried over (current context, proxies, other registries' credentials) with the
+// App's registries taken from the secret, and their contexts and CLI plugins (compose
+// itself, possibly) are linked in.
 func pullEnv(src provider.PullConfigSource) (env []string, done func(), err error) {
 	if src == nil {
 		return nil, func() {}, nil
 	}
-	cfg, err := src.Open()
+	secret, err := src.Open()
 	if err != nil {
 		return nil, nil, fmt.Errorf("open image pull secret: %w", err)
+	}
+	base := os.Getenv("DOCKER_CONFIG")
+	if base == "" {
+		if home, herr := os.UserHomeDir(); herr == nil {
+			base = filepath.Join(home, ".docker")
+		}
+	}
+	cfg, err := mergePullConfig(base, secret)
+	if err != nil {
+		return nil, nil, err
 	}
 	dir, err := os.MkdirTemp("", "bohux-pull-")
 	if err != nil {
 		return nil, nil, fmt.Errorf("create pull config directory: %w", err)
 	}
 	done = func() { _ = os.RemoveAll(dir) }
-	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(cfg), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), cfg, 0o600); err != nil {
 		done()
 		return nil, nil, fmt.Errorf("write pull config: %w", err)
 	}
-	plugins := os.Getenv("DOCKER_CONFIG")
-	if plugins == "" {
-		if home, herr := os.UserHomeDir(); herr == nil {
-			plugins = filepath.Join(home, ".docker")
+	for _, sub := range []string{"cli-plugins", "contexts"} {
+		if st, serr := os.Stat(filepath.Join(base, sub)); serr == nil && st.IsDir() {
+			_ = os.Symlink(filepath.Join(base, sub), filepath.Join(dir, sub))
 		}
 	}
-	if st, serr := os.Stat(filepath.Join(plugins, "cli-plugins")); serr == nil && st.IsDir() {
-		_ = os.Symlink(filepath.Join(plugins, "cli-plugins"), filepath.Join(dir, "cli-plugins"))
-	}
 	return []string{"DOCKER_CONFIG=" + dir}, done, nil
+}
+
+// mergePullConfig returns the operator's config.json in base (if any) with the
+// secret's "auths" laid over it. The secret's registries must use those credentials,
+// so a credential helper for them is dropped, and so is a global credsStore, which
+// would otherwise answer for every registry. Errors never quote either file.
+func mergePullConfig(base, secret string) ([]byte, error) {
+	var sec struct {
+		Auths map[string]json.RawMessage `json:"auths"`
+	}
+	if err := json.Unmarshal([]byte(secret), &sec); err != nil || len(sec.Auths) == 0 {
+		return nil, errors.New("the image pull secret is not a Docker config.json with \"auths\"")
+	}
+	cfg := map[string]json.RawMessage{}
+	if raw, err := os.ReadFile(filepath.Join(base, "config.json")); err == nil {
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return nil, errors.New("the node's Docker config.json is not valid JSON")
+		}
+	}
+	auths := map[string]json.RawMessage{}
+	if raw, ok := cfg["auths"]; ok {
+		_ = json.Unmarshal(raw, &auths)
+	}
+	helpers := map[string]json.RawMessage{}
+	if raw, ok := cfg["credHelpers"]; ok {
+		_ = json.Unmarshal(raw, &helpers)
+	}
+	for registry, a := range sec.Auths {
+		auths[registry] = a
+		delete(helpers, registry)
+	}
+	delete(cfg, "credsStore")
+	var err error
+	if cfg["auths"], err = json.Marshal(auths); err != nil {
+		return nil, fmt.Errorf("encode pull config: %w", err)
+	}
+	if len(helpers) > 0 {
+		if cfg["credHelpers"], err = json.Marshal(helpers); err != nil {
+			return nil, fmt.Errorf("encode pull config: %w", err)
+		}
+	} else {
+		delete(cfg, "credHelpers")
+	}
+	out, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("encode pull config: %w", err)
+	}
+	return out, nil
 }
 
 func writeAtomic(path string, data []byte, mode os.FileMode) error {
