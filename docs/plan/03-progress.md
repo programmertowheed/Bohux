@@ -38,20 +38,19 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S1c — proto: node, secret, audit, agent protocol (⏳, next to start;
-  now also carries S1d's final check)
-- **Exact next step:** write `proto/bohux/v1/node.proto` per
-  `docs/specs/api-contract.md`, following the patterns in the S1a/S1b files.
+- **Slice:** S2a — storage: migration tool choice (⏳, next to start)
+- **Exact next step:** pick the migration tool and write its ADR with
+  `.claude/skills/write-adr/` (status *proposed*); add it to *Waiting on the owner*.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S1c (proto: node, secret,
-> audit, and the agent protocol in proto/bohux/agent/v1/agent.proto) on branch
-> `claude/relaxed-rubin-76m7dl`. Follow docs/specs/api-contract.md and the patterns in the
-> S1a/S1b proto files; reuse `SecretRef` from common.proto. Verify with buf lint, buf
-> build, buf generate and go build (see "How to verify protos locally" in the tracker),
-> tick the S1c boxes (including the folded-in S1d check), update the tracker and the next
-> session prompt, commit, push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S2a (storage: migration tool
+> choice) on branch `claude/relaxed-rubin-76m7dl`. Compare the realistic options against
+> CLAUDE.md's migration conventions (forward-only, one file per change, reversible or
+> marked irreversible) and ADR-0004/ADR-0017, write the decision as a *proposed* ADR using
+> .claude/skills/write-adr/, add it to *Waiting on the owner*, and do not add the
+> dependency or any schema yet. Tick the S2a box, update the tracker and the next session
+> prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -78,7 +77,7 @@ Each slice ends green in CI and pushed. Order matters: later slices build on ear
 - [x] `scripts/footprint.sh` + `make footprint` (ADR-0020 item 1)
 - [x] This file, linked from `CLAUDE.md`
 
-### S1 — Proto contract ⏳
+### S1 — Proto contract ✅
 Plan: `docs/specs/api-contract.md` (all questions answered there). Split into four
 sub-slices, one session each.
 
@@ -119,20 +118,49 @@ sub-slices, one session each.
   - `Rollback` is per App; empty `to_release_id` = last healthy Release.
   - `WorkloadService` addresses instances by provider-defined `instance` name.
 
-#### S1c — node, secret, audit, agent protocol ⏳
-- [ ] `node.proto`, `secret.proto` (value redacted), `audit.proto`
-- [ ] `proto/bohux/agent/v1/agent.proto`, including version fields for skew (ADR-0020)
-- [ ] (was S1d) `buf lint` clean with no ignores; `buf generate` + `go build ./...` pass
+#### S1c — node, secret, audit, agent protocol ✅
+- [x] `node.proto`, `secret.proto` (value redacted), `audit.proto`
+- [x] `proto/bohux/agent/v1/agent.proto`, including version fields for skew (ADR-0020)
+- [x] (was S1d) `buf lint` clean with no ignores; `buf generate` + `go build ./...` pass
       with every file from the spec's *Files* list present
+- [x] CI `buf breaking` skips only while the base branch lacks `common.proto` (it holds
+      just the unreleased draft that S1 replaces); it runs normally after S1 merges
+- Choices the spec left open, made in S1c (change before v0.1 ships if wrong):
+  - Node slug is chosen in `CreateBootstrapToken` (`node_slug`); Node is output-only.
+    `NodeState`: `ONLINE`, `OFFLINE`, `DEGRADED` (disk pressure), `REJECTED` (version
+    skew), `REVOKED`.
+  - `ProviderDescriptor` (name, version, `capabilities` as verb names) lives in
+    `node.proto` and is reused by the agent protocol.
+  - `Secret` is a resource (`environment_id`, `key`, output-only `handle`); the handle
+    stays stable across `SetSecret` value changes. `ListSecretRefs` returns `Secret`s.
+    `SetSecret` takes `expected_revision_id` only when overwriting.
+  - `AuditEvent` and `Revision` are records without `ResourceMeta`. They name resources
+    by `ResourceRef { type, id }`. `Revision.snapshot` is a `google.protobuf.Any`.
+  - Agent protocol: the spec's `AgentMessage`/`ControlMessage` are `ConnectRequest`/
+    `ConnectResponse` (buf STANDARD lint naming). Agent exec output is `ExecOutput`;
+    control-plane input stays `ExecData`. A `VersionRejected` message closes the stream.
+  - `Assignment` = serialized `AssignmentPayload` bytes + signature + `key_id`. The
+    payload carries `node_id` and `generation` so it cannot be replayed to another node.
+  - `Workload` reuses public `bohux.v1.Runtime`, `SecretRef`, `LogLine`,
+    `TerminalSize`, `ExecExit`. Secret values travel in `sealed_secrets` bytes (sealing
+    format decided in S4). No `Spec.Raw` passthrough yet.
 
 #### S1d — cleanup ✅ (folded into S1b/S1c)
 - [x] Delete `proto/bohux/v1/service.proto` and its ignore in `buf.yaml` (done in S1b)
 - Final lint/generate check moved to S1c.
 
 ### S2 — Storage ⏳
-- [ ] Migration tool choice (ADR if it is a new dependency)
-- [ ] Schema: tenants, projects, environments, apps, releases, deployments, revisions,
-      audit_events; `tenant_id` + row-level security everywhere
+Split into sub-slices, one session each.
+
+#### S2a — migration tool ⏳
+- [ ] Migration tool choice, as a proposed ADR (it is a new dependency)
+
+#### S2b — schema ⏳
+- [ ] Schema: tenants, projects, environments, apps, releases, deployments, nodes,
+      secret_refs, revisions, audit_events; `tenant_id` + row-level security everywhere;
+      `<resource>_revisions` + `<resource>_heads` per ADR-0017
+
+#### S2c — write path ⏳
 - [ ] Revision + audit event written in one transaction (ADR-0004, ADR-0017)
 - [ ] Integration tests against the dev Postgres (`integration` tag)
 
@@ -194,6 +222,15 @@ sub-slices, one session each.
   tests cannot run there. Integration slices (S2+) need CI or a local machine.
 
 ## Session log (newest first)
+
+### 2026-10-21 (S1c) — branch `claude/relaxed-rubin-76m7dl`
+- S1c done, so S1 is done: node, secret, audit protos and
+  `proto/bohux/agent/v1/agent.proto`. All 13 files from the spec exist. buf lint (no
+  ignores), buf build, buf format, generate, go build and vet pass locally.
+- `buf breaking` against `main` fails by design (main holds only the unreleased draft),
+  so the CI step now skips until the base branch has `common.proto`.
+- Split S2 into S2a–S2c.
+- **Next:** S2a, migration tool ADR.
 
 ### 2026-10-21 (S1b) — branch `claude/relaxed-rubin-76m7dl`
 - S1b done: app, release, deployment, workload protos; `SecretRef` added to common.

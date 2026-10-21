@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+package bohux.v1;
+
+import "bohux/v1/identity.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
+
+// Read-only views over the append-only `revisions` and `audit_events` tables, written in
+// the same transaction as every mutation (ADR-0004, ADR-0017). They are records, not
+// resources, so they carry their own fields instead of ResourceMeta.
+
+// Identifies any versioned resource.
+message ResourceRef {
+  // Fully qualified message name, e.g. "bohux.v1.App".
+  string type = 1 [(google.api.field_behavior) = REQUIRED];
+  string id = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+// Who did what to which resource, and when. Never contains secret values (rule 3).
+message AuditEvent {
+  string id = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp occurred_at = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // From authentication, never from a request (rule 10).
+  Principal actor = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // The RPC, e.g. "bohux.v1.AppService/UpdateApp".
+  string action = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+  ResourceRef resource = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // The revision the action wrote. Empty for actions that change no state, e.g. Exec.
+  string revision_id = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // Project the resource belongs to, if any.
+  string project_id = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// One immutable snapshot of a resource (ADR-0017: full snapshots, diffs on read).
+message Revision {
+  string id = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+  ResourceRef resource = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // Empty for the first revision.
+  string parent_revision_id = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp created_at = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+  Principal actor = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // True if this revision records the resource's deletion.
+  bool deleted = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // The resource message as of this revision, e.g. a bohux.v1.App.
+  google.protobuf.Any snapshot = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+service AuditService {
+  rpc ListAuditEvents(ListAuditEventsRequest) returns (ListAuditEventsResponse);
+  rpc ListRevisions(ListRevisionsRequest) returns (ListRevisionsResponse);
+  rpc GetRevision(GetRevisionRequest) returns (GetRevisionResponse);
+}
+
+// Newest first. Filters are optional and combine with AND.
+message ListAuditEventsRequest {
+  string project_id = 1;
+  ResourceRef resource = 2;
+  int32 page_size = 3;
+  string page_token = 4;
+}
+
+message ListAuditEventsResponse {
+  repeated AuditEvent audit_events = 1;
+  string next_page_token = 2;
+}
+
+// Newest first.
+message ListRevisionsRequest {
+  ResourceRef resource = 1 [(google.api.field_behavior) = REQUIRED];
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListRevisionsResponse {
+  repeated Revision revisions = 1;
+  string next_page_token = 2;
+}
+
+message GetRevisionRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message GetRevisionResponse {
+  Revision revision = 1;
+}

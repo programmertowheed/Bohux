@@ -1,0 +1,223 @@
+syntax = "proto3";
+
+// The agent protocol (ADR-0003, ADR-0007). Not the public API: the control plane
+// supports protocol N and N-1, and agents of the same and previous minor version
+// (ADR-0020 item 8). See docs/specs/api-contract.md, "Agent protocol".
+package bohux.agent.v1;
+
+import "bohux/v1/app.proto";
+import "bohux/v1/common.proto";
+import "bohux/v1/node.proto";
+import "bohux/v1/workload.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/bohumix/bohux/gen/bohux/agent/v1;agentv1";
+
+service AgentService {
+  // One-time registration with a bootstrap token. The agent refuses to call this when
+  // Docker `live-restore` is off (ADR-0020 item 9).
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  // The agent dials out over mTLS and keeps this stream open (ADR-0003). The first
+  // request must carry `hello`. ConnectRequest is the spec's AgentMessage;
+  // ConnectResponse is its ControlMessage.
+  rpc Connect(stream ConnectRequest) returns (stream ConnectResponse);
+}
+
+message RegisterRequest {
+  // From NodeService.CreateBootstrapToken. Single use (rule 3: redacted).
+  string bootstrap_token = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    debug_redact = true
+  ];
+  // PEM certificate signing request for the node's mTLS client certificate.
+  bytes csr = 2 [(google.api.field_behavior) = REQUIRED];
+  // Public key that secret values are sealed to (ADR-0008).
+  bytes sealing_public_key = 3 [(google.api.field_behavior) = REQUIRED];
+  string agent_version = 4 [(google.api.field_behavior) = REQUIRED];
+  uint32 protocol_version = 5 [(google.api.field_behavior) = REQUIRED];
+  repeated bohux.v1.ProviderDescriptor providers = 6;
+}
+
+message RegisterResponse {
+  string node_id = 1;
+  // PEM client certificate signed by the node CA.
+  bytes client_certificate = 2;
+  // PEM CA bundle the agent pins for the control plane.
+  bytes ca_certificate = 3;
+  // Key the agent verifies Assignment signatures with.
+  bytes assignment_signing_public_key = 4;
+}
+
+// Agent → control plane.
+message ConnectRequest {
+  oneof msg {
+    Hello hello = 1;
+    StatusReport status_report = 2;
+    LogChunk log_chunk = 3;
+    ExecOutput exec_output = 4;
+    Ack ack = 5;
+  }
+}
+
+// Control plane → agent.
+message ConnectResponse {
+  oneof msg {
+    Assignment assignment = 1;
+    LogRequest log_request = 2;
+    LogCancel log_cancel = 3;
+    ExecOpen exec_open = 4;
+    ExecData exec_data = 5;
+    ExecClose exec_close = 6;
+    Ping ping = 7;
+    // Sent instead of anything else when the agent's version is unsupported; the
+    // stream then closes. The agent keeps reconciling its cached assignment (rule 1).
+    VersionRejected version_rejected = 8;
+  }
+}
+
+// First message on every stream.
+message Hello {
+  string node_id = 1;
+  string agent_version = 2;
+  uint32 protocol_version = 3;
+  repeated bohux.v1.ProviderDescriptor providers = 4;
+  // Highest generation the agent has applied; 0 if none.
+  uint64 applied_generation = 5;
+}
+
+message VersionRejected {
+  // Lowest agent version the control plane accepts.
+  string min_agent_version = 1;
+  uint32 min_protocol_version = 2;
+  string message = 3;
+}
+
+// Full desired state for one node. Not a diff: resync is "send the latest one".
+message Assignment {
+  // A serialized AssignmentPayload. Sent as bytes so the signature covers exactly what
+  // was signed.
+  bytes payload = 1;
+  // Control plane signature over `payload`. The agent verifies it before caching.
+  bytes signature = 2;
+  // Which signing key produced `signature`, for key rotation.
+  string key_id = 3;
+}
+
+message AssignmentPayload {
+  // The agent rejects a payload for another node.
+  string node_id = 1;
+  // Monotonic per node. The agent ignores any generation lower than its cached one.
+  uint64 generation = 2;
+  google.protobuf.Timestamp issued_at = 3;
+  // Every workload this node should run. Absent means remove.
+  repeated Workload workloads = 4;
+}
+
+// One App's desired state on this node.
+message Workload {
+  string app_id = 1;
+  string environment_id = 2;
+  string release_id = 3;
+  string deployment_id = 4;
+  // Provider to apply with, e.g. "docker".
+  string provider = 5;
+  // Pinned image to run: a digest reference, or the local image ID in single-node mode
+  // (ADR-0020 item 2).
+  string image = 6;
+  bohux.v1.Runtime runtime = 7;
+  // Handles only. The values are in `sealed_secrets`.
+  repeated bohux.v1.SecretRef secrets = 8;
+  // Values for `secrets`, encrypted to this node's sealing key (ADR-0008). Only the agent
+  // can open it; the control plane never logs or stores it.
+  bytes sealed_secrets = 9;
+}
+
+message StatusReport {
+  // Generation the reported state was observed against.
+  uint64 generation = 1;
+  repeated WorkloadStatus workloads = 2;
+  // Set when the node refuses new builds, e.g. disk pressure (ADR-0020 item 4).
+  bool degraded = 3;
+  bohux.v1.ErrorDetail degraded_detail = 4;
+}
+
+message WorkloadStatus {
+  string app_id = 1;
+  string release_id = 2;
+  WorkloadState state = 3;
+  int32 ready_replicas = 4;
+  // Set when state is FAILED.
+  bohux.v1.ErrorDetail failure = 5;
+}
+
+enum WorkloadState {
+  WORKLOAD_STATE_UNSPECIFIED = 0;
+  WORKLOAD_STATE_APPLYING = 1;
+  // Running and passing its health check.
+  WORKLOAD_STATE_HEALTHY = 2;
+  // Running but failing its health check.
+  WORKLOAD_STATE_UNHEALTHY = 3;
+  WORKLOAD_STATE_FAILED = 4;
+}
+
+// Agent has applied this generation.
+message Ack {
+  uint64 generation = 1;
+}
+
+message Ping {
+  google.protobuf.Timestamp sent_at = 1;
+}
+
+message LogRequest {
+  string request_id = 1;
+  string app_id = 2;
+  string instance = 3;
+  bool follow = 4;
+  google.protobuf.Timestamp since = 5;
+  int32 tail_lines = 6;
+}
+
+message LogCancel {
+  string request_id = 1;
+}
+
+message LogChunk {
+  string request_id = 1;
+  repeated bohux.v1.LogLine lines = 2;
+  // Last chunk for this request.
+  bool eof = 3;
+}
+
+message ExecOpen {
+  string session_id = 1;
+  string app_id = 2;
+  string instance = 3;
+  repeated string command = 4;
+  bool tty = 5;
+  bohux.v1.TerminalSize size = 6;
+}
+
+// Control plane → agent input for an open session.
+message ExecData {
+  string session_id = 1;
+  oneof msg {
+    bytes stdin = 2;
+    bohux.v1.TerminalSize resize = 3;
+  }
+}
+
+message ExecClose {
+  string session_id = 1;
+}
+
+// Agent → control plane output for an open session. `exit` is the last message.
+message ExecOutput {
+  string session_id = 1;
+  oneof msg {
+    bytes stdout = 2;
+    bytes stderr = 3;
+    bohux.v1.ExecExit exit = 4;
+  }
+}
