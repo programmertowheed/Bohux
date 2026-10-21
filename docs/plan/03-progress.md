@@ -38,26 +38,24 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S4e — offline reconcile (⏳, next to start)
-- **Exact next step:** an `internal/agent` reconcile loop over the cached assignment
-  against a provider interface (Status/Apply/Destroy subset), with a fake provider.
+- **Slice:** S4e2 — status reports (⏳, next to start)
+- **Exact next step:** have the reconciler publish its latest `StatusReport` and the
+  agent stream send it; store it on the control plane.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S4e (offline reconcile) on
-> branch `claude/relaxed-rubin-76m7dl`, following rule 1, ADR-0003, ADR-0007, and
-> docs/specs/provider-interface.md. Define the Go provider interface in `providers/`
-> exactly as the spec (Describe + seven verbs) with its types; do not implement Docker
-> yet. In internal/agent, add a reconcile loop that runs independently of the stream:
-> desired = cached assignment, observed = provider.Status, Apply until they match, on a
-> timer and when the cache changes; an empty cache changes nothing; a workload gone
-> from a non-empty assignment is Destroyed. Send StatusReports (generation, per-workload
-> state) on the stream when connected, and have the control plane close streams silent
-> for 3 report intervals (S4c1 note). Wire it into `bohux agent run`. Test with a fake
-> provider: converges, restarts a "crashed" workload with the control plane killed
-> (rule 1), empty cache destroys nothing, removal destroys. Verify with build, vet,
-> golangci-lint (also with the integration tag) and tests. Tick boxes, update the
-> tracker and the next session prompt, commit, push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S4e2 (status reports) on
+> branch `claude/relaxed-rubin-76m7dl`, following ADR-0007. Agent: the reconciler
+> publishes each pass's StatusReport (latest only); the stream sends it when connected,
+> at least every 30 s (resend the latest if nothing changed). Control plane: store the
+> latest report per node as an observation (migration: report generation, per-workload
+> state as jsonb, received_at on nodes_heads), and close a stream that has sent nothing
+> for 90 s (configurable) so half-open links end (S4c1 note); the node then goes
+> offline. Test over real mTLS on the local Postgres with the fake provider from
+> internal/agent tests (move it to an internal test helper package if needed). Verify
+> with build, vet, golangci-lint (also with the integration tag) and tests. Tick boxes,
+> update the tracker and the next session prompt, commit, push, and give me the next
+> prompt.
 
 ## Waiting on the owner
 
@@ -71,6 +69,7 @@ work is in right now*.
 | O7 | Accept or reject ADR-0022 (token format `bxa_<tenant>_<id>_<secret>`, tenant-first lookup, SHA-256, idempotency records). Owner allowed building on it before acceptance | S3c onward is built on it |
 | O8 | Accept or reject ADR-0023 (tenant-wide API tokens when `project_id` is empty; two-step authorization). Changed `identity.proto`. Owner allowed building on it | S3c3 onward |
 | O9 | Accept or reject ADR-0024 (node CA + signing key as 0600 files in `--data-dir`, CA pinning by hash at install, 90-day node certs, Ed25519 assignment signatures, nacl/box sealing). Owner allowed building on it | S4b onward |
+| O10 | Review the provider types in `providers/provider.go` and the *Types* section of `docs/specs/provider-interface.md` (hash-based drift detection, no list verb: agent records what it applied). Built on already | S5 implements them |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -344,9 +343,22 @@ Split into sub-slices, one session each.
 - [x] Unit + integration tests: forged, foreign, stale refused; restart keeps the cache
       and receives newer generations; secrets sealed at rest and open with the node key
 
-#### S4e — offline reconcile ⏳
-- [ ] Reconcile loop against the cached assignment with a fake provider; test with
-      the control plane killed (rule 1)
+#### S4e1 — provider interface and offline reconcile ✅
+- [x] `providers.Provider` exactly as the spec (Describe + seven verbs) with its types;
+      types documented in provider-interface.md (O10)
+- [x] `agent.Reconciler`: desired = cached assignment, observed = `Status`, `Apply`
+      when missing, drifted (hash), or not running; timer + cache-change trigger; no
+      assignment changes nothing; removed workloads destroyed via `applied.json`
+      (written before `Apply`); secrets opened lazily; rotation re-applies
+- [x] Tested with a fake provider and no control plane at all (rule 1): converges,
+      idempotent, crash restarted, rotation, removal (also after restart), empty
+      assignment, wrong provider
+- [x] Wired into `bohux agent run` beside the stream; until S5 there is no provider in
+      the build, so the agent says so and only caches
+
+#### S4e2 — status reports ⏳
+- [ ] StatusReports sent on the stream; stored per node on the control plane; streams
+      silent for 90 s closed (half-open links)
 
 ### S5 — Docker provider ⏳
 - [ ] Conformance suite in `providers/_conformance`
@@ -418,6 +430,7 @@ Split into sub-slices, one session each.
   S4c2 done: the agent process (`bohux agent register|run`).
 - S4d split; S4d1 done: assignments written, sealed, signed, pushed, acked. S4d2
   done: the agent verifies, caches, and acks them.
+- S4e split; S4e1 done: provider interface (O10) and the offline reconcile loop.
 - S4b split into S4b1/S4b2, both done: `internal/pki`, NodeService, data dir, agent
   TLS listener, Register.
 - S3d done: `internal/secrets` redaction, access-log interceptor, rule 3 test.

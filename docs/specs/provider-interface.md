@@ -41,6 +41,28 @@ type Provider interface {
 }
 ```
 
+## Types
+
+The Go definitions live in `providers/provider.go` (written in S4e; the owner reviews
+them as O10). The choices the contract above left open:
+
+- **`ResourceRef`** is `{Environment, App}` (IDs). One workload per App per Environment.
+- **`Spec`** carries the pinned `Image`, the `bohux.v1.Runtime`, a lazy
+  `SecretSource` (rule 3 below: providers call `Open` only to write the secret file),
+  `Raw` (rule 5), and a `Hash` of the desired state.
+- **`Hash` is how drift is detected.** `Apply` records `Spec.Hash` on the target (for
+  Docker, a label) and `Status` reports it back. The agent applies when the target is
+  missing, reports another hash, or is not running. Providers never compare specs
+  themselves. Secret values enter the hash only through an HMAC keyed by a node-local
+  key, so a rotated secret re-applies and the hash reveals nothing.
+- **There is no list verb.** The agent records every workload it applied
+  (`applied.json` in its state directory, written before `Apply`) and destroys those
+  that leave the assignment. An agent with no assignment yet changes nothing.
+- **`Status`** reports `Exists`, `Hash`, `Running`, `Healthy`, `ReadyReplicas`, and a
+  `Message` without secret values.
+- **`Logs`** yields `LogLine{Time, Instance, Stderr, Message}`; **`Exec`** returns a
+  `Session` (stdin, stdout, stderr unless TTY, resize, wait for the exit code).
+
 ## Rules
 
 1. **All eight methods (`Describe` + seven verbs) or no merge.** Partial providers are rejected (CLAUDE.md rule 4).

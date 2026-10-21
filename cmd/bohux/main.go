@@ -14,11 +14,13 @@ import (
 	"os/signal"
 	"syscall"
 
+	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/internal/agent"
 	"github.com/bohumix/bohux/internal/api"
 	"github.com/bohumix/bohux/internal/controlplane"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/version"
+	"github.com/bohumix/bohux/providers"
 )
 
 var errUsage = errors.New(`usage: bohux <command>
@@ -69,7 +71,14 @@ var defaultDeps = deps{
 	agentRegister: agent.Register, agentRun: runAgent,
 }
 
-// runAgent loads the agent's state and runs it until ctx ends.
+// nodeProvider is the provider this agent runs (ADR-0007: one agent, one target).
+// The Docker provider arrives in S5; until then the agent connects and caches
+// assignments but does not reconcile.
+var nodeProvider providers.Provider
+
+// runAgent loads the agent's state, then runs the reconcile loop and the control-
+// plane stream side by side until ctx ends. They share only the cache: the stream
+// fills it, the reconciler acts on it, and either works without the other (rule 1).
 func runAgent(ctx context.Context, stateDir string) error {
 	st, err := agent.Load(stateDir)
 	if err != nil {
@@ -79,7 +88,29 @@ func runAgent(ctx context.Context, stateDir string) error {
 	if err != nil {
 		return err
 	}
-	return agent.Run(ctx, agent.RunOptions{State: st, Cache: cache})
+	opts := agent.RunOptions{State: st, Cache: cache}
+	if nodeProvider == nil {
+		slog.WarnContext(ctx, "no provider in this build yet (S5); assignments are cached but not applied")
+		return agent.Run(ctx, opts)
+	}
+	desc, err := nodeProvider.Describe(ctx)
+	if err != nil {
+		return fmt.Errorf("describe provider: %w", err)
+	}
+	opts.Providers = []*bohuxv1.ProviderDescriptor{descriptorProto(desc)}
+	rec := &agent.Reconciler{State: st, Cache: cache, Provider: nodeProvider}
+	errc := make(chan error, 2)
+	go func() { errc <- rec.Run(ctx) }()
+	go func() { errc <- agent.Run(ctx, opts) }()
+	return errors.Join(<-errc, <-errc)
+}
+
+func descriptorProto(d providers.Descriptor) *bohuxv1.ProviderDescriptor {
+	caps := make([]string, len(d.Capabilities))
+	for i, c := range d.Capabilities {
+		caps[i] = string(c)
+	}
+	return &bohuxv1.ProviderDescriptor{Name: d.Name, Version: d.Version, Capabilities: caps}
 }
 
 // bootstrap migrates, then creates the tenant and its first token.
