@@ -57,6 +57,7 @@ message ConnectRequest {
     LogChunk log_chunk = 3;
     ExecOutput exec_output = 4;
     Ack ack = 5;
+    BuildResult build_result = 6;
   }
 }
 
@@ -73,6 +74,7 @@ message ConnectResponse {
     // Sent instead of anything else when the agent's version is unsupported; the
     // stream then closes. The agent keeps reconciling its cached assignment (rule 1).
     VersionRejected version_rejected = 8;
+    BuildRequest build_request = 9;
   }
 }
 
@@ -230,4 +232,30 @@ message ExecOutput {
     bytes stderr = 3;
     bohux.v1.ExecExit exit = 4;
   }
+}
+
+// Control plane → agent: build a Release's image on this node and load it into the
+// node's image store (ADR-0028). A repeat of the same Release builds again; BuildKit's
+// cache makes that cheap.
+message BuildRequest {
+  // The Release being built; it also names the build.
+  string release_id = 1;
+  string app_id = 2;
+  // Public HTTPS Git repository in v0.1.
+  string repo_url = 3;
+  // Branch, tag, or commit SHA.
+  string ref = 4;
+  // Build context within the repository. Empty means the repository root.
+  string subpath = 5;
+}
+
+// Agent → control plane: how a build ended.
+message BuildResult {
+  string release_id = 1;
+  // Local image ID ("sha256:…") on success.
+  string image_id = 2;
+  // The commit SHA the ref resolved to.
+  string commit = 3;
+  // Set when the build failed, e.g. DISK_PRESSURE, SOURCE_FETCH_FAILED, BUILD_FAILED.
+  bohux.v1.ErrorDetail failure = 4;
 }
