@@ -1,4 +1,4 @@
-import { useParams } from "@tanstack/react-router";
+import { Link, useParams } from "@tanstack/react-router";
 import { useQuery } from "@connectrpc/connect-query";
 import { ProjectService } from "../gen/bohux/v1/project_pb";
 import { EnvironmentService } from "../gen/bohux/v1/environment_pb";
@@ -51,7 +51,9 @@ export function Environment() {
           head={["Deployment", "State", "Release", "Started"]}
           empty="No deployments yet."
           rows={deps.data.deployments.map((d) => [
-            short(d.meta?.id),
+            <Link to="/p/$project/e/$env/d/$id" params={{ project, env, id: d.meta?.id ?? "" }} className="text-accent">
+              {short(d.meta?.id)}
+            </Link>,
             <span className={stateColor[d.state] ?? ""}>{enumName("DEPLOYMENT_STATE_", DeploymentState[d.state])}</span>,
             short(d.releaseId),
             when(d.meta?.createdAt),

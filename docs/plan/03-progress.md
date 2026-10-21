@@ -41,8 +41,8 @@ work is in right now*.
 - **Slice:** S15 — web UI (🔄, read-only first cut done)
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** UI deployment detail with live progress (`WatchDeployment`
-  over Connect streaming), then the log tail.
+- **Exact next step:** UI log tail (`StreamLogs`, xterm.js), then deploy and rollback
+  from the UI.
 
 ## Next session prompt
 
@@ -933,8 +933,12 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 - [x] Checked in Chromium (Playwright) against a real control plane: sign-in,
       navigation, reload, no console errors or CSP violations, nothing in
       `localStorage` or cookies
-- [ ] Next: release and deployment detail, live deploy progress (`WatchDeployment`),
-      log tail (xterm.js, ADR-0013), then mutations (deploy, rollback) mirroring the CLI
+- [x] Deployment page following `WatchDeployment` live (server streaming over
+      connect-web), reconnecting with backoff like the CLI; linked from the
+      environment's deployments. Checked in Chromium against the live install while a
+      real deploy ran (health gate → succeeded, no errors)
+- [ ] Next: release detail, the log tail (xterm.js, ADR-0013), then mutations
+      (deploy, rollback) mirroring the CLI
 
 ## Known gaps and notes
 - **CI has not run on this branch.** `ci.yml` triggers on pushes to `main` and on
