@@ -24,4 +24,5 @@ Each of these maps to a failure mode in `docs/plan/01-architecture.md`.
 - `backup-and-restore.md` — backup key custody, taking a backup, restoring onto a fresh host
 - `control-plane-upgrade.md` — upgrading the control plane with itself, and recovering
   from a bad upgrade
+- `infra-upgrade.md` — upgrading Postgres, Temporal, and OpenBao
 - `openbao-unseal-key.md` — unseal key custody, a vault that will not unseal, a lost key
