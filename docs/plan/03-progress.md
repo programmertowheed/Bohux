@@ -38,18 +38,19 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S6c2 — DeploymentService (⏳, next to start)
-- **Exact next step:** `internal/api/deployment.go` CreateDeployment (start the run, then
-  insert the row), then Get/List/Watch/Rollback/Cancel.
+- **Slice:** S6d — end to end on Docker (⏳, next to start); S6e after it
+- **Exact next step:** an integration test (`integration` tag, needs Docker, Postgres,
+  Temporal) that runs the control plane, a real agent with the Docker provider, and
+  deploys a busybox httpd Release, then a broken one that rolls back.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S6c2 (DeploymentService)
-> on branch `claude/relaxed-rubin-76m7dl`, following ADR-0026, api-contract.md, and
-> CLAUDE.md rules 8 and 10. Start Postgres, Docker and Temporal (tracker *Known
-> gaps*). Write DeploymentService (Create, Get, List, Watch, Rollback, Cancel) on
-> `api.Server.Deploys`, make ScaleApp assign, and add an integration test against the
-> real Temporal dev server. Verify with build, vet, golangci-lint (also with the integration
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S6d (deploy end to end on
+> Docker) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0020 item 5, ADR-0025,
+> ADR-0026 and CLAUDE.md rules 1 and 5. Start Postgres, Docker and Temporal (tracker
+> *Known gaps*). Write an integration test that runs the control plane, a real agent
+> with the Docker provider, deploys a healthy Release, then one whose health check
+> never passes and must roll back; measure the recreate downtime. Verify with build, vet, golangci-lint (also with the integration
 > tag), unit and integration tests. Tick boxes, update the tracker and the next
 > session prompt, commit, push, and give me the next prompt.
 
@@ -486,17 +487,35 @@ Split into sub-slices in S6a, one session each. Shape: ADR-0026 (O12).
 - [x] `fixture.Tenant`; agentapi and deploy tests no longer import `api` (it imports
       `deploy` now, which imports `agentapi`)
 
-#### S6c2 — DeploymentService ⏳
-- [ ] Create: validate, `Deploys.Start`, then `deploy.InsertDeployment` with the run
-      IDs; `ErrRunning` → `FAILED_PRECONDITION`; `ErrUnavailable` → `UNAVAILABLE`;
-      idempotent
-- [ ] Get, List (newest first, optional App filter), Watch (sends on each revision until
-      terminal), Rollback (empty target = last healthy Release), Cancel (`Deploys.Cancel`
-      with the stored run)
-- [ ] ScaleApp writes a new assignment through `AssignApp` (api-contract.md: "ScaleApp
-      writes a new App revision and a new assignment")
-- [ ] Integration test with the real Temporal dev server: deploy → succeeded on a fake
-      agent report; never healthy → rolled back; concurrent deploy refused
+#### S6c2 — DeploymentService ✅
+- [x] Create: validate (Release ready, available, in this environment; `rollback_of`
+      a Deployment of the same App), `Deploys.Start`, then `deploy.InsertDeployment`
+      with the run IDs; `ErrRunning` → `FAILED_PRECONDITION`; Temporal down or no
+      `Deploys` → `UNAVAILABLE`; idempotent
+- [x] Get, List (newest first, optional App filter), Watch (re-reads every 1 s, sends
+      each new revision, ends when terminal), Rollback (empty target = newest succeeded
+      Release other than the current one; `rollback_of` = the current Deployment),
+      Cancel (audited, cancels the stored run; terminal returned unchanged)
+- [x] Integration test on the real Temporal dev server (CI starts one too): deploy →
+      succeeded; failed workload → rolled back to r1; concurrent deploy refused; cancel
+      at the gate → cancelled with r1 back; rollback → r1; list, replay, watch. Stable
+      over repeated runs
+- **Found:** the SDK's `ExecuteWorkflow` returns the *running* run instead of failing
+  unless `WorkflowExecutionErrorWhenAlreadyStarted` is set. And a run stays open a
+  moment after its last state write, so a deploy right after a finished one retries
+  for up to 5 s when no Deployment of the App is open
+- **Open:** if the run starts but the API's row write fails, a retry with the same key
+  is refused while that run is open (the run still writes its row). Acceptable for
+  v0.1; revisit with the CLI (S8)
+
+#### S6e — ScaleApp reaches the node ⏳
+- [ ] ScaleApp (and later App edits) must change the running workload
+      (api-contract.md: "ScaleApp writes a new App revision and a new assignment"). Doing
+      it in the API outside a workflow lets the App revision and the assignment drift
+      apart on a crash. Decide: a small Temporal workflow per scale on the App's
+      workflow ID (serializes with deploys), using `AssignApp` with only replicas
+      changed. `AssignApp` must then compare the whole workload, not only
+      Deployment + Release, for idempotency
 
 #### S6d — end to end ⏳
 - [ ] Real Temporal + control plane + agent on Docker: healthy deploy succeeds; a
@@ -581,6 +600,9 @@ Split into sub-slices in S6a, one session each. Shape: ADR-0026 (O12).
 - S6c split into S6c1/S6c2. S6c1 done: Temporal client and worker in the control plane,
   ReleaseService for images, image taken from the Release's `source_ref`.
 - **Next:** S6c2.
+- S6c2 done: DeploymentService on real Temporal, CI starts a Temporal dev server.
+  ScaleApp's assignment split out as S6e (needs a workflow, not an API side effect).
+- **Next:** S6d.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by

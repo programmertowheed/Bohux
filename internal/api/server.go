@@ -52,10 +52,10 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.Handle(bohuxv1connect.NewAppServiceHandler(&appService{s}, opts))
 	mux.Handle(bohuxv1connect.NewNodeServiceHandler(&nodeService{s}, opts))
 	mux.Handle(bohuxv1connect.NewReleaseServiceHandler(&releaseService{s}, opts))
+	mux.Handle(bohuxv1connect.NewDeploymentServiceHandler(&deploymentService{s}, opts))
 
 	// Not written yet: mounted so every RPC is authenticated, logged, and answers
 	// Unimplemented rather than 404. Each is replaced as its slice lands.
-	mux.Handle(bohuxv1connect.NewDeploymentServiceHandler(bohuxv1connect.UnimplementedDeploymentServiceHandler{}, opts))
 	mux.Handle(bohuxv1connect.NewWorkloadServiceHandler(bohuxv1connect.UnimplementedWorkloadServiceHandler{}, opts))
 	mux.Handle(bohuxv1connect.NewSecretServiceHandler(bohuxv1connect.UnimplementedSecretServiceHandler{}, opts))
 	mux.Handle(bohuxv1connect.NewAuditServiceHandler(bohuxv1connect.UnimplementedAuditServiceHandler{}, opts))

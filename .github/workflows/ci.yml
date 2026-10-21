@@ -84,6 +84,8 @@ jobs:
     env:
       # A role that can create roles and databases; each test makes its own.
       BOHUX_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+      # Deploy workflow tests run on a Temporal dev server (ADR-0002, ADR-0026).
+      BOHUX_TEST_TEMPORAL_ADDRESS: 127.0.0.1:7233
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -101,6 +103,12 @@ jobs:
         run: |
           test -f buf.lock || buf dep update
           buf generate
+      - name: Start a Temporal dev server
+        run: |
+          curl -sSL https://github.com/temporalio/cli/releases/download/v1.4.1/temporal_cli_1.4.1_linux_amd64.tar.gz | tar xz -C /tmp temporal
+          nohup /tmp/temporal server start-dev --headless --ip 127.0.0.1 --port 7233 > /tmp/temporal.log 2>&1 &
+          for i in $(seq 60); do /tmp/temporal operator cluster health --address 127.0.0.1:7233 && exit 0; sleep 1; done
+          cat /tmp/temporal.log; exit 1
       - name: Integration tests
         run: go test -tags=integration -race -count=1 ./internal/... ./cmd/...
 
