@@ -38,17 +38,17 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S7c2 — build workflow and CreateRelease from Git (⏳, next to start)
-- **Exact next step:** agentapi build dispatch over the node's stream (pending builds
-  keyed by Release ID, answered by `BuildResult`), then the build workflow.
+- **Slice:** S7c3 — build end to end (⏳, next to start)
+- **Exact next step:** extend `cmd/bohux/e2e_test.go` with a Release created from a
+  local Git repository through the API, built by the real agent, deployed, then rolled
+  back.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S7c2 (build workflow and
-> CreateRelease from Git) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0028,
-> ADR-0026, the `new-workflow` skill, and CLAUDE.md rules 6 and 9. Start Postgres,
-> Docker, Temporal and OpenBao, and the `bohux` buildx builder (tracker *Known gaps*).
-> Verify with build, vet, golangci-lint (also with the integration
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S7c3 (build end to end)
+> on branch `claude/relaxed-rubin-76m7dl`, following ADR-0028 and CLAUDE.md rule 5.
+> Start Postgres, Docker, Temporal and OpenBao, and the `bohux` buildx builder
+> (tracker *Known gaps*). Verify with build, vet, golangci-lint (also with the integration
 > tag), unit and integration tests. Tick boxes, update the tracker and the next
 > session prompt, commit, push, and give me the next prompt.
 
@@ -561,15 +561,21 @@ Split into sub-slices, one session each.
 - [x] Tested against the real daemon: build by tag and by SHA, labels, cached repeat,
       unknown ref, failing Dockerfile, bad subpath/ref, disk pressure
 
-#### S7c2 — build workflow and CreateRelease from Git ⏳
-- [ ] agentapi: send a `BuildRequest` to a node's open stream and wait for its
-      `BuildResult` (not connected → retryable error)
-- [ ] Build workflow `build/<release id>`: activity sends and waits (heartbeat),
-      writes the Release `READY` (image ID, commit) or `FAILED` (reason)
-- [ ] CreateRelease from a Git ref or the App's Git source: Release `BUILDING` with
-      `build_workflow_id`, workflow started
-- [ ] Deploy of a `BUILDING` Release waits in `BUILDING` until ready; fails if the build
-      fails
+#### S7c2 — build workflow and CreateRelease from Git ✅
+- [x] `agentapi.Server.Build`: sends a `BuildRequest` on the node's open stream (the
+      session's sender loop) and waits for the matching `BuildResult`; no stream or a
+      stream that ends → `ErrNodeOffline`. Tested over mTLS
+- [x] `BuildWorkflow` (`build/<release id>`, same worker and queue): `RunBuild` sends
+      and waits with heartbeats (node offline and a not-yet-written Release are
+      retried; 2 h overall), `FinishBuild` writes the Release `READY` (image ID,
+      commit, available) or `FAILED` (reason); a Release no longer building is left
+      alone
+- [x] CreateRelease from a Git ref or the App's Git source: build started first, then
+      the Release row `BUILDING` with `build_workflow_id` and the requested ref
+- [x] Deploy of a `BUILDING` Release: `RecordStart` reports it, the deploy waits in
+      `BUILDING` (`WaitReleaseReady`, up to 6 h), then rolls out; a failed build fails
+      the deploy with `BUILD_FAILED` and assigns nothing. Workflow-tested with mocks,
+      activities against Postgres, and build → deploy on real Temporal
 
 #### S7c3 — build end to end ⏳
 - [ ] e2e: create a Release from a local Git repository, deploy it, roll back
@@ -687,6 +693,9 @@ Split into sub-slices, one session each.
 - S7c split into S7c1–S7c3. S7c1 done: ADR-0028 proposed (O14), build messages in the
   agent protocol, the agent's buildx builder, buildx required at registration.
 - **Next:** S7c2.
+- S7c2 done: build dispatch over the stream, build workflow, CreateRelease from Git,
+  deploys wait for builds.
+- **Next:** S7c3.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by

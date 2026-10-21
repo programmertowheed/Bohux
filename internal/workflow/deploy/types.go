@@ -22,6 +22,7 @@ type State string
 // Deployment states the workflow writes.
 const (
 	StatePending      State = "pending"
+	StateBuilding     State = "building"
 	StateApplying     State = "applying"
 	StateHealthGate   State = "health_gate"
 	StateSucceeded    State = "succeeded"
@@ -49,6 +50,7 @@ const (
 	ReasonHealthTimeout      = "HEALTH_TIMEOUT"
 	ReasonCancelled          = "CANCELLED"
 	ReasonCompensationFailed = "COMPENSATION_FAILED"
+	ReasonBuildFailed        = "BUILD_FAILED"
 )
 
 // Error types of non-retryable activity errors, so the workflow can tell them apart.
@@ -56,6 +58,7 @@ const (
 	ErrTypeInvalid        = "Invalid"
 	ErrTypeWorkloadFailed = "WorkloadFailed"
 	ErrTypeHealthTimeout  = "HealthTimeout"
+	ErrTypeBuildFailed    = "BuildFailed"
 )
 
 // Actor is who started the Deployment (rule 10). Kind is a store.ActorKind.

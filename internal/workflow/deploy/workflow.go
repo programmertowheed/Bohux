@@ -35,7 +35,8 @@ func Workflow(ctx workflow.Context, in Input) (Result, error) {
 	}
 	d := &run{in: in, timeout: timeout}
 
-	if err := workflow.ExecuteActivity(storeCtx(ctx), a.RecordStart, in).Get(ctx, nil); err != nil {
+	var building bool
+	if err := workflow.ExecuteActivity(storeCtx(ctx), a.RecordStart, in).Get(ctx, &building); err != nil {
 		switch {
 		case temporal.IsCanceledError(err):
 			return d.cancelled(ctx)
@@ -44,6 +45,24 @@ func Workflow(ctx workflow.Context, in Input) (Result, error) {
 			return d.finish(ctx, StateFailed, f)
 		}
 		return Result{}, err
+	}
+	// A Release still building is waited for; nothing is assigned until it is ready.
+	if building {
+		if err := d.set(ctx, StateBuilding, nil); err != nil {
+			if temporal.IsCanceledError(err) {
+				return d.cancelled(ctx)
+			}
+			return Result{}, err
+		}
+		if err := d.waitBuilt(ctx); err != nil {
+			switch {
+			case temporal.IsCanceledError(err):
+				return d.cancelled(ctx)
+			case isType(err, ErrTypeBuildFailed):
+				return d.finish(ctx, StateFailed, &Failure{Reason: ReasonBuildFailed})
+			}
+			return Result{}, err
+		}
 	}
 	var last string
 	if err := workflow.ExecuteActivity(storeCtx(ctx), a.LastHealthyRelease, LastHealthyInput{
@@ -170,6 +189,20 @@ func (d *run) wait(ctx workflow.Context, assigned Assigned, release string) erro
 	return workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, opts), a.WaitHealthy, WaitInput{
 		TenantID: d.in.TenantID, NodeID: assigned.NodeID, Generation: assigned.Generation,
 		AppID: d.in.AppID, ReleaseID: release, Replicas: assigned.Replicas, Deadline: deadline,
+	}).Get(ctx, nil)
+}
+
+// buildWait bounds how long a deploy waits for its Release's build.
+const buildWait = 6 * time.Hour
+
+func (d *run) waitBuilt(ctx workflow.Context) error {
+	var a *Activities
+	opts := storeOptions
+	opts.StartToCloseTimeout = buildWait
+	opts.ScheduleToCloseTimeout = buildWait
+	opts.HeartbeatTimeout = 2 * healthHeartbeat
+	return workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, opts), a.WaitReleaseReady, ReleaseRef{
+		TenantID: d.in.TenantID, ReleaseID: d.in.ReleaseID,
 	}).Get(ctx, nil)
 }
 

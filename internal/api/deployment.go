@@ -198,7 +198,7 @@ func (ds *deploymentService) start(ctx context.Context, r deployRequest) (*bohux
 			}
 			return fmt.Errorf("read release: %w", err)
 		}
-		if problem := deploy.ValidateRelease(ctx, tx, app, r.release, r.env); problem != nil {
+		if _, problem := deploy.ValidateRelease(ctx, tx, app, r.release, r.env); problem != nil {
 			return connect.NewError(connect.CodeFailedPrecondition, problem)
 		}
 		if r.rollbackOf != nil {

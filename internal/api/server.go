@@ -45,6 +45,7 @@ type Scaler interface {
 // Deployer starts and cancels deploy runs; deploy.Starter implements it.
 type Deployer interface {
 	Start(ctx context.Context, in deploy.Input) (workflowID, runID string, err error)
+	StartBuild(ctx context.Context, in deploy.BuildInput) (workflowID string, err error)
 	Cancel(ctx context.Context, workflowID, runID string) error
 }
 

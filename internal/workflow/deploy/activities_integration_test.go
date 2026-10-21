@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	agentv1 "github.com/bohumix/bohux/gen/bohux/agent/v1"
+	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/internal/agentapi"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/store/fixture"
@@ -130,11 +131,20 @@ func TestRecordStart(t *testing.T) {
 	}
 
 	other, otherEnv := fixture.DeployableApp(t, h.st, h.tenant, h.node, "worker", 1)
+	t.Run("a building release is reported, not refused", func(t *testing.T) {
+		v, err := h.env.ExecuteActivity(h.acts.RecordStart, h.input(app, env, fixture.Release(t, h.st, h.tenant, app, "building", false)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var building bool
+		if err := v.Get(&building); err != nil || !building {
+			t.Errorf("building = %v, %v; want true", building, err)
+		}
+	})
 	tests := []struct {
 		name string
 		in   Input
 	}{
-		{"building", h.input(app, env, fixture.Release(t, h.st, h.tenant, app, "building", false))},
 		{"failed", h.input(app, env, fixture.Release(t, h.st, h.tenant, app, "failed", false))},
 		{"artifact gone", h.input(app, env, fixture.Release(t, h.st, h.tenant, app, "ready", false))},
 		{"another app's release", h.input(app, env, fixture.Release(t, h.st, h.tenant, other, "ready", true))},
@@ -387,4 +397,120 @@ func TestWaitHealthy(t *testing.T) {
 			t.Errorf("WaitHealthy = %v, want healthy once the report arrives", err)
 		}
 	})
+}
+
+// fakeDispatcher answers builds without an agent.
+type fakeDispatcher struct {
+	got  []*agentv1.BuildRequest
+	fail string
+}
+
+func (f *fakeDispatcher) Build(_ context.Context, _ uuid.UUID, req *agentv1.BuildRequest) (*agentv1.BuildResult, error) {
+	f.got = append(f.got, req)
+	if f.fail != "" {
+		return &agentv1.BuildResult{ReleaseId: req.GetReleaseId(), Failure: &bohuxv1.ErrorDetail{Reason: f.fail}}, nil
+	}
+	return &agentv1.BuildResult{ReleaseId: req.GetReleaseId(), ImageId: "sha256:" + strings.Repeat("b", 64), Commit: "c0ffee"}, nil
+}
+
+// gitApp turns a deployable App's source into Git.
+func (h *harness) gitApp(app uuid.UUID) {
+	h.t.Helper()
+	ctx := context.Background()
+	if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+		var rev uuid.UUID
+		var rt, secs []byte
+		if err := tx.QueryRow(ctx, `SELECT h.revision_id, r.runtime, r.secrets FROM apps_heads h
+			JOIN apps_revisions r ON r.id = h.revision_id WHERE h.id = $1`, app).Scan(&rev, &rt, &secs); err != nil {
+			return err
+		}
+		_, err := tx.Update(ctx, "apps", app, rev, []store.Col{
+			{Name: "source", Value: `{"git": {"repo_url": "https://example.com/web.git", "ref": "main", "subpath": "svc"}}`},
+			{Name: "runtime", Value: rt}, {Name: "secrets", Value: secs}},
+			store.Audit{Actor: store.Actor{ID: store.SystemActorID, Kind: store.ActorSystem}, Action: "test", ResourceType: "bohux.v1.App"})
+		return err
+	}); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+func (h *harness) release(id uuid.UUID) (state, digest, sourceRef, reason string, available bool) {
+	h.t.Helper()
+	ctx := context.Background()
+	if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+		return tx.QueryRow(ctx, `SELECT r.state, r.artifact_digest, r.source_ref, COALESCE(r.failure->>'reason', ''),
+			r.artifact_available FROM releases_heads h JOIN releases_revisions r ON r.id = h.revision_id
+			WHERE h.id = $1`, id).Scan(&state, &digest, &sourceRef, &reason, &available)
+	}); err != nil {
+		h.t.Fatal(err)
+	}
+	return
+}
+
+func TestBuildActivities(t *testing.T) {
+	h := newHarness(t)
+	app, _ := fixture.DeployableApp(t, h.st, h.tenant, h.node, "web", 1)
+	h.gitApp(app)
+	disp := &fakeDispatcher{}
+	h.acts.Builds = disp
+	run := func(release uuid.UUID, ref string) (BuildOutcome, error) {
+		v, err := h.env.ExecuteActivity(h.acts.RunBuild, BuildInput{TenantID: h.tenant.String(),
+			ReleaseID: release.String(), Ref: ref, Actor: testActor})
+		if err != nil {
+			return BuildOutcome{}, err
+		}
+		var out BuildOutcome
+		return out, v.Get(&out)
+	}
+	finish := func(release uuid.UUID, out BuildOutcome) {
+		t.Helper()
+		if _, err := h.env.ExecuteActivity(h.acts.FinishBuild, FinishInput{TenantID: h.tenant.String(),
+			ReleaseID: release.String(), Actor: testActor, Outcome: out}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitReady := func(release uuid.UUID) error {
+		_, err := h.env.ExecuteActivity(h.acts.WaitReleaseReady, ReleaseRef{TenantID: h.tenant.String(), ReleaseID: release.String()})
+		return err
+	}
+
+	ok := fixture.Release(t, h.st, h.tenant, app, "building", false)
+	out, err := run(ok, "")
+	if err != nil || out.ImageID == "" || out.Commit != "c0ffee" {
+		t.Fatalf("RunBuild = %+v, %v", out, err)
+	}
+	if r := disp.got[0]; r.GetRepoUrl() != "https://example.com/web.git" || r.GetRef() != "main" ||
+		r.GetSubpath() != "svc" || r.GetAppId() != app.String() {
+		t.Errorf("dispatched %v", r)
+	}
+	if _, err := run(ok, "v2"); err != nil || disp.got[1].GetRef() != "v2" {
+		t.Errorf("an explicit ref was not used: %v", disp.got[1])
+	}
+	finish(ok, out)
+	finish(ok, BuildOutcome{Failure: "BUILD_FAILED"})
+	if state, digest, src, _, avail := h.release(ok); state != "ready" || digest != out.ImageID || src != "c0ffee" || !avail {
+		t.Errorf("after a good build: %s %s %s %v", state, digest, src, avail)
+	}
+	if err := waitReady(ok); err != nil {
+		t.Errorf("WaitReleaseReady on a ready release = %v", err)
+	}
+
+	bad := fixture.Release(t, h.st, h.tenant, app, "building", false)
+	disp.fail = "BUILD_FAILED"
+	out, err = run(bad, "")
+	if err != nil || out.Failure != "BUILD_FAILED" {
+		t.Fatalf("RunBuild = %+v, %v; want a failure outcome", out, err)
+	}
+	finish(bad, out)
+	if state, _, _, reason, avail := h.release(bad); state != "failed" || reason != "BUILD_FAILED" || avail {
+		t.Errorf("after a failed build: %s %s %v", state, reason, avail)
+	}
+	if err := waitReady(bad); !isType(err, ErrTypeBuildFailed) {
+		t.Errorf("WaitReleaseReady on a failed release = %v, want %s", err, ErrTypeBuildFailed)
+	}
+
+	_, err = run(uuid.Must(uuid.NewV7()), "")
+	if err == nil || isType(err, ErrTypeInvalid) {
+		t.Errorf("RunBuild before its row exists = %v, want a retryable error", err)
+	}
 }

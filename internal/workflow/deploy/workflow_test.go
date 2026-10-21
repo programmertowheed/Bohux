@@ -20,7 +20,11 @@ const (
 // script is what the mocked activities do in one test case, and what they saw.
 type script struct {
 	recordErr error
-	last      string
+	// building makes RecordStart report a Release still building; buildErr is what
+	// waiting for it returns.
+	building bool
+	buildErr error
+	last     string
 	// assignErr and waitErr are keyed by Release ("" = remove the workload).
 	assignErr map[string]error
 	waitErr   map[string]error
@@ -36,7 +40,9 @@ func (s *script) register(env *testsuite.TestWorkflowEnvironment) {
 	var a *Activities
 	env.RegisterActivity(&Activities{})
 	env.OnActivity(a.RecordStart, mock.Anything, mock.Anything).Return(
-		func(context.Context, Input) error { return s.recordErr })
+		func(context.Context, Input) (bool, error) { return s.building, s.recordErr })
+	env.OnActivity(a.WaitReleaseReady, mock.Anything, mock.Anything).Return(
+		func(context.Context, ReleaseRef) error { return s.buildErr })
 	env.OnActivity(a.LastHealthyRelease, mock.Anything, mock.Anything).Return(
 		func(context.Context, LastHealthyInput) (string, error) { return s.last, nil })
 	env.OnActivity(a.SetState, mock.Anything, mock.Anything).Return(
@@ -195,6 +201,22 @@ func TestCompensation(t *testing.T) {
 			wantWaits:   []string{},
 		},
 		{
+			name:        "a release whose build fails fails without assigning",
+			s:           script{last: goodRelease, building: true, buildErr: nonRetryable(ErrTypeBuildFailed)},
+			want:        Result{State: StateFailed, Failure: &Failure{Reason: ReasonBuildFailed}},
+			wantStates:  []string{"building", "failed:BUILD_FAILED"},
+			wantAssigns: []string{},
+			wantWaits:   []string{},
+		},
+		{
+			name:        "a release still building is waited for, then deployed",
+			s:           script{last: goodRelease, building: true},
+			want:        Result{State: StateSucceeded},
+			wantStates:  []string{"building", "applying", "health_gate", "succeeded"},
+			wantAssigns: []string{newRelease},
+			wantWaits:   []string{newRelease},
+		},
+		{
 			// The forward path, after its rollback cases.
 			name:        "healthy release succeeds",
 			s:           script{last: goodRelease},
@@ -279,7 +301,7 @@ func TestCancelBeforeAssign(t *testing.T) {
 	env.RegisterActivity(&Activities{})
 	starts := 0
 	env.OnActivity(a.RecordStart, mock.Anything, mock.Anything).After(time.Hour).Return(
-		func(context.Context, Input) error { starts++; return nil })
+		func(context.Context, Input) (bool, error) { starts++; return false, nil })
 	env.OnActivity(a.SetState, mock.Anything, mock.Anything).Return(
 		func(_ context.Context, c StateChange) error { s.states = append(s.states, c); return nil })
 	env.RegisterDelayedCallback(env.CancelWorkflow, time.Minute)

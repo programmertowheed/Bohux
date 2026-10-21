@@ -45,33 +45,39 @@ type Assigner interface {
 type Activities struct {
 	Store  *store.Store
 	Agents Assigner
+	// Builds sends builds to nodes (ADR-0028).
+	Builds Dispatcher
 	// PollInterval is how often WaitHealthy reads the node's report; 2 s when zero.
 	PollInterval time.Duration
 }
 
 // RecordStart writes the Deployment row if it is absent (ADR-0026 item 3), records the
-// run, and validates the Release. An invalid Release is a non-retryable
-// ErrTypeInvalid error, returned after the row exists.
-func (a *Activities) RecordStart(ctx context.Context, in Input) error {
+// run, and validates the Release. It reports whether the Release is still building.
+// An invalid Release is a non-retryable ErrTypeInvalid error, returned after the row
+// exists.
+func (a *Activities) RecordStart(ctx context.Context, in Input) (bool, error) {
 	ids, err := parseIDs(in.TenantID, in.DeploymentID, in.AppID, in.ReleaseID, in.EnvironmentID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	tenant, deployment, app, release, env := ids[0], ids[1], ids[2], ids[3], ids[4]
 	actor, err := in.Actor.store()
 	if err != nil {
-		return err
+		return false, err
 	}
 	var rollbackOf *uuid.UUID
 	if in.RollbackOf != "" {
 		id, err := uuid.Parse(in.RollbackOf)
 		if err != nil {
-			return invalid("rollback_of is not an ID")
+			return false, invalid("rollback_of is not an ID")
 		}
 		rollbackOf = &id
 	}
 	run := activity.GetInfo(ctx).WorkflowExecution
-	var problem error
+	var (
+		problem  error
+		building bool
+	)
 	err = a.Store.InTenant(ctx, tenant, func(tx *store.Tx) error {
 		row := DeploymentRow{
 			ID: deployment, ReleaseID: release, EnvironmentID: env, RollbackOf: rollbackOf,
@@ -80,19 +86,19 @@ func (a *Activities) RecordStart(ctx context.Context, in Input) error {
 		if err := InsertDeployment(ctx, tx, row, actor); err != nil {
 			return err
 		}
-		problem = ValidateRelease(ctx, tx, app, release, env)
+		building, problem = ValidateRelease(ctx, tx, app, release, env)
 		return nil
 	})
 	if errors.Is(err, store.ErrNotFound) {
-		return invalid("release does not exist")
+		return false, invalid("release does not exist")
 	}
 	if err != nil {
-		return fmt.Errorf("record deployment %s: %w", deployment, err)
+		return false, fmt.Errorf("record deployment %s: %w", deployment, err)
 	}
 	if problem != nil {
-		return invalid(problem.Error())
+		return false, invalid(problem.Error())
 	}
-	return nil
+	return building, nil
 }
 
 // DeploymentRow is what creating a Deployment writes.
@@ -146,8 +152,9 @@ func InsertDeployment(ctx context.Context, tx *store.Tx, d DeploymentRow, actor 
 	return nil
 }
 
-// ValidateRelease returns why release cannot be deployed to env as app, or nil.
-func ValidateRelease(ctx context.Context, tx *store.Tx, app, release, env uuid.UUID) error {
+// ValidateRelease returns why release cannot be deployed to env as app, or nil, and
+// whether it is still building: a deploy of a building Release waits for it (ADR-0028).
+func ValidateRelease(ctx context.Context, tx *store.Tx, app, release, env uuid.UUID) (bool, error) {
 	var (
 		releaseApp, appEnv uuid.UUID
 		state              string
@@ -160,19 +167,21 @@ func ValidateRelease(ctx context.Context, tx *store.Tx, app, release, env uuid.U
 		WHERE h.id = $1 AND NOT h.deleted`, release).Scan(&releaseApp, &state, &available, &appEnv)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		return errors.New("release or its app does not exist")
+		return false, errors.New("release or its app does not exist")
 	case err != nil:
-		return fmt.Errorf("read release: %w", err)
+		return false, fmt.Errorf("read release: %w", err)
 	case releaseApp != app:
-		return errors.New("release belongs to another app")
+		return false, errors.New("release belongs to another app")
 	case appEnv != env:
-		return errors.New("release's app is not in this environment")
+		return false, errors.New("release's app is not in this environment")
+	case state == "building":
+		return true, nil
 	case state != "ready":
-		return fmt.Errorf("release is %s, not ready", state)
+		return false, fmt.Errorf("release is %s, not ready", state)
 	case !available:
-		return errors.New("release artifact is no longer available")
+		return false, errors.New("release artifact is no longer available")
 	}
-	return nil
+	return false, nil
 }
 
 // SetState moves the Deployment to a new state. A repeat of the current state, or any

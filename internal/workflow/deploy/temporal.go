@@ -52,6 +52,22 @@ func (s *Starter) Start(ctx context.Context, in Input) (workflowID, runID string
 	return run.GetID(), run.GetRunID(), nil
 }
 
+// StartBuild starts the Release's build run. Starting it again while it runs, or after
+// it finished, is a no-op: one Release is built once.
+func (s *Starter) StartBuild(ctx context.Context, in BuildInput) (string, error) {
+	_, err := s.Client.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+		ID:                       BuildWorkflowID(in.ReleaseID),
+		TaskQueue:                queueOr(s.TaskQueue),
+		WorkflowIDConflictPolicy: enums.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
+		WorkflowIDReusePolicy:    enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+	}, BuildWorkflow, in)
+	var started *serviceerror.WorkflowExecutionAlreadyStarted
+	if err != nil && !errors.As(err, &started) {
+		return "", fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	return BuildWorkflowID(in.ReleaseID), nil
+}
+
 // Cancel requests cancellation of one run; the workflow compensates (ADR-0026 item 8).
 // A run that already finished is not an error.
 func (s *Starter) Cancel(ctx context.Context, workflowID, runID string) error {
@@ -83,6 +99,7 @@ func RunWorker(ctx context.Context, c client.Client, queue string, acts *Activit
 		// A fresh worker per attempt: one whose Start failed is not reused.
 		w = worker.New(c, queue, worker.Options{})
 		w.RegisterWorkflow(Workflow)
+		w.RegisterWorkflow(BuildWorkflow)
 		w.RegisterActivity(acts)
 		err := w.Start()
 		if err == nil {

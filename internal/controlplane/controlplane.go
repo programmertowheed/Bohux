@@ -127,7 +127,7 @@ func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 	workerDone := make(chan struct{})
 	go func() {
 		defer close(workerDone)
-		deploy.RunWorker(workerCtx, temporal, "", &deploy.Activities{Store: st, Agents: agents})
+		deploy.RunWorker(workerCtx, temporal, "", &deploy.Activities{Store: st, Agents: agents, Builds: agents})
 	}()
 	defer func() { stopWorker(); <-workerDone }()
 

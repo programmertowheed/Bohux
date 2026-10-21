@@ -26,6 +26,19 @@ import (
 	"github.com/bohumix/bohux/internal/workflow/deploy"
 )
 
+// slowBuilder plays the agent's builder: it takes a moment, then succeeds.
+type slowBuilder struct{}
+
+func (slowBuilder) Build(ctx context.Context, _ uuid.UUID, req *agentv1.BuildRequest) (*agentv1.BuildResult, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(300 * time.Millisecond):
+	}
+	return &agentv1.BuildResult{ReleaseId: req.GetReleaseId(), ImageId: "sha256:" + strings.Repeat("c", 64),
+		Commit: "c0ffee" + req.GetRef()}, nil
+}
+
 // temporalEnv names a Temporal frontend for tests that run real workflows.
 const temporalEnv = "BOHUX_TEST_TEMPORAL_ADDRESS"
 
@@ -58,7 +71,7 @@ func newDeployHarness(t *testing.T) *deployHarness {
 	go func() {
 		defer close(done)
 		deploy.RunWorker(ctx, c, queue, &deploy.Activities{Store: h.st,
-			Agents: &agentapi.Server{Store: h.st}, PollInterval: 20 * time.Millisecond})
+			Agents: &agentapi.Server{Store: h.st}, Builds: slowBuilder{}, PollInterval: 20 * time.Millisecond})
 	}()
 	t.Cleanup(func() { cancel(); <-done; c.Close() })
 
@@ -401,4 +414,53 @@ func TestScaleAppAssigns(t *testing.T) {
 	if gen, _ := latest(); gen != 2 {
 		t.Errorf("replayed scale wrote generation %d", gen)
 	}
+}
+
+// TestBuildThenDeploy creates a Release from Git, deploys it while it builds, and
+// sees the deploy wait for the build (ADR-0028).
+func TestBuildThenDeploy(t *testing.T) {
+	ctx := context.Background()
+	d := newDeployHarness(t)
+	var app *bohuxv1.App
+	if err := d.st.InTenant(ctx, d.tenant, func(tx *store.Tx) error {
+		var err error
+		app, err = getApp(ctx, tx, mustUUID(t, d.app), uuid.Nil, "")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Point the App at a Git source; the fake builder never fetches it.
+	if err := d.st.InTenant(ctx, d.tenant, func(tx *store.Tx) error {
+		_, err := tx.Update(ctx, "apps", mustUUID(t, d.app), mustUUID(t, app.GetMeta().GetRevisionId()), []store.Col{
+			{Name: "source", Value: `{"git": {"repo_url": "https://example.com/api.git", "ref": "main"}}`},
+			{Name: "runtime", Value: `{"replicas": 1}`}, {Name: "secrets", Value: `[]`}},
+			store.Audit{Actor: store.Actor{ID: store.SystemActorID, Kind: store.ActorSystem}, Action: "test", ResourceType: appType})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r, err := d.releases.CreateRelease(ctx, req(d.token, &bohuxv1.CreateReleaseRequest{AppId: d.app,
+		From: &bohuxv1.CreateReleaseRequest_GitRef{GitRef: "v7"}, IdempotencyKey: "git1"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel := r.Msg.GetRelease()
+	if rel.GetState() != bohuxv1.ReleaseState_RELEASE_STATE_BUILDING || rel.GetBuildWorkflowId() != deploy.BuildWorkflowID(rel.GetMeta().GetId()) {
+		t.Fatalf("release = %v, want building with its build workflow", rel)
+	}
+	dep, err := d.deploy(rel.GetMeta().GetId(), "gd1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.waitState(dep.GetMeta().GetId(), bohuxv1.DeploymentState_DEPLOYMENT_STATE_HEALTH_GATE)
+	got, err := d.releases.GetRelease(ctx, req(d.token, &bohuxv1.GetReleaseRequest{Id: rel.GetMeta().GetId()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := got.Msg.GetRelease(); g.GetState() != bohuxv1.ReleaseState_RELEASE_STATE_READY || g.GetSourceRef() != "c0ffeev7" ||
+		!g.GetArtifactAvailable() {
+		t.Errorf("after the build the release is %v", g)
+	}
+	d.report(rel.GetMeta().GetId(), healthy)
+	d.waitState(dep.GetMeta().GetId(), bohuxv1.DeploymentState_DEPLOYMENT_STATE_SUCCEEDED)
 }

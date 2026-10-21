@@ -13,30 +13,26 @@ import (
 	"github.com/bohumix/bohux/gen/bohux/v1/bohuxv1connect"
 	"github.com/bohumix/bohux/internal/auth"
 	"github.com/bohumix/bohux/internal/store"
+	"github.com/bohumix/bohux/internal/workflow/deploy"
 )
 
 const releaseType = "bohux.v1.Release"
 
-// errBuildNotYet answers a Release that needs a build: BuildKit arrives with S7.
-var errBuildNotYet = connect.NewError(connect.CodeUnimplemented,
-	errors.New("building a release from git is not available yet; create it from an image"))
 
 type releaseService struct {
 	s *Server
 }
 
-// CreateRelease imports an image as a ready Release that captures the App's current
-// revision (ADR-0010). An explicit image wins over the App's image source; a Git
-// source needs a build, which is not available yet.
+// CreateRelease makes a Release that captures the App's current revision (ADR-0010).
+// From an image (explicit, or the App's image source) it is ready at once. From Git
+// (an explicit ref, or the App's Git source) it is BUILDING: the build run starts
+// first and the row is written after, as for deploys (ADR-0026, ADR-0028).
 func (rs *releaseService) CreateRelease(ctx context.Context, req *connect.Request[bohuxv1.CreateReleaseRequest]) (*connect.Response[bohuxv1.CreateReleaseResponse], error) {
 	msg := req.Msg
 	p, _ := auth.FromContext(ctx)
 	appID, err := parseID("app_id", msg.GetAppId())
 	if err != nil {
 		return nil, err
-	}
-	if msg.GetGitRef() != "" {
-		return nil, errBuildNotYet
 	}
 	if img := msg.GetImage(); img != nil {
 		if err := validSource(&bohuxv1.Source{Kind: &bohuxv1.Source_Image{Image: img}}); err != nil {
@@ -48,6 +44,10 @@ func (rs *releaseService) CreateRelease(ctx context.Context, req *connect.Reques
 		return nil, toConnect(ctx, err)
 	}
 	resp := &bohuxv1.CreateReleaseResponse{}
+	var (
+		project uuid.UUID
+		app     *bohuxv1.App
+	)
 	err = rs.s.Store.InTenant(ctx, p.Tenant, func(tx *store.Tx) error {
 		prior, err := idem.lookup(ctx, tx)
 		if err != nil {
@@ -57,42 +57,72 @@ func (rs *releaseService) CreateRelease(ctx context.Context, req *connect.Reques
 			resp.Release, err = getRelease(ctx, tx, prior.ResourceID)
 			return err
 		}
-		project, _, err := appProject(ctx, tx, appID)
-		if err != nil {
+		if project, _, err = appProject(ctx, tx, appID); err != nil {
 			return err
 		}
 		if err := authorizeProject(ctx, project, auth.RoleDeployer); err != nil {
 			return err
 		}
-		app, err := getApp(ctx, tx, appID, uuid.Nil, "")
+		app, err = getApp(ctx, tx, appID, uuid.Nil, "")
+		return err
+	})
+	if err != nil || resp.Release != nil {
+		return connectResp(resp, toConnect(ctx, err))
+	}
+	config, err := uuid.Parse(app.GetMeta().GetRevisionId())
+	if err != nil {
+		return nil, toConnect(ctx, fmt.Errorf("stored app revision: %w", err))
+	}
+	id, err := store.NewID()
+	if err != nil {
+		return nil, toConnect(ctx, err)
+	}
+
+	var rev []store.Col
+	img := msg.GetImage()
+	if img == nil && msg.GetGitRef() == "" {
+		img = app.GetSource().GetImage()
+	}
+	if img != nil {
+		rev = []store.Col{
+			{Name: "state", Value: "ready"}, {Name: "artifact_digest", Value: img.GetDigest()},
+			// The pinned reference is what the node pulls and runs.
+			{Name: "source_ref", Value: img.GetRepository() + "@" + img.GetDigest()},
+			{Name: "artifact_available", Value: true},
+		}
+	} else {
+		git := app.GetSource().GetGit()
+		if git == nil {
+			return nil, invalidArgument("git_ref", "NO_GIT_SOURCE", "the app has no git source to build from")
+		}
+		ref := msg.GetGitRef()
+		if ref == "" {
+			ref = git.GetRef()
+		}
+		if rs.s.Deploys == nil {
+			return nil, errNoDeploys
+		}
+		actor := p.Actor()
+		workflowID, err := rs.s.Deploys.StartBuild(ctx, deploy.BuildInput{TenantID: p.Tenant.String(),
+			ReleaseID: id.String(), Ref: ref, Actor: deploy.Actor{ID: actor.ID.String(), Kind: string(actor.Kind)}})
 		if err != nil {
-			return err
+			return nil, errNoDeploys
 		}
-		img := msg.GetImage()
-		if img == nil {
-			img = app.GetSource().GetImage()
+		// source_ref holds the requested ref until the build resolves it to a commit.
+		rev = []store.Col{
+			{Name: "state", Value: "building"}, {Name: "source_ref", Value: ref},
+			{Name: "build_workflow_id", Value: workflowID},
 		}
-		if img == nil {
-			return errBuildNotYet
-		}
-		config, err := uuid.Parse(app.GetMeta().GetRevisionId())
-		if err != nil {
-			return fmt.Errorf("stored app revision: %w", err)
-		}
-		id, rev, err := tx.Create(ctx, "releases",
-			[]store.Col{{Name: "app_id", Value: appID}, {Name: "config_revision_id", Value: config}},
-			[]store.Col{
-				{Name: "state", Value: "ready"}, {Name: "artifact_digest", Value: img.GetDigest()},
-				// The pinned reference is what the node pulls and runs.
-				{Name: "source_ref", Value: img.GetRepository() + "@" + img.GetDigest()},
-				{Name: "artifact_available", Value: true},
-			},
+	}
+	err = rs.s.Store.InTenant(ctx, p.Tenant, func(tx *store.Tx) error {
+		revID, err := tx.CreateWithID(ctx, "releases", id,
+			[]store.Col{{Name: "app_id", Value: appID}, {Name: "config_revision_id", Value: config}}, rev,
 			store.Audit{Actor: p.Actor(), Action: bohuxv1connect.ReleaseServiceCreateReleaseProcedure,
 				ResourceType: releaseType, ProjectID: project})
 		if err != nil {
 			return err
 		}
-		if err := idem.record(ctx, tx, releaseType, id, rev); err != nil {
+		if err := idem.record(ctx, tx, releaseType, id, revID); err != nil {
 			return err
 		}
 		resp.Release, err = getRelease(ctx, tx, id)
