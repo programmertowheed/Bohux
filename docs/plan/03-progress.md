@@ -38,26 +38,26 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S3c2 — authorization interceptor (⏳, next to start)
-- **Exact next step:** decide how tenant-level RPCs (CreateProject, ListProjects,
-  GetTenant, NodeService) are authorized, given tokens are scoped to one project (see
-  the S3c2 note), then write the ConnectRPC interceptor and permission table.
+- **Slice:** S3c3 — bootstrap and identity handlers (⏳, next to start)
+- **Exact next step:** `bohux admin bootstrap` (create tenant + tenant-wide owner token,
+  print it once), then IdentityService and TenantService handlers in `internal/api`,
+  mounted in the control plane with the auth interceptor.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S3c2 (authorization
-> interceptor) on branch `claude/relaxed-rubin-76m7dl`. First resolve the S3c2 note on
-> tenant-level RPCs (a token is scoped to one project), following the owner rule for
-> gates (write it up as proposed, build on it, list it under *Waiting on the owner*);
-> if it changes the contract, change proto/ first. Then add, in internal/auth or a new
-> internal/api package, a ConnectRPC interceptor that reads the bearer token,
-> authenticates it with auth.Authenticator, puts the Principal in ctx, and checks a
-> per-RPC permission table (viewer/deployer/owner), with a test that every RPC in the
-> generated bohux.v1 descriptors has an entry. The CI go and integration jobs must run
-> buf generate before tests once a package imports gen/. Verify with build, vet,
-> golangci-lint (also with the integration tag), unit and integration tests on the
-> local Postgres. Tick boxes, update the tracker and the next session prompt, commit,
-> push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S3c3 (bootstrap and
+> identity handlers) on branch `claude/relaxed-rubin-76m7dl`. Add `bohux admin bootstrap`
+> (creates the tenant and a tenant-wide owner API token per ADR-0023, prints the token
+> once, refuses if the slug exists), then IdentityService (WhoAmI, CreateApiToken with
+> the no-escalation check, ListApiTokens, RevokeApiToken) and TenantService handlers in
+> internal/api, using the store write path with audit events and ADR-0022 idempotency
+> records, mounted in the control plane behind the auth interceptor. Test handlers over
+> real ConnectRPC against the local Postgres (integration tag), including a token from
+> another project and an idempotent retry of CreateApiToken (no secret on replay).
+> Verify with build, vet, golangci-lint (also with the integration tag) and tests. If
+> the slice is too big, stop at a clean point and split it in the tracker. Tick boxes,
+> update the tracker and the next session prompt, commit, push, and give me the next
+> prompt.
 
 ## Waiting on the owner
 
@@ -69,6 +69,7 @@ work is in right now*.
 | O4 | Confirm the vision change: parity is demand-driven, not the goal | Nothing technical |
 | O6 | Accept or reject ADR-0021 (migrations: goose on pgx). Owner allowed building on it before acceptance | S2b onward is built on it |
 | O7 | Accept or reject ADR-0022 (token format `bxa_<tenant>_<id>_<secret>`, tenant-first lookup, SHA-256, idempotency records). Owner allowed building on it before acceptance | S3c onward is built on it |
+| O8 | Accept or reject ADR-0023 (tenant-wide API tokens when `project_id` is empty; two-step authorization). Changed `identity.proto`. Owner allowed building on it | S3c3 onward |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -212,15 +213,14 @@ Split into sub-slices, one session each.
       revocation, throttled `last_used_at`); `CreateAPIToken`
 - [x] `store.Tx.CreateWithID`, `Exec`, `Tenant`; `store.NewID`
 
-#### S3c2 — authorization interceptor ⏳
-- [ ] Interceptor: bearer token → Principal in ctx; per-RPC permission table; test that
-      every bohux.v1 RPC has an entry; CI generates `gen/` before tests
-- **Note (decide first):** an API token is scoped to one project (S1a choice), but
-  CreateProject, ListProjects, GetTenant, and NodeService are tenant-level. Likely fix:
-  an API token with no `project_id` is tenant-wide (its role applies to every project
-  and to tenant-level RPCs). That changes `ApiToken.project_id` / the
-  `CreateApiTokenRequest` from REQUIRED to optional in proto, and
-  `api_tokens_heads.project_id` to nullable (new migration).
+#### S3c2 — authorization interceptor ✅
+- [x] Interceptor: bearer token → Principal in ctx; per-RPC permission table
+      (`internal/api/permissions.go`); test that every bohux.v1 RPC has an entry and
+      no entry is stale; unary and streaming covered; CI integration job generates
+      `gen/` before tests
+- [x] Tenant-level RPCs: proposed ADR-0023 (O8). Empty `project_id` = tenant-wide
+      token; `identity.proto` changed first; migration `00013`; `Principal.TenantWide`,
+      `CanAccessProject`, `RequireProject` (handler step), `CanGrant` (no escalation)
 
 #### S3c3 — bootstrap and identity handlers ⏳
 - [ ] Tenant bootstrap CLI step (prints the first owner token once);
@@ -305,6 +305,8 @@ Split into sub-slices, one session each.
   rule for gates: write the ADR as *proposed*, build on it, list it under *Waiting on
   the owner* (O6 onward).
 - S2a done: ADR-0021 (goose on pgx).
+- S3c2 done: ADR-0023 (O8), proto + migration for tenant-wide tokens, `internal/api`
+  auth interceptor and permission table, tests green.
 - S3c split into S3c1–S3c3. S3c1 done: idempotency table, `internal/auth` tokens and
   API-token authentication, integration-tested (expired, revoked, wrong secret,
   tenant swapped, wrong kind, unknown ID all `ErrUnauthenticated`).
