@@ -25,11 +25,13 @@ type SecretResolver interface {
 }
 
 var (
-	errRevokedNode     = errors.New("node is revoked")
+	// ErrRevokedNode, ErrUnknownApp, and ErrWrongEnv are refusals that retrying cannot
+	// fix.
+	ErrRevokedNode     = errors.New("node is revoked")
+	ErrUnknownApp      = errors.New("workload names an app that does not exist in this tenant")
+	ErrWrongEnv        = errors.New("workload environment does not match its app's environment")
 	errNoResolver      = errors.New("workloads reference secrets but no secret resolver is configured")
 	errSealedInRequest = errors.New("workloads must carry secret handles, not sealed values")
-	errUnknownApp      = errors.New("workload names an app that does not exist in this tenant")
-	errWrongEnv        = errors.New("workload environment does not match its app's environment")
 )
 
 // Assign writes the node's next generation: the full desired state, every workload
@@ -45,8 +47,63 @@ func (s *Server) Assign(ctx context.Context, tenant, node uuid.UUID, workloads [
 		}
 		named[i] = proto.Clone(w).(*agentv1.Workload)
 	}
-	workloads = named
-	var gen uint64
+	return s.write(ctx, tenant, node, actor, func(tx *store.Tx, _ []*agentv1.Workload) ([]*agentv1.Workload, bool, error) {
+		for _, w := range named {
+			if err := nameWorkload(ctx, tx, w); err != nil {
+				return nil, false, err
+			}
+		}
+		return named, true, nil
+	})
+}
+
+// AssignApp changes one App in the node's latest generation (ADR-0026): it replaces
+// the App's workload with w, adds it if absent, or removes it when w is nil. Other
+// workloads are kept as they are. If the latest generation already carries w's
+// Deployment and Release for the App, or, for a removal, no workload for the App, it
+// writes nothing and returns that generation, so retries are idempotent.
+func (s *Server) AssignApp(ctx context.Context, tenant, node, app uuid.UUID, w *agentv1.Workload, actor store.Actor) (uint64, error) {
+	if w != nil {
+		if len(w.GetSealedSecrets()) > 0 {
+			return 0, errSealedInRequest
+		}
+		if w.GetAppId() != app.String() {
+			return 0, fmt.Errorf("workload app %q is not %s: %w", w.GetAppId(), app, ErrUnknownApp)
+		}
+		w = proto.Clone(w).(*agentv1.Workload)
+	}
+	return s.write(ctx, tenant, node, actor, func(tx *store.Tx, current []*agentv1.Workload) ([]*agentv1.Workload, bool, error) {
+		next := make([]*agentv1.Workload, 0, len(current)+1)
+		found := false
+		for _, c := range current {
+			if c.GetAppId() != app.String() {
+				next = append(next, c)
+				continue
+			}
+			found = true
+			if w != nil && c.GetDeploymentId() == w.GetDeploymentId() && c.GetReleaseId() == w.GetReleaseId() {
+				return nil, false, nil
+			}
+		}
+		if w == nil {
+			return next, found, nil
+		}
+		if err := nameWorkload(ctx, tx, w); err != nil {
+			return nil, false, err
+		}
+		return append(next, w), true, nil
+	})
+}
+
+// write locks the node, hands build the workloads of its latest generation, and
+// stores what build returns as the next generation, unless build says nothing
+// changed. It returns the generation now in force.
+func (s *Server) write(ctx context.Context, tenant, node uuid.UUID, actor store.Actor,
+	build func(tx *store.Tx, current []*agentv1.Workload) (next []*agentv1.Workload, changed bool, err error)) (uint64, error) {
+	var (
+		gen     uint64
+		written bool
+	)
 	err := s.Store.InTenant(ctx, tenant, func(tx *store.Tx) error {
 		// Locking the node serializes generations per node. The head is locked alone
 		// and its state read afterwards: with a join, a concurrent state change (the
@@ -67,19 +124,30 @@ func (s *Server) Assign(ctx context.Context, tenant, node uuid.UUID, workloads [
 			return fmt.Errorf("read node state: %w", err)
 		}
 		if state == "revoked" {
-			return errRevokedNode
+			return ErrRevokedNode
 		}
-		var last int64
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(max(generation), 0) FROM assignments
-			WHERE node_id = $1`, node).Scan(&last); err != nil {
+		var (
+			last int64
+			raw  []byte
+		)
+		err = tx.QueryRow(ctx, `SELECT generation, payload FROM assignments
+			WHERE node_id = $1 ORDER BY generation DESC LIMIT 1`, node).Scan(&last, &raw)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("read generation: %w", err)
 		}
-		gen = uint64(last) + 1
-		for _, w := range workloads {
-			if err := nameWorkload(ctx, tx, w); err != nil {
-				return err
-			}
+		current := &agentv1.AssignmentPayload{}
+		if err := proto.Unmarshal(raw, current); err != nil {
+			return fmt.Errorf("decode stored assignment: %w", err)
 		}
+		workloads, changed, err := build(tx, current.GetWorkloads())
+		if err != nil {
+			return err
+		}
+		gen = uint64(last)
+		if !changed {
+			return nil
+		}
+		gen++
 		payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(&agentv1.AssignmentPayload{
 			NodeId: node.String(), Generation: gen, IssuedAt: timestamppb.New(s.now()), Workloads: workloads,
 		})
@@ -90,13 +158,16 @@ func (s *Server) Assign(ctx context.Context, tenant, node uuid.UUID, workloads [
 			VALUES ($1, $2, $3, $4, $5)`, tenant, node, int64(gen), payload, actor.ID); err != nil {
 			return fmt.Errorf("store assignment: %w", err)
 		}
+		written = true
 		return tx.AuditOnly(ctx, store.Audit{Actor: actor, Action: "bohux.agent.v1/Assign",
 			ResourceType: assignmentType}, node)
 	})
 	if err != nil {
 		return 0, fmt.Errorf("assign generation to node %s: %w", node, err)
 	}
-	s.wake(node)
+	if written {
+		s.wake(node)
+	}
 	return gen, nil
 }
 
@@ -104,7 +175,7 @@ func (s *Server) Assign(ctx context.Context, tenant, node uuid.UUID, workloads [
 func nameWorkload(ctx context.Context, tx *store.Tx, w *agentv1.Workload) error {
 	app, err := uuid.Parse(w.GetAppId())
 	if err != nil {
-		return fmt.Errorf("app %q: %w", w.GetAppId(), errUnknownApp)
+		return fmt.Errorf("app %q: %w", w.GetAppId(), ErrUnknownApp)
 	}
 	var (
 		appSlug, envSlug string
@@ -114,13 +185,13 @@ func nameWorkload(ctx context.Context, tx *store.Tx, w *agentv1.Workload) error 
 		JOIN environments_heads e ON e.id = a.environment_id
 		WHERE a.id = $1 AND NOT a.deleted`, app).Scan(&appSlug, &envSlug, &env)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("app %s: %w", app, errUnknownApp)
+		return fmt.Errorf("app %s: %w", app, ErrUnknownApp)
 	}
 	if err != nil {
 		return fmt.Errorf("look up app %s: %w", app, err)
 	}
 	if w.GetEnvironmentId() != "" && w.GetEnvironmentId() != env.String() {
-		return fmt.Errorf("app %s: %w", app, errWrongEnv)
+		return fmt.Errorf("app %s: %w", app, ErrWrongEnv)
 	}
 	w.EnvironmentId, w.AppSlug, w.EnvironmentSlug = env.String(), appSlug, envSlug
 	return nil

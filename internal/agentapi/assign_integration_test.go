@@ -227,13 +227,13 @@ func TestAssignments(t *testing.T) {
 			w    *agentv1.Workload
 			want error
 		}{
-			{"not an ID", workload("app-1"), errUnknownApp},
-			{"no such app", workload(uuid.Must(uuid.NewV7()).String()), errUnknownApp},
+			{"not an ID", workload("app-1"), ErrUnknownApp},
+			{"no such app", workload(uuid.Must(uuid.NewV7()).String()), ErrUnknownApp},
 			{"other environment", func() *agentv1.Workload {
 				w := workload(app1.String())
 				w.EnvironmentId = uuid.Must(uuid.NewV7()).String()
 				return w
-			}(), errWrongEnv},
+			}(), ErrWrongEnv},
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
@@ -245,4 +245,97 @@ func TestAssignments(t *testing.T) {
 		}
 	})
 
+}
+
+func TestAssignApp(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	node := uuid.MustParse(h.register("vps-1").node)
+	app1, _ := fixture.App(t, h.st, h.tenant, "api", "prod")
+	app2, _ := fixture.App(t, h.st, h.tenant, "worker", "prod2")
+
+	deployed := func(app uuid.UUID, release, deployment string) *agentv1.Workload {
+		w := workload(app.String())
+		w.Secrets = nil
+		w.ReleaseId, w.DeploymentId = release, deployment
+		return w
+	}
+	latest := func() []*agentv1.Workload {
+		t.Helper()
+		var raw []byte
+		err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+			return tx.QueryRow(ctx, `SELECT payload FROM assignments WHERE node_id = $1
+				ORDER BY generation DESC LIMIT 1`, node).Scan(&raw)
+		})
+		if err != nil {
+			t.Fatalf("read latest: %v", err)
+		}
+		p := &agentv1.AssignmentPayload{}
+		if err := proto.Unmarshal(raw, p); err != nil {
+			t.Fatal(err)
+		}
+		return p.GetWorkloads()
+	}
+	releaseOf := func(ws []*agentv1.Workload) map[string]string {
+		out := map[string]string{}
+		for _, w := range ws {
+			out[w.GetAppId()] = w.GetReleaseId()
+		}
+		return out
+	}
+	assign := func(app uuid.UUID, w *agentv1.Workload) uint64 {
+		t.Helper()
+		gen, err := h.srv.AssignApp(ctx, h.tenant, node, app, w, system)
+		if err != nil {
+			t.Fatalf("AssignApp: %v", err)
+		}
+		return gen
+	}
+
+	if gen := assign(app1, nil); gen != 0 {
+		t.Errorf("removing from an empty node wrote generation %d", gen)
+	}
+	if gen := assign(app1, deployed(app1, "r1", "d1")); gen != 1 {
+		t.Fatalf("first assign = generation %d, want 1", gen)
+	}
+	if gen := assign(app1, deployed(app1, "r1", "d1")); gen != 1 {
+		t.Errorf("repeat of the same deployment wrote generation %d, want 1", gen)
+	}
+	if gen := assign(app2, deployed(app2, "w1", "d2")); gen != 2 {
+		t.Errorf("second app = generation %d, want 2", gen)
+	}
+	if gen := assign(app1, deployed(app1, "r2", "d3")); gen != 3 {
+		t.Errorf("new release = generation %d, want 3", gen)
+	}
+	got := releaseOf(latest())
+	if len(got) != 2 || got[app1.String()] != "r2" || got[app2.String()] != "w1" {
+		t.Errorf("latest = %v, want api at r2 and worker at w1", got)
+	}
+	for _, w := range latest() {
+		if w.GetAppSlug() == "" || w.GetEnvironmentSlug() == "" {
+			t.Errorf("workload %s was not named", w.GetAppId())
+		}
+	}
+	if gen := assign(app1, nil); gen != 4 {
+		t.Errorf("removal = generation %d, want 4", gen)
+	}
+	if got := releaseOf(latest()); len(got) != 1 || got[app2.String()] != "w1" {
+		t.Errorf("after removal = %v, want only the worker", got)
+	}
+	if gen := assign(app1, nil); gen != 4 {
+		t.Errorf("repeat removal wrote generation %d, want 4", gen)
+	}
+
+	t.Run("refusals", func(t *testing.T) {
+		if _, err := h.srv.AssignApp(ctx, h.tenant, node, app1, deployed(app2, "x", "y"), system); !errors.Is(err, ErrUnknownApp) {
+			t.Errorf("mismatched app = %v, want ErrUnknownApp", err)
+		}
+		ghost := uuid.Must(uuid.NewV7())
+		if _, err := h.srv.AssignApp(ctx, h.tenant, node, ghost, deployed(ghost, "x", "y"), system); !errors.Is(err, ErrUnknownApp) {
+			t.Errorf("unknown app = %v, want ErrUnknownApp", err)
+		}
+		if _, err := h.srv.AssignApp(ctx, h.tenant, uuid.Must(uuid.NewV7()), app1, nil, system); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("unknown node = %v, want ErrNotFound", err)
+		}
+	})
 }
