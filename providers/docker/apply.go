@@ -49,15 +49,18 @@ func (p *Provider) Apply(ctx context.Context, req provider.ApplyRequest) (provid
 			return provider.ApplyResult{}, err
 		}
 	}
-	args := []string{"compose", "-p", project(spec.Ref), "-f", composeFile,
-		"up", "--detach", "--remove-orphans", "--quiet-pull"}
 	if plan.Changes[0].Action == "restart" {
 		// Same spec, not running: often a start that failed (a host port still held).
 		// Starting the container Docker left behind attaches only its first network,
-		// so build it again from the artifact instead.
-		args = append(args, "--force-recreate")
+		// so remove the stopped containers (never running ones) and let `up` create
+		// them again from the artifact.
+		if _, err := p.run(ctx, dir, "compose", "-p", project(spec.Ref), "-f", composeFile,
+			"rm", "--force"); err != nil {
+			return provider.ApplyResult{}, err
+		}
 	}
-	if _, err := p.run(ctx, dir, args...); err != nil {
+	if _, err := p.run(ctx, dir, "compose", "-p", project(spec.Ref), "-f", composeFile,
+		"up", "--detach", "--remove-orphans", "--quiet-pull"); err != nil {
 		return provider.ApplyResult{}, err
 	}
 	return provider.ApplyResult{Changed: true}, nil

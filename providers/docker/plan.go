@@ -22,13 +22,16 @@ func (p *Provider) Plan(ctx context.Context, req provider.PlanRequest) (provider
 		return provider.Plan{}, err
 	}
 	name := project(spec.Ref)
+	unchanged := p.unchanged(spec.Ref, composeYAML, secretsEnv)
 	switch {
 	case !st.Exists:
 		return provider.Plan{Changes: []provider.Change{{Action: "create", Detail: name}}}, nil
-	case st.Hash != spec.Hash || !p.unchanged(spec.Ref, composeYAML, secretsEnv):
-		return provider.Plan{Changes: []provider.Change{{Action: "update", Detail: name}}}, nil
-	case !st.Running:
+	case !st.Running && unchanged:
+		// Status reports no hash for a workload that is not running, so the files on
+		// disk decide: the same artifact, not running, is a restart.
 		return provider.Plan{Changes: []provider.Change{{Action: "restart", Detail: name}}}, nil
+	case st.Hash != spec.Hash || !unchanged:
+		return provider.Plan{Changes: []provider.Change{{Action: "update", Detail: name}}}, nil
 	}
 	return provider.Plan{}, nil
 }
