@@ -28,15 +28,26 @@ var (
 	healthHeartbeat = 30 * time.Second
 )
 
-// Workflow runs one Deployment (ADR-0026). Its errors are infrastructure errors only;
-// a deploy that fails or rolls back returns its Result with a nil error.
+// Workflow runs one Deployment (ADR-0026), then posts its outcome to the project's
+// notification channels (ADR-0038). Its errors are infrastructure errors only; a deploy
+// that fails or rolls back returns its Result with a nil error.
 func Workflow(ctx workflow.Context, in Input) (Result, error) {
-	var a *Activities
 	timeout := in.HealthTimeout
 	if timeout <= 0 {
 		timeout = DefaultHealthTimeout
 	}
 	d := &run{in: in, timeout: timeout}
+	res, err := d.deploy(ctx)
+	if err == nil {
+		d.notifyEnd(ctx, res)
+	}
+	return res, err
+}
+
+// deploy is the run itself, up to the terminal state.
+func (d *run) deploy(ctx workflow.Context) (Result, error) {
+	var a *Activities
+	in := d.in
 
 	var building bool
 	if err := workflow.ExecuteActivity(storeCtx(ctx), a.RecordStart, in).Get(ctx, &building); err != nil {

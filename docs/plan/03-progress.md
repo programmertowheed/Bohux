@@ -38,17 +38,16 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S13 — next v0.2 item, not chosen yet (⏳)
+- **Slice:** S14 — next v0.2 item, not chosen yet (⏳)
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** next v0.2 item. Candidates: notifications on deploy events
-  (Slack/Discord/email/webhook), the MCP server (ADR-0018), the read-only web UI
-  (ADR-0012/0013), Buildpacks/Nixpacks.
+- **Exact next step:** next v0.2 item. Candidates: the MCP server (ADR-0018), the
+  read-only web UI (ADR-0012/0013), Buildpacks/Nixpacks, team invites.
 
 ## Next session prompt
 
 > Read CLAUDE.md and docs/plan/03-progress.md, then pick and split the next v0.2 slice
-> (S13) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
+> (S14) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
 > and ADR-0034. Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*).
 > Verify with build, vet, golangci-lint (also with the integration tag), unit and
 > integration tests. Tick boxes, update the tracker and the next session prompt,
@@ -81,6 +80,7 @@ work is in right now*.
 | O22 | Accept or reject ADR-0036 (CLI resource commands: `bohux <noun> <verb>`, JSON output is the API's protojson, secret values only from stdin) | S11 |
 | O23 | Accept or reject ADR-0037 (Git push webhooks: Webhook resource, HMAC in OpenBao, deploys as the webhook). Adds `webhook.proto` | S12 |
 | O24 | Open a PR for this branch (or allow CI on it) so the CI matrix runs at least once; nothing has run on GitHub yet | Confidence in every slice since S6 |
+| O25 | Accept or reject ADR-0038 (deploy notifications: project channels, URL in OpenBao, sent by activities after the terminal state; no email yet). Adds `notification.proto` | S13 |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -889,6 +889,20 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 - [ ] With the owner: how a Git host reaches the API on a single VPS (a route to the
       control plane through the ingress, ADR-0037 consequences)
 
+### S13 — Deploy notifications (ADR-0038) ✅
+- [x] Proposed ADR-0038 (O25): `NotificationChannel` per project (Slack, Discord,
+      signed webhook), owner-only, URL in OpenBao (https only, never returned), end
+      states to post (default failed / rolled back / cancelled); email deferred
+- [x] Proto `notification.proto`; migration 00020; permissions; CLI `channel
+      list|create|remove` (URL from stdin)
+- [x] Workflow: after the terminal state, `NotificationChannels` then one
+      `NotifyChannel` per channel (5 attempts each), behind
+      `workflow.GetVersion("notify-channels")`; a notification never changes the
+      outcome. Unit test (rolled back first; a failing channel retried 5 times and
+      dropped); integration tests for the API (owner-only, the URL never reaches
+      Postgres or a response) and the activities (real TLS posts, the webhook's
+      signature, other projects and states skipped)
+
 ## Known gaps and notes
 - **CI has not run on this branch.** `ci.yml` triggers on pushes to `main` and on
   pull requests; there is no PR for `claude/relaxed-rubin-76m7dl`, so every check so
@@ -991,7 +1005,8 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 - S11 done: the CLI covers the API's main resources; the self-deploy test uses it.
 - S12 done: Git push webhooks (ADR-0037 proposed, O23), API, CLI, tests.
 - Found: CI never ran on this branch (no PR); added as O24.
-- **Next:** S13.
+- S13 done: deploy notifications (ADR-0038 proposed, O25), API, workflow, CLI, tests.
+- **Next:** S14.
 
 ### 2026-10-21 (auto run 2, S6a) — branch `claude/relaxed-rubin-76m7dl`
 - Owner asked again for an automatic run, slice after slice, until the session ends.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -49,6 +50,10 @@ type Activities struct {
 	Builds Dispatcher
 	// PollInterval is how often WaitHealthy reads the node's report; 2 s when zero.
 	PollInterval time.Duration
+	// Secrets reads notification channels' URLs (ADR-0038); nil disables sending.
+	Secrets SecretReader
+	// HTTP posts notifications; nil means http.DefaultClient.
+	HTTP *http.Client
 }
 
 // RecordStart writes the Deployment row if it is absent (ADR-0026 item 3), records the

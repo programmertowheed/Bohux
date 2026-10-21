@@ -27,12 +27,14 @@ const ResourceCommands = `  project list|create      projects
   secret list|set          an environment's secrets; set reads the value from stdin
   node list|token          nodes, and bootstrap tokens to register one
   webhook list|create|remove
-                           git push webhooks of an app; create prints the secret once`
+                           git push webhooks of an app; create prints the secret once
+  channel list|create|remove
+                           a project's deploy notifications; create reads the URL from stdin`
 
 // IsResource reports whether cmd is a resource noun.
 func IsResource(cmd string) bool {
 	switch cmd {
-	case "project", "env", "app", "route", "secret", "node", "webhook":
+	case "project", "env", "app", "route", "secret", "node", "webhook", "channel":
 		return true
 	}
 	return false
@@ -149,6 +151,12 @@ func (c *command) runResource(ctx context.Context, noun string, args []string, s
 		return r.webhookCreate(ctx, rest)
 	case "webhook remove":
 		return r.webhookRemove(ctx, rest)
+	case "channel list":
+		return r.channelList(ctx, rest)
+	case "channel create":
+		return r.channelCreate(ctx, rest)
+	case "channel remove":
+		return r.channelRemove(ctx, rest)
 	}
 	return fmt.Errorf("unknown command %q: %w", verb, ErrUsage)
 }
@@ -788,4 +796,131 @@ func (r *resource) webhookRemove(ctx context.Context, args []string) error {
 		return r.emit(resp.Msg, []string{"REMOVED"}, [][]string{{pos[1]}})
 	}
 	return fmt.Errorf("webhook remove: %s has no webhook %q", pos[0], pos[1])
+}
+
+// --- channel ---------------------------------------------------------------------
+
+func channelRow(c *bohuxv1.NotificationChannel) []string {
+	var states []string
+	for _, s := range c.GetStates() {
+		states = append(states, state(s.String()))
+	}
+	kind := strings.ToLower(strings.TrimPrefix(c.GetKind().String(), "NOTIFICATION_KIND_"))
+	return []string{c.GetMeta().GetId(), kind, c.GetUrlHost(), strings.Join(states, ",")}
+}
+
+var channelHeader = []string{"ID", "KIND", "HOST", "STATES"}
+
+func (r *resource) channels(ctx context.Context, project string) (*bohuxv1.ListNotificationChannelsResponse, error) {
+	resp := &bohuxv1.ListNotificationChannelsResponse{}
+	token := ""
+	for {
+		page, err := r.notifications.ListNotificationChannels(ctx, call(r.token,
+			&bohuxv1.ListNotificationChannelsRequest{ProjectId: project, PageToken: token}))
+		if err != nil {
+			return nil, fmt.Errorf("list channels: %w", err)
+		}
+		resp.Channels = append(resp.Channels, page.Msg.GetChannels()...)
+		if token = page.Msg.GetNextPageToken(); token == "" {
+			return resp, nil
+		}
+	}
+}
+
+func (r *resource) channelList(ctx context.Context, args []string) error {
+	if _, err := r.positional(args, 0, "no arguments"); err != nil {
+		return err
+	}
+	project, err := r.projectID(ctx)
+	if err != nil {
+		return err
+	}
+	resp, err := r.channels(ctx, project)
+	if err != nil {
+		return err
+	}
+	rows := make([][]string, 0, len(resp.GetChannels()))
+	for _, c := range resp.GetChannels() {
+		rows = append(rows, channelRow(c))
+	}
+	return r.emit(resp, channelHeader, rows)
+}
+
+// channelCreate reads the URL from stdin: a chat webhook URL is a credential
+// (ADR-0038, ADR-0036 item 4).
+func (r *resource) channelCreate(ctx context.Context, args []string) error {
+	kind := r.fs.String("kind", "", "slack, discord, or webhook (required)")
+	var states repeated
+	r.fs.Var(&states, "state", "deployment end state to post (succeeded, failed, rolled_back, cancelled); "+
+		"repeatable; default failed, rolled_back, cancelled")
+	if _, err := r.positional(args, 0, "no arguments"); err != nil {
+		return err
+	}
+	k, ok := map[string]bohuxv1.NotificationKind{"slack": bohuxv1.NotificationKind_NOTIFICATION_KIND_SLACK,
+		"discord": bohuxv1.NotificationKind_NOTIFICATION_KIND_DISCORD,
+		"webhook": bohuxv1.NotificationKind_NOTIFICATION_KIND_WEBHOOK}[*kind]
+	if !ok {
+		return fmt.Errorf("channel create: --kind must be slack, discord, or webhook: %w", ErrUsage)
+	}
+	var sts []bohuxv1.DeploymentState
+	for _, s := range states {
+		v, ok := bohuxv1.DeploymentState_value["DEPLOYMENT_STATE_"+strings.ToUpper(s)]
+		if !ok {
+			return fmt.Errorf("channel create: unknown --state %q: %w", s, ErrUsage)
+		}
+		sts = append(sts, bohuxv1.DeploymentState(v))
+	}
+	if r.stdin == nil {
+		return fmt.Errorf("channel create: the URL is read from stdin: %w", ErrUsage)
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.stdin, 8192))
+	if err != nil {
+		return fmt.Errorf("channel create: read the URL from stdin: %w", err)
+	}
+	u := strings.TrimSpace(string(raw))
+	if u == "" {
+		return errors.New("channel create: the URL on stdin is empty")
+	}
+	project, err := r.projectID(ctx)
+	if err != nil {
+		return err
+	}
+	resp, err := r.notifications.CreateNotificationChannel(ctx, call(r.token, &bohuxv1.CreateNotificationChannelRequest{
+		ProjectId: project, Kind: k, Url: u, States: sts, IdempotencyKey: r.key()}))
+	if err != nil {
+		return fmt.Errorf("create channel: %w", err)
+	}
+	row := channelRow(resp.Msg.GetChannel())
+	header := channelHeader
+	if s := resp.Msg.GetSigningSecret(); s != "" {
+		header, row = append(append([]string{}, header...), "SIGNING SECRET"), append(row, s)
+	}
+	return r.emit(resp.Msg, header, [][]string{row})
+}
+
+func (r *resource) channelRemove(ctx context.Context, args []string) error {
+	pos, err := r.positional(args, 1, "a channel ID")
+	if err != nil {
+		return err
+	}
+	project, err := r.projectID(ctx)
+	if err != nil {
+		return err
+	}
+	list, err := r.channels(ctx, project)
+	if err != nil {
+		return err
+	}
+	for _, c := range list.GetChannels() {
+		if c.GetMeta().GetId() != pos[0] {
+			continue
+		}
+		resp, err := r.notifications.DeleteNotificationChannel(ctx, call(r.token, &bohuxv1.DeleteNotificationChannelRequest{
+			Id: pos[0], ExpectedRevisionId: c.GetMeta().GetRevisionId(), IdempotencyKey: r.key()}))
+		if err != nil {
+			return fmt.Errorf("remove channel: %w", err)
+		}
+		return r.emit(resp.Msg, []string{"REMOVED"}, [][]string{{pos[0]}})
+	}
+	return fmt.Errorf("channel remove: project %s has no channel %q", *r.t.project, pos[0])
 }

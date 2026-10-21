@@ -29,7 +29,8 @@ var (
 var versioned = map[string]bool{
 	"tenants": true, "projects": true, "role_bindings": true, "api_tokens": true,
 	"nodes": true, "environments": true, "secret_refs": true, "apps": true, "webhooks": true,
-	"releases": true, "deployments": true,
+	"notification_channels": true,
+	"releases":              true, "deployments": true,
 }
 
 var columnName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)

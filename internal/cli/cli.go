@@ -76,6 +76,8 @@ type command struct {
 	nodesAPI    bohuxv1connect.NodeServiceClient
 	secrets     bohuxv1connect.SecretServiceClient
 	webhooks    bohuxv1connect.WebhookServiceClient
+	// notifications is NotificationService (ADR-0038).
+	notifications bohuxv1connect.NotificationServiceClient
 }
 
 // target is the flags every App command takes.
@@ -135,6 +137,7 @@ func (c *command) connect() error {
 	c.nodesAPI = bohuxv1connect.NewNodeServiceClient(hc, base)
 	c.secrets = bohuxv1connect.NewSecretServiceClient(hc, base)
 	c.webhooks = bohuxv1connect.NewWebhookServiceClient(hc, base)
+	c.notifications = bohuxv1connect.NewNotificationServiceClient(hc, base)
 	return nil
 }
 

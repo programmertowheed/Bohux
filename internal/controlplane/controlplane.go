@@ -160,7 +160,12 @@ func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 	workers.Add(2)
 	go func() {
 		defer workers.Done()
-		deploy.RunWorker(workerCtx, temporal, "", &deploy.Activities{Store: st, Agents: agents, Builds: agents})
+		acts := &deploy.Activities{Store: st, Agents: agents, Builds: agents}
+		if bao != nil {
+			// Notification channels' URLs live in OpenBao (ADR-0038).
+			acts.Secrets = bao
+		}
+		deploy.RunWorker(workerCtx, temporal, "", acts)
 	}()
 	go func() {
 		defer workers.Done()

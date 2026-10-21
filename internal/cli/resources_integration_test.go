@@ -162,6 +162,17 @@ func TestResourceCommands(t *testing.T) {
 		t.Errorf("webhook list:\n%s", out)
 	}
 	must("webhook", "remove", "site", created.Webhook.Meta.ID, "-e", "prod")
+
+	out, err = bohux("https://hooks.slack.com/services/T/B/sekrit\n", "channel", "create", "--kind", "slack", "--state", "failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "sekrit") || !strings.Contains(out, "hooks.slack.com") {
+		t.Errorf("channel create printed:\n%s", out)
+	}
+	if out := must("channel", "list"); !strings.Contains(out, "slack") || !strings.Contains(out, "failed") {
+		t.Errorf("channel list:\n%s", out)
+	}
 	if out := must("webhook", "list", "site", "-e", "prod"); strings.Contains(out, created.Webhook.Meta.ID) {
 		t.Errorf("webhook list after remove:\n%s", out)
 	}
