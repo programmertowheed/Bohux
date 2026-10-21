@@ -38,26 +38,25 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S3c3 — bootstrap and identity handlers (⏳, next to start)
-- **Exact next step:** `bohux admin bootstrap` (create tenant + tenant-wide owner token,
-  print it once), then IdentityService and TenantService handlers in `internal/api`,
-  mounted in the control plane with the auth interceptor.
+- **Slice:** S3d — redaction (⏳, next to start)
+- **Exact next step:** a ConnectRPC interceptor in `internal/api` that guarantees
+  `debug_redact` fields never reach logs, traces, or error strings, plus the redacting
+  wrapper CLAUDE.md rule 3 names in `internal/secrets`.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S3c3 (bootstrap and
-> identity handlers) on branch `claude/relaxed-rubin-76m7dl`. Add `bohux admin bootstrap`
-> (creates the tenant and a tenant-wide owner API token per ADR-0023, prints the token
-> once, refuses if the slug exists), then IdentityService (WhoAmI, CreateApiToken with
-> the no-escalation check, ListApiTokens, RevokeApiToken) and TenantService handlers in
-> internal/api, using the store write path with audit events and ADR-0022 idempotency
-> records, mounted in the control plane behind the auth interceptor. Test handlers over
-> real ConnectRPC against the local Postgres (integration tag), including a token from
-> another project and an idempotent retry of CreateApiToken (no secret on replay).
-> Verify with build, vet, golangci-lint (also with the integration tag) and tests. If
-> the slice is too big, stop at a clean point and split it in the tracker. Tick boxes,
-> update the tracker and the next session prompt, commit, push, and give me the next
-> prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S3d (redaction) on branch
+> `claude/relaxed-rubin-76m7dl`. CLAUDE.md rule 3 names a redacting wrapper in
+> internal/secrets: build it (a slog.LogValuer / fmt-safe wrapper for any proto message
+> that blanks every debug_redact field, reusing the walk in internal/api/idempotency.go
+> rather than duplicating it), then a ConnectRPC logging interceptor in internal/api
+> that logs each call (procedure, code, duration, principal ID) through it and never
+> logs a raw request. Prove rule 3 with tests: SetSecretRequest.value,
+> CreateApiTokenResponse.secret, and CreateBootstrapTokenResponse.token never appear in
+> captured logs or error strings, including on handler errors. Mount it in the control
+> plane. Verify with build, vet, golangci-lint (also with the integration tag) and
+> tests (integration on the local Postgres). Tick boxes, update the tracker and the next
+> session prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -222,9 +221,17 @@ Split into sub-slices, one session each.
       token; `identity.proto` changed first; migration `00013`; `Principal.TenantWide`,
       `CanAccessProject`, `RequireProject` (handler step), `CanGrant` (no escalation)
 
-#### S3c3 — bootstrap and identity handlers ⏳
-- [ ] Tenant bootstrap CLI step (prints the first owner token once);
-      IdentityService + TenantService handlers mounted in the control plane
+#### S3c3 — bootstrap and identity handlers ✅
+- [x] `bohux admin bootstrap` (migrates, creates the tenant and a tenant-wide owner
+      token, prints it once); `api.Bootstrap`; `store.SystemActorID`
+- [x] IdentityService (WhoAmI, CreateApiToken with no-escalation, ListApiTokens scoped
+      and paged, RevokeApiToken) and TenantService.GetTenant, mounted in the control
+      plane behind the interceptor; error mapping that never leaks internals
+- [x] ADR-0022 idempotency: request hash with `debug_redact` fields cleared (tested),
+      replay returns metadata without the secret, same key + different request is
+      `FAILED_PRECONDITION`
+- [x] Integration tests over real ConnectRPC; binary smoke test: bootstrap, duplicate
+      slug refused, `WhoAmI` over HTTP JSON, unauthenticated call refused
 
 #### S3d — redaction ⏳
 - [ ] Secret-redacting interceptor (rule 3) and a test that `SetSecretRequest.value`
@@ -305,6 +312,8 @@ Split into sub-slices, one session each.
   rule for gates: write the ADR as *proposed*, build on it, list it under *Waiting on
   the owner* (O6 onward).
 - S2a done: ADR-0021 (goose on pgx).
+- S3c3 done: bootstrap command, Identity/Tenant handlers, idempotency records, all
+  tested over real ConnectRPC; end-to-end binary smoke test passed.
 - S3c2 done: ADR-0023 (O8), proto + migration for tenant-wide tokens, `internal/api`
   auth interceptor and permission table, tests green.
 - S3c split into S3c1–S3c3. S3c1 done: idempotency table, `internal/auth` tokens and

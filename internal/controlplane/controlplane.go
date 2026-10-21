@@ -14,6 +14,8 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
+	"github.com/bohumix/bohux/internal/api"
+	"github.com/bohumix/bohux/internal/auth"
 	"github.com/bohumix/bohux/internal/store"
 )
 
@@ -57,7 +59,9 @@ func Serve(ctx context.Context, ln net.Listener, cfg Config) error {
 	srv := &http.Server{
 		// ConnectRPC needs HTTP/2 for streaming; h2c serves it without TLS. TLS
 		// termination is in front of Bohux (Caddy, ADR-0019) or added with mTLS in S4.
-		Handler:           h2c.NewHandler(newMux(st), &http2.Server{}),
+		Handler: h2c.NewHandler(newMux(st, (&api.Server{
+			Store: st, Authn: &auth.Authenticator{Store: st},
+		}).Mount), &http2.Server{}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	errc := make(chan error, 1)
@@ -86,10 +90,11 @@ type pinger interface {
 	Ping(ctx context.Context) error
 }
 
-func newMux(db pinger) *http.ServeMux {
+// newMux serves /healthz and whatever mount registers (the ConnectRPC services).
+func newMux(db pinger, mount func(*http.ServeMux)) *http.ServeMux {
 	mux := http.NewServeMux()
+	mount(mux)
 	// Liveness and readiness in one: the control plane is useless without Postgres.
-	// ConnectRPC service handlers are mounted here as they are written (S3c onward).
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()

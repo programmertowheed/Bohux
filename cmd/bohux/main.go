@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/bohumix/bohux/internal/api"
 	"github.com/bohumix/bohux/internal/controlplane"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/version"
@@ -24,7 +25,8 @@ var errUsage = errors.New(`usage: bohux <command>
 commands:
   version         print the version
   controlplane    run the control plane API
-  admin migrate   apply database migrations and exit`)
+  admin migrate   apply database migrations and exit
+  admin bootstrap create a tenant and print its first owner token`)
 
 // Environment fallbacks for flags. See docs/reference/config.md.
 const (
@@ -47,9 +49,24 @@ func main() {
 type deps struct {
 	runControlPlane func(context.Context, controlplane.Config) error
 	migrate         func(context.Context, string) error
+	bootstrap       func(ctx context.Context, dsn, slug, displayName string) (token string, err error)
 }
 
-var defaultDeps = deps{runControlPlane: controlplane.Run, migrate: store.MigrateDSN}
+var defaultDeps = deps{runControlPlane: controlplane.Run, migrate: store.MigrateDSN, bootstrap: bootstrap}
+
+// bootstrap migrates, then creates the tenant and its first token.
+func bootstrap(ctx context.Context, dsn, slug, displayName string) (string, error) {
+	if err := store.MigrateDSN(ctx, dsn); err != nil {
+		return "", err
+	}
+	st, err := store.Open(ctx, dsn)
+	if err != nil {
+		return "", err
+	}
+	defer st.Close()
+	_, token, err := api.Bootstrap(ctx, st, slug, displayName)
+	return token, err
+}
 
 func run(ctx context.Context, args []string, stdout io.Writer, getenv func(string) string) error {
 	return runWith(ctx, args, stdout, getenv, defaultDeps)
@@ -82,8 +99,15 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 		}
 		return nil
 	case "admin":
-		if len(args) < 2 || args[1] != "migrate" {
-			return fmt.Errorf("admin: unknown subcommand: %w", errUsage)
+		if len(args) < 2 {
+			return fmt.Errorf("admin: missing subcommand: %w", errUsage)
+		}
+		switch args[1] {
+		case "migrate":
+		case "bootstrap":
+			return adminBootstrap(ctx, args[2:], stdout, getenv, d)
+		default:
+			return fmt.Errorf("admin: unknown subcommand %q: %w", args[1], errUsage)
 		}
 		fs := newFlagSet("admin migrate")
 		dbURL := fs.String("database-url", getenv(envDatabaseURL),
@@ -101,6 +125,32 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 	default:
 		return fmt.Errorf("unknown command %q: %w", args[0], errUsage)
 	}
+}
+
+func adminBootstrap(ctx context.Context, args []string, stdout io.Writer, getenv func(string) string, d deps) error {
+	fs := newFlagSet("admin bootstrap")
+	dbURL := fs.String("database-url", getenv(envDatabaseURL), "Postgres DSN (env "+envDatabaseURL+")")
+	slug := fs.String("slug", "", "tenant slug (required)")
+	name := fs.String("display-name", "", "tenant display name")
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("admin bootstrap: %w", err)
+	}
+	if *dbURL == "" {
+		return fmt.Errorf("admin bootstrap: --database-url or %s is required", envDatabaseURL)
+	}
+	if *slug == "" {
+		return errors.New("admin bootstrap: --slug is required")
+	}
+	token, err := d.bootstrap(ctx, *dbURL, *slug, *name)
+	if err != nil {
+		return fmt.Errorf("admin bootstrap: %w", err)
+	}
+	// The only time this token is shown (ADR-0022). It goes to stdout, never to logs.
+	if _, err := fmt.Fprintf(stdout, "Tenant %q created.\n"+
+		"Owner token for the whole tenant (shown once, store it now):\n\n%s\n", *slug, token); err != nil {
+		return fmt.Errorf("admin bootstrap: write token: %w", err)
+	}
+	return nil
 }
 
 func newFlagSet(name string) *flag.FlagSet {

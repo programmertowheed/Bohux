@@ -110,6 +110,10 @@ const (
 	ActorSystem   ActorKind = "system"
 )
 
+// SystemActorID is the actor of changes no principal made, such as tenant bootstrap.
+var SystemActorID = uuid.UUID{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+
 // Actor is who makes a change. It comes from authentication, never a request
 // (rule 10).
 type Actor struct {

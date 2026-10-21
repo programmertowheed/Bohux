@@ -24,6 +24,18 @@ in-flight requests up to 10 seconds.
 Applies pending migrations (ADR-0021) and exits. Safe to run while a control plane is
 starting: migrators serialize on an advisory lock.
 
+## `bohux admin bootstrap`
+
+| Flag | Environment | Default | Meaning |
+|---|---|---|---|
+| `--database-url` | `BOHUX_DATABASE_URL` | none, required | Postgres DSN. |
+| `--slug` | | none, required | Tenant slug. Fails if it exists. |
+| `--display-name` | | empty | Tenant display name. |
+
+Applies migrations, creates the tenant, and prints a tenant-wide owner API token
+(ADR-0023) to stdout. That is the only time the token is shown; only its hash is
+stored (ADR-0022). Use it to create project-scoped tokens for day-to-day use.
+
 ## The database role
 
 The DSN's role must own the Bohux schema and must be neither a superuser nor

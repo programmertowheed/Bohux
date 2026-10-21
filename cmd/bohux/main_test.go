@@ -43,6 +43,12 @@ func TestRun(t *testing.T) {
 		{name: "admin migrate", wantErr: errCalled,
 			args:      []string{"admin", "migrate", "--database-url", "postgres://m"},
 			wantDBURL: "postgres://m"},
+		{name: "admin unknown subcommand", args: []string{"admin", "nope"}, wantErr: errUsage},
+		{name: "admin bootstrap needs a slug", wantErr: errMissing,
+			args: []string{"admin", "bootstrap", "--database-url", "postgres://b"}},
+		{name: "admin bootstrap prints the token once", want: bootstrapOut,
+			args:      []string{"admin", "bootstrap", "--database-url", "postgres://b", "--slug", "acme"},
+			wantDBURL: "postgres://b"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -56,6 +62,10 @@ func TestRun(t *testing.T) {
 				migrate: func(_ context.Context, dsn string) error {
 					gotDBURL = dsn
 					return errCalled
+				},
+				bootstrap: func(_ context.Context, dsn, slug, _ string) (string, error) {
+					gotDBURL = dsn
+					return "bxa_token-for-" + slug, nil
 				},
 			}
 			getenv := func(k string) string { return tt.env[k] }
@@ -80,6 +90,9 @@ func TestRun(t *testing.T) {
 		})
 	}
 }
+
+const bootstrapOut = "Tenant \"acme\" created.\n" +
+	"Owner token for the whole tenant (shown once, store it now):\n\nbxa_token-for-acme\n"
 
 // errMissing marks cases that must fail validation without calling a dependency.
 var errMissing = errors.New("missing")

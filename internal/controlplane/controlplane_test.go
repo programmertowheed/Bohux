@@ -24,7 +24,7 @@ func TestHealthz(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			newMux(tt.db).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+			newMux(tt.db, func(*http.ServeMux) {}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 			if rec.Code != tt.want {
 				t.Errorf("status %d, want %d", rec.Code, tt.want)
 			}
