@@ -13,6 +13,9 @@
 #   BOHUX_BIN          where the bohux binary goes (default: /usr/local/bin/bohux)
 #   BOHUX_SYSTEMD      1 to run the agent as a systemd unit (default), 0 to run it in
 #                      the background without systemd (test hosts only)
+#   BOHUX_DEPLOY_HEALTH_TIMEOUT
+#                      the control plane's --deploy-health-timeout (default: its own,
+#                      5m); tests shorten it
 #
 # It writes, all readable (rule 2): $BOHUX_ETC/infra/compose.yaml and friends, the
 # agent unit, and, through the agent, the control plane App's Compose file. Secrets go
@@ -109,6 +112,8 @@ docker volume create bohux-controlplane-data >/dev/null
 db_url="postgres://bohux_app:${BOHUX_APP_PASSWORD}@postgres:5432/bohux_app?sslmode=disable"
 cp_env=(-e "BOHUX_DATABASE_URL=$db_url" -e BOHUX_TEMPORAL_ADDRESS=temporal:7233
   -e BOHUX_OPENBAO_ADDR=http://openbao:8200 -e "BOHUX_OPENBAO_TOKEN=$BAO_TOKEN")
+health_timeout="${BOHUX_DEPLOY_HEALTH_TIMEOUT:-}"
+[[ -z "$health_timeout" ]] || cp_env+=(-e "BOHUX_DEPLOY_HEALTH_TIMEOUT=$health_timeout")
 
 if [[ -f "$etc/installed" ]] && curl -fsS "$api/healthz" >/dev/null 2>&1; then
   log "already installed; the control plane answers on $api"
@@ -187,7 +192,8 @@ secret() {
 refs="$(jq -s . <<<"$(secret BOHUX_DATABASE_URL "$db_url")
 $(secret BOHUX_TEMPORAL_ADDRESS temporal:7233)
 $(secret BOHUX_OPENBAO_ADDR http://openbao:8200)
-$(secret BOHUX_OPENBAO_TOKEN "$BAO_TOKEN")")"
+$(secret BOHUX_OPENBAO_TOKEN "$BAO_TOKEN")
+$([[ -z "$health_timeout" ]] || secret BOHUX_DEPLOY_HEALTH_TIMEOUT "$health_timeout")")"
 
 app="$(call AppService/GetApp "{\"slug\": {\"environmentId\": \"$env_id\", \"slug\": \"controlplane\"}}" 2>/dev/null | jq -r .app.meta.id || true)"
 if [[ -z "$app" || "$app" == null ]]; then
