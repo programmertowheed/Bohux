@@ -1,0 +1,208 @@
+//go:build integration
+
+package agentapi
+
+import (
+	"bytes"
+	"context"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"golang.org/x/crypto/nacl/box"
+	"google.golang.org/protobuf/proto"
+
+	agentv1 "github.com/bohumix/bohux/gen/bohux/agent/v1"
+	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
+	"github.com/bohumix/bohux/internal/pki"
+	"github.com/bohumix/bohux/internal/store"
+)
+
+type fakeSecrets map[string]string
+
+func (f fakeSecrets) Resolve(_ context.Context, _ uuid.UUID, handles []string) (map[string]string, error) {
+	out := map[string]string{}
+	for _, h := range handles {
+		if v, ok := f[h]; ok {
+			out[h] = v
+		}
+	}
+	return out, nil
+}
+
+const secretValue = "postgres://user:hunter2@db/app"
+
+func workload(app string) *agentv1.Workload {
+	return &agentv1.Workload{
+		AppId: app, Provider: "docker", Image: "ghcr.io/acme/api@sha256:" + string(bytes.Repeat([]byte("a"), 64)),
+		Runtime: &bohuxv1.Runtime{Replicas: 1},
+		Secrets: []*bohuxv1.SecretRef{{Key: "DATABASE_URL", Handle: "openbao:db"}},
+	}
+}
+
+var system = store.Actor{ID: store.SystemActorID, Kind: store.ActorSystem}
+
+// nextAssignment reads messages until an Assignment arrives.
+func nextAssignment(t *testing.T, s interface {
+	Receive() (*agentv1.ConnectResponse, error)
+}) *agentv1.Assignment {
+	t.Helper()
+	for i := 0; i < 200; i++ {
+		msg, err := s.Receive()
+		if err != nil {
+			t.Fatalf("receive: %v", err)
+		}
+		if a := msg.GetAssignment(); a != nil {
+			return a
+		}
+	}
+	t.Fatal("no assignment arrived")
+	return nil
+}
+
+func TestAssignments(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	a := h.register("vps-1")
+	node := uuid.MustParse(a.node)
+
+	gen, err := h.srv.Assign(ctx, h.tenant, node, []*agentv1.Workload{workload("app-1")}, system)
+	if err != nil || gen != 1 {
+		t.Fatalf("Assign = %d, %v", gen, err)
+	}
+
+	sctx, cancel := context.WithCancel(ctx)
+	stream, first, err := open(sctx, a.client, hello(a.node, "0.3.0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStream(stream, cancel)
+	got := first.GetAssignment()
+	if got == nil {
+		got = nextAssignment(t, stream)
+	}
+
+	t.Run("signed, for this node, with secrets sealed to it", func(t *testing.T) {
+		if !pki.VerifyAssignment(h.pki.SigningPublicKey(), got.GetPayload(), got.GetSignature()) {
+			t.Fatal("signature does not verify")
+		}
+		if got.GetKeyId() != pki.KeyID(h.pki.SigningPublicKey()) {
+			t.Errorf("key id %q", got.GetKeyId())
+		}
+		p := &agentv1.AssignmentPayload{}
+		if err := proto.Unmarshal(got.GetPayload(), p); err != nil {
+			t.Fatal(err)
+		}
+		if p.GetNodeId() != a.node || p.GetGeneration() != 1 || len(p.GetWorkloads()) != 1 {
+			t.Fatalf("payload %v", p)
+		}
+		sealed := p.GetWorkloads()[0].GetSealedSecrets()
+		if bytes.Contains(got.GetPayload(), []byte("hunter2")) {
+			t.Error("secret value in clear in the payload")
+		}
+		var pub, priv [32]byte
+		copy(pub[:], a.sealing.PublicKey().Bytes())
+		copy(priv[:], a.sealing.Bytes())
+		plain, ok := box.OpenAnonymous(nil, sealed, &pub, &priv)
+		if !ok {
+			t.Fatal("sealed secrets do not open with the node's key")
+		}
+		vals := &agentv1.SecretValues{}
+		if err := proto.Unmarshal(plain, vals); err != nil {
+			t.Fatal(err)
+		}
+		if vals.GetValues()["DATABASE_URL"] != secretValue {
+			t.Errorf("opened values %v", vals.GetValues())
+		}
+	})
+
+	t.Run("nothing secret is stored", func(t *testing.T) {
+		var payload []byte
+		err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+			return tx.QueryRow(ctx, `SELECT payload FROM assignments WHERE node_id = $1 AND generation = 1`,
+				node).Scan(&payload)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := &agentv1.AssignmentPayload{}
+		if err := proto.Unmarshal(payload, p); err != nil {
+			t.Fatal(err)
+		}
+		if len(p.GetWorkloads()[0].GetSealedSecrets()) != 0 || bytes.Contains(payload, []byte("hunter2")) {
+			t.Error("stored assignment holds secret material")
+		}
+	})
+
+	t.Run("a new generation is pushed to the open stream", func(t *testing.T) {
+		gen, err := h.srv.Assign(ctx, h.tenant, node, []*agentv1.Workload{workload("app-1"), workload("app-2")}, system)
+		if err != nil || gen != 2 {
+			t.Fatalf("Assign = %d, %v", gen, err)
+		}
+		next := nextAssignment(t, stream)
+		p := &agentv1.AssignmentPayload{}
+		if err := proto.Unmarshal(next.GetPayload(), p); err != nil {
+			t.Fatal(err)
+		}
+		if p.GetGeneration() != 2 || len(p.GetWorkloads()) != 2 {
+			t.Errorf("pushed %v", p)
+		}
+	})
+
+	t.Run("acks are recorded, bogus ones ignored", func(t *testing.T) {
+		for _, g := range []uint64{2, 99} {
+			if err := stream.Send(&agentv1.ConnectRequest{Msg: &agentv1.ConnectRequest_Ack{
+				Ack: &agentv1.Ack{Generation: g}}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			var acked *int64
+			err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+				return tx.QueryRow(ctx, `SELECT acked_generation FROM nodes_heads WHERE id = $1`, node).Scan(&acked)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if acked != nil && *acked == 2 {
+				break
+			}
+			if acked != nil && *acked != 2 || time.Now().After(deadline) {
+				t.Fatalf("acked_generation = %v, want 2", acked)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+
+	t.Run("an up-to-date agent is not sent the assignment again", func(t *testing.T) {
+		closeStream(stream, cancel)
+		b := h.register("vps-2")
+		if _, err := h.srv.Assign(ctx, h.tenant, uuid.MustParse(b.node), []*agentv1.Workload{workload("x")}, system); err != nil {
+			t.Fatal(err)
+		}
+		req := hello(b.node, "0.3.0")
+		req.GetHello().AppliedGeneration = 1
+		s2ctx, cancel2 := context.WithCancel(ctx)
+		s2, first, err := open(s2ctx, b.client, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer closeStream(s2, cancel2)
+		if first.GetAssignment() != nil {
+			t.Error("sent an assignment the agent already has")
+		}
+	})
+
+	t.Run("assigning to an unknown or revoked node fails", func(t *testing.T) {
+		_, err := h.srv.Assign(ctx, h.tenant, uuid.Must(uuid.NewV7()), nil, system)
+		if err == nil {
+			t.Error("assigned to an unknown node")
+		}
+		_, err = h.srv.Assign(ctx, h.tenant, node, []*agentv1.Workload{{AppId: "x", SealedSecrets: []byte{1}}}, system)
+		if err == nil {
+			t.Error("accepted pre-sealed secrets")
+		}
+	})
+
+}

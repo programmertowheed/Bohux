@@ -89,10 +89,10 @@ func (s *Server) Connect(ctx context.Context, stream *connect.BidiStream[agentv1
 	// The newest stream for a node owns its online state. When this one ends, it marks
 	// the node offline only if no newer stream has replaced it, so a quick reconnect is
 	// not overwritten by the old stream's cleanup. ctx is done by then; use a fresh one.
-	session := new(int)
-	s.sessions.Store(node, session)
+	sess := &session{wake: make(chan struct{}, 1)}
+	s.sessions.Store(node, sess)
 	defer func() {
-		if !s.sessions.CompareAndDelete(node, session) {
+		if !s.sessions.CompareAndDelete(node, sess) {
 			return
 		}
 		offCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -112,10 +112,40 @@ func (s *Server) Connect(ctx context.Context, stream *connect.BidiStream[agentv1
 				recvErr <- err
 				return
 			}
-			// StatusReport, Ack, LogChunk, and ExecOutput are handled from S4d on.
-			slog.DebugContext(ctx, "agent message", "node", node.String(), "type", fmt.Sprintf("%T", msg.GetMsg()))
+			switch m := msg.GetMsg().(type) {
+			case *agentv1.ConnectRequest_Ack:
+				if err := s.recordAck(ctx, tenant, node, m.Ack.GetGeneration()); err != nil {
+					slog.WarnContext(ctx, "record ack", "node", node.String(), "err", err)
+				}
+			default:
+				// StatusReport, LogChunk, and ExecOutput are handled from S4e on.
+				slog.DebugContext(ctx, "agent message", "node", node.String(), "type", fmt.Sprintf("%T", m))
+			}
 		}
 	}()
+
+	// Send the latest assignment now if the agent is behind, then whenever a new one
+	// is written. Assignments are full state, so only the newest ever matters.
+	sent := hello.GetAppliedGeneration()
+	push := func() error {
+		a, gen, err := s.signedLatest(ctx, tenant, node, sent)
+		if err != nil {
+			// The agent keeps its cached assignment; nothing it runs is affected.
+			slog.ErrorContext(ctx, "cannot send assignment", "node", node.String(), "err", err)
+			return nil
+		}
+		if a == nil {
+			return nil
+		}
+		if err := stream.Send(&agentv1.ConnectResponse{Msg: &agentv1.ConnectResponse_Assignment{Assignment: a}}); err != nil {
+			return err
+		}
+		sent = gen
+		return nil
+	}
+	if err := push(); err != nil {
+		return nil
+	}
 
 	ticker := time.NewTicker(s.pingInterval())
 	defer ticker.Stop()
@@ -128,6 +158,10 @@ func (s *Server) Connect(ctx context.Context, stream *connect.BidiStream[agentv1
 				return nil
 			}
 			return fmt.Errorf("receive: %w", err)
+		case <-sess.wake:
+			if err := push(); err != nil {
+				return nil
+			}
 		case <-ticker.C:
 			if err := stream.Send(&agentv1.ConnectResponse{Msg: &agentv1.ConnectResponse_Ping{
 				Ping: &agentv1.Ping{SentAt: timestamppb.New(s.now())}}}); err != nil {

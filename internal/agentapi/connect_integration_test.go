@@ -4,6 +4,7 @@ package agentapi
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -24,10 +25,11 @@ import (
 	"github.com/bohumix/bohux/internal/version"
 )
 
-// registered is an agent identity: its node ID and an mTLS client for it.
+// registered is an agent identity: its node ID, sealing key, and an mTLS client.
 type registered struct {
-	node   string
-	client agentv1connect.AgentServiceClient
+	node    string
+	sealing *ecdh.PrivateKey
+	client  agentv1connect.AgentServiceClient
 }
 
 func (h *harness) register(slug string) registered {
@@ -36,13 +38,18 @@ func (h *harness) register(slug string) registered {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	resp, err := h.client.Register(context.Background(), connect.NewRequest(
-		registerReq(h.bootstrapToken(slug, time.Now().Add(time.Hour)), csrFor(h.t, key))))
+	sealing, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	r := registerReq(h.bootstrapToken(slug, time.Now().Add(time.Hour)), csrFor(h.t, key))
+	r.SealingPublicKey = sealing.PublicKey().Bytes()
+	resp, err := h.client.Register(context.Background(), connect.NewRequest(r))
 	if err != nil {
 		h.t.Fatal(err)
 	}
 	blk, _ := pem.Decode(resp.Msg.GetClientCertificate())
-	return registered{node: resp.Msg.GetNodeId(), client: h.clientWith(&tls.Certificate{
+	return registered{node: resp.Msg.GetNodeId(), sealing: sealing, client: h.clientWith(&tls.Certificate{
 		Certificate: [][]byte{blk.Bytes}, PrivateKey: key})}
 }
 

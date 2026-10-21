@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/encoding/protojson"
 
@@ -42,9 +43,29 @@ type Server struct {
 	// zero means 30 seconds.
 	PingInterval time.Duration
 
-	// sessions maps a node ID to its newest open stream. One control-plane process
-	// owns all streams in v0.1 (ADR-0024 revisits this with HA).
+	// Secrets resolves secret handles when an assignment is sent. Nil means
+	// assignments with secrets cannot be sent yet (S7 adds OpenBao).
+	Secrets SecretResolver
+
+	// sessions maps a node ID to its newest open stream (*session). One control-plane
+	// process owns all streams in v0.1 (ADR-0024 revisits this with HA).
 	sessions sync.Map
+}
+
+// session is one open Connect stream.
+type session struct {
+	// wake is signaled when a new assignment is written for the node.
+	wake chan struct{}
+}
+
+// wake nudges the node's open stream, if any, to send its latest assignment.
+func (s *Server) wake(node uuid.UUID) {
+	if v, ok := s.sessions.Load(node); ok {
+		select {
+		case v.(*session).wake <- struct{}{}:
+		default: // already pending; assignments are full state, so one send covers both
+		}
+	}
 }
 
 func (s *Server) now() time.Time {

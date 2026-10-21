@@ -38,29 +38,28 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S4d — assignments (⏳, next to start)
-- **Exact next step:** an `assignments` migration (node, generation, signed payload,
-  key id) and the control-plane code that builds, signs, stores, and pushes a node's
-  full-state assignment on `Connect`.
+- **Slice:** S4d2 — agent assignment cache (⏳, next to start)
+- **Exact next step:** in `internal/agent`, verify incoming assignments (signature,
+  node id, generation), cache them atomically on disk, `Ack`, and send
+  `Hello.applied_generation` from the cache.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S4d (assignments) on
-> branch `claude/relaxed-rubin-76m7dl`, following ADR-0007, ADR-0008, ADR-0024 and the
-> agent protocol in api-contract.md. Control plane: an assignments table (tenant, node,
-> generation unique per node, payload bytes, signature, key id; append-only), a function
-> that writes the next generation for a node from given workloads (signed with
-> internal/pki; secret values sealed with nacl/box to the node's sealing key, resolved
-> through an interface so tests need no OpenBao), and pushing the latest assignment on
-> Connect and when a new one is written. Agent: verify signature, node id, and that the
-> generation is higher than the cached one; cache it atomically on disk (0600, still
-> sealed); Ack; send Hello.applied_generation from the cache. Define the sealed
-> plaintext message in agent.proto first. Test: tampered signature, wrong node, older
-> generation ignored, cache survives an agent restart, secret values never in the
-> cache file in clear or in logs. If the slice is too big, stop at a clean point and
-> split it in the tracker. Verify with buf lint/generate (tracker recipe), build, vet,
-> golangci-lint (also with the integration tag) and tests. Tick boxes, update the
-> tracker and the next session prompt, commit, push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S4d2 (agent assignment
+> cache) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0003, ADR-0008,
+> ADR-0024. In internal/agent: on Assignment, verify the signature with the stored
+> signing key (pki.VerifyAssignment) and key id, that the payload names this node, and
+> that its generation is higher than the cached one; otherwise ignore it with a
+> warning. Cache the signed Assignment atomically in the state dir (0600; secrets stay
+> sealed), re-verify it on load, Ack the generation, and send Hello.applied_generation
+> from the cache. Add a function that opens a workload's sealed secrets with the
+> sealing key, for the provider in S5, never logging values. Test against the real
+> control-plane listener on the local Postgres: assignment cached and acked, tampered
+> signature and wrong node rejected, older generation ignored, cache survives an agent
+> restart (applied_generation sent, no re-send), cache file holds no clear secret, and
+> sealed secrets open. Verify with build, vet, golangci-lint (also with the integration
+> tag) and tests. Tick boxes, update the tracker and the next session prompt, commit,
+> push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -325,9 +324,21 @@ Split into sub-slices, one session each.
       wrong pin, live-restore off, rejected version keeps running, control plane down
       then back. Not smoke-tested as a binary here (no Docker daemon)
 
-#### S4d — assignments ⏳
-- [ ] Assignments table; signed, generation-numbered full-state assignments pushed on
-      the stream; agent verifies, caches to disk, `Ack`s; sealed secret values (ADR-0008)
+#### S4d1 — control-plane assignments ✅
+- [x] `SecretValues` (the sealed plaintext, `debug_redact`) in agent.proto first
+- [x] Migration `00014_assignments` (append-only, RLS) + `nodes_heads.acked_generation`
+- [x] `agentapi.Server.Assign`: next generation per node (node row locked), full state,
+      handles only, audited; wakes the node's open stream
+- [x] On send: resolve handles (`SecretResolver`, OpenBao in S7), seal per workload
+      with `nacl/box` to the node's key, sign the exact bytes. **Choice:** nothing
+      secret, not even sealed, is stored in Postgres; sealing and signing happen per
+      send, so a re-send also picks up rotated values
+- [x] Pushed on `Connect` when the agent is behind and on every new generation; `Ack`
+      recorded (unknown generations ignored). Tested over mTLS
+
+#### S4d2 — agent assignment cache ⏳
+- [ ] Verify (signature, key id, node, generation), cache atomically, `Ack`,
+      `Hello.applied_generation` from cache; open sealed secrets for the provider
 
 #### S4e — offline reconcile ⏳
 - [ ] Reconcile loop against the cached assignment with a fake provider; test with
@@ -401,6 +412,7 @@ Split into sub-slices, one session each.
 - Split S4 into S4a–S4e. S4a done: ADR-0024 proposed (O9).
 - S4c split; S4c1 done: control-plane `Connect` with skew policy and online state.
   S4c2 done: the agent process (`bohux agent register|run`).
+- S4d split; S4d1 done: assignments written, sealed, signed, pushed, acked.
 - S4b split into S4b1/S4b2, both done: `internal/pki`, NodeService, data dir, agent
   TLS listener, Register.
 - S3d done: `internal/secrets` redaction, access-log interceptor, rule 3 test.

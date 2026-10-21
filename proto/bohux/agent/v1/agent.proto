@@ -133,6 +133,13 @@ message Workload {
   bytes sealed_secrets = 9;
 }
 
+// The plaintext of Workload.sealed_secrets before sealing (ADR-0008, ADR-0024): the
+// workload's secret values by environment variable name. It exists only in control-
+// plane memory while sealing and in agent memory while rendering the secret file.
+message SecretValues {
+  map<string, string> values = 1 [debug_redact = true];
+}
+
 message StatusReport {
   // Generation the reported state was observed against.
   uint64 generation = 1;
