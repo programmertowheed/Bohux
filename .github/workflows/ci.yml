@@ -225,16 +225,49 @@ jobs:
           docker ps -a
           for c in $(docker ps -aq); do echo "== $c"; docker logs --tail 50 "$c" 2>&1; done
 
-  # The control plane image (ADR-0030). A clean checkout has no gen/, so this also
-  # proves the image generates code from proto/ on its own.
+  # The web UI (ADR-0012, ADR-0039): typecheck, unit tests, production build.
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.47.2
+          setup_only: true
+      - name: Resolve deps if buf.lock is missing
+        run: test -f buf.lock || buf dep update
+      - name: Build
+        run: make web
+
+  # The control plane image (ADR-0030), with the UI embedded. A clean checkout has no
+  # gen/, so this also proves the image generates code from proto/ on its own.
   image:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.47.2
+          setup_only: true
+      - name: Resolve deps if buf.lock is missing
+        run: test -f buf.lock || buf dep update
+      - name: Web UI
+        run: make web
       - name: Build
         run: docker build -t bohux:ci --build-arg VERSION=ci .
       - name: Smoke
-        run: test "$(docker run --rm bohux:ci version)" = ci
+        run: |
+          test "$(docker run --rm bohux:ci version)" = ci
 
   compose:
     runs-on: ubuntu-latest

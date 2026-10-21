@@ -27,6 +27,7 @@ import (
 	"github.com/bohumix/bohux/internal/pki"
 	"github.com/bohumix/bohux/internal/secrets/openbao"
 	"github.com/bohumix/bohux/internal/store"
+	"github.com/bohumix/bohux/internal/webui"
 	backupwf "github.com/bohumix/bohux/internal/workflow/backup"
 	"github.com/bohumix/bohux/internal/workflow/deploy"
 )
@@ -257,6 +258,8 @@ type pinger interface {
 func newMux(db pinger, mount func(*http.ServeMux)) *http.ServeMux {
 	mux := http.NewServeMux()
 	mount(mux)
+	// The web UI, a client of the same API (ADR-0012, ADR-0039).
+	webui.Mount(mux)
 	// Liveness and readiness in one: the control plane is useless without Postgres.
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)

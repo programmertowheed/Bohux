@@ -1,4 +1,4 @@
-.PHONY: help generate lint test test-integration conformance build image run-dev footprint
+.PHONY: help generate lint test test-integration conformance build image run-dev footprint web
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -21,10 +21,15 @@ test-integration: ## Integration tests (needs BOHUX_TEST_POSTGRES_URL, see docs/
 conformance: ## Provider conformance — the gate for any new provider
 	go test ./providers/_conformance -provider=$(PROVIDER) -target=$(TARGET) -v
 
-build: ## Build the single binary
+web: ## Build the web UI into internal/webui/dist, where the binary embeds it (ADR-0012)
+	cd web && npm ci && npm run generate && npm run typecheck && npm test && npm run build
+	find internal/webui/dist -mindepth 1 ! -name .gitkeep -delete
+	cp -r web/dist/. internal/webui/dist/
+
+build: ## Build the single binary (run `make web` first to include the UI)
 	go build -o bin/bohux ./cmd/bohux
 
-image: ## Build the control plane image (ADR-0030); VERSION=x.y.z to stamp it
+image: web ## Build the control plane image (ADR-0030); VERSION=x.y.z to stamp it
 	docker build -t bohux:$(or $(VERSION),dev) --build-arg VERSION=$(or $(VERSION),dev) .
 
 run-dev: ## Local stack: postgres, temporal, openbao, buildkit, caddy

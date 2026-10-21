@@ -1,0 +1,13 @@
+# TypeScript for the web UI (ADR-0012): `npm run generate` in web/. Output is
+# gitignored, like gen/; never hand-edit it (CLAUDE.md rule 9).
+version: v2
+managed:
+  enabled: true
+  disable:
+    - file_option: go_package
+      path: google/api
+plugins:
+  - local: web/node_modules/.bin/protoc-gen-es
+    out: web/src/gen
+    opt: target=ts
+    include_imports: true

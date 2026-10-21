@@ -11,3 +11,6 @@
 .DS_Store
 /data/
 *.local.yaml
+/web/src/gen/
+/internal/webui/dist/*
+!/internal/webui/dist/.gitkeep

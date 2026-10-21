@@ -38,16 +38,16 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S15 — next v0.2 item, not chosen yet (⏳)
+- **Slice:** S15 — web UI (🔄, read-only first cut done)
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** next v0.2 item. Candidates: the read-only web UI
-  (ADR-0012/0013), team invites, Buildpacks/Nixpacks, the resource view.
+- **Exact next step:** UI deployment detail with live progress (`WatchDeployment`
+  over Connect streaming), then the log tail.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then pick and split the next v0.2 slice
-> (S15) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
+> Read CLAUDE.md and docs/plan/03-progress.md, then continue slice S15 (web UI, ADR-0012,
+> ADR-0013, ADR-0039) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0019
 > and ADR-0034. Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*).
 > Verify with build, vet, golangci-lint (also with the integration tag), unit and
 > integration tests. Tick boxes, update the tracker and the next session prompt,
@@ -81,6 +81,7 @@ work is in right now*.
 | O23 | Accept or reject ADR-0037 (Git push webhooks: Webhook resource, HMAC in OpenBao, deploys as the webhook). Adds `webhook.proto` | S12 |
 | O24 | Open a PR for this branch (or allow CI on it) so the CI matrix runs at least once; nothing has run on GitHub yet | Confidence in every slice since S6 |
 | O25 | Accept or reject ADR-0038 (deploy notifications: project channels, URL in OpenBao, sent by activities after the terminal state; no email yet). Adds `notification.proto` | S13 |
+| O26 | Accept or reject ADR-0039 (web UI sign-in with an API token in `sessionStorage`, strict CSP, no cookie sessions until user accounts exist) | S15 |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -917,6 +918,24 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       token); stdio smoke test against the live install
 - [x] Docs: `docs/reference/config.md` (`bohux mcp`, scoped tokens; the resource commands)
 
+### S15 — Web UI, read-only (ADR-0012, ADR-0013, ADR-0039) 🔄
+- [x] Proposed ADR-0039 (O26): sign in with an API token kept in `sessionStorage`
+      only, no new auth path on the API, strict CSP; the first UI is read-only
+- [x] `web/`: Vite + React 18 + TypeScript, Tailwind (tokens as CSS variables, light
+      and dark), TanStack Query through Connect-Query and TanStack Router; client
+      generated from `proto/` with `protoc-gen-es` (`buf.gen.web.yaml`, gitignored
+      output). Pages: sign-in, projects, environments, an environment's Apps and recent
+      deployments (refreshing), nodes. Vitest unit tests
+- [x] `internal/webui`: the bundle embedded (`go:embed`), served under `/ui/` with the
+      CSP and security headers, SPA fallback, immutable caching for hashed assets, `/`
+      redirects there; a binary built without it says so. `make web`; CI jobs `web`
+      and `image` (which now embeds the UI)
+- [x] Checked in Chromium (Playwright) against a real control plane: sign-in,
+      navigation, reload, no console errors or CSP violations, nothing in
+      `localStorage` or cookies
+- [ ] Next: release and deployment detail, live deploy progress (`WatchDeployment`),
+      log tail (xterm.js, ADR-0013), then mutations (deploy, rollback) mirroring the CLI
+
 ## Known gaps and notes
 - **CI has not run on this branch.** `ci.yml` triggers on pushes to `main` and on
   pull requests; there is no PR for `claude/relaxed-rubin-76m7dl`, so every check so
@@ -1021,7 +1040,9 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 - Found: CI never ran on this branch (no PR); added as O24.
 - S13 done: deploy notifications (ADR-0038 proposed, O25), API, workflow, CLI, tests.
 - S14 done: `bohux mcp` (ADR-0018), tool policies in proto, tests.
-- **Next:** S15.
+- S15 started: ADR-0039 proposed (O26); the read-only web UI, embedded and served
+  with a strict CSP, checked in a real browser.
+- **Next:** continue S15.
 
 ### 2026-10-21 (auto run 2, S6a) — branch `claude/relaxed-rubin-76m7dl`
 - Owner asked again for an automatic run, slice after slice, until the session ends.
