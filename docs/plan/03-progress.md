@@ -38,24 +38,21 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S2c — storage: write path (⏳, next to start)
-- **Exact next step:** in `internal/store`, a tenant-scoped transaction helper
-  (`set_config('bohux.tenant_id', …, true)`) and one generic "write revision + CAS head +
-  audit event" function, with integration tests.
+- **Slice:** S3a — access design ADR (⏳, next to start)
+- **Exact next step:** write a *proposed* ADR for credential format and lookup (API and
+  bootstrap tokens, found before the tenant is known under row-level security), hashing,
+  and idempotency-key storage.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S2c (storage: write path) on
-> branch `claude/relaxed-rubin-76m7dl`. In internal/store, add a pgxpool-based store with
-> a tenant-scoped transaction helper and one write path that inserts a revision, moves
-> the head with a compare-and-swap on the expected revision (a miss is a conflict
-> error), and inserts the audit event, all in one transaction (ADR-0004, ADR-0017,
-> docs/specs/data-model.md "Schema rules"). Server-generated UUIDv7 IDs. Prove it with
-> `integration`-tagged tests on the local Postgres (see "Local Postgres" in the tracker),
-> including a stale-revision conflict and an audit event that rolls back with a failed
-> write. Run build, vet, golangci-lint (also with the integration tag) and tests, tick
-> the S2c boxes, update the tracker and the next session prompt, commit, push, and give
-> me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S3a (access design ADR) on
+> branch `claude/relaxed-rubin-76m7dl`. Write a *proposed* ADR with
+> .claude/skills/write-adr/ covering: API token and bootstrap token format, how the
+> control plane finds a token's tenant before row-level security allows any read (see
+> the S2b "Open for S3" note), hash algorithm, and where idempotency keys and their
+> results are stored without ever storing a secret (CreateApiToken returns one). Add it
+> to *Waiting on the owner*, tick the S3a box, update the tracker and the next session
+> prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -179,15 +176,39 @@ Split into sub-slices, one session each.
   which row-level security blocks. Options: tokens embed the tenant ID, or a narrow
   non-RLS `token_hash → tenant_id` index table. Decide in S3.
 
-#### S2c — write path ⏳
-- [ ] Revision + audit event written in one transaction (ADR-0004, ADR-0017)
-- [ ] Integration tests against the dev Postgres (`integration` tag)
+#### S2c — write path ✅
+- [x] Revision + audit event written in one transaction (ADR-0004, ADR-0017):
+      `store.Open` (pgxpool, refuses privileged roles), `Store.InTenant`, and
+      `Tx.Create` / `Tx.Update` / `Tx.Delete` with head CAS, UUIDv7 IDs
+      (`github.com/google/uuid`), and `ErrNotFound` / `ErrConflict` / `ErrAlreadyExists`
+- [x] Integration tests against Postgres 16 (`integration` tag): conflict writes
+      nothing, failed transaction rolls back the audit event, cross-tenant writes are
+      `ErrNotFound`, delete keeps the snapshot and frees the slug
 
 ### S3 — API and access ⏳
-- [ ] ConnectRPC server in `controlplane` mode
-- [ ] API tokens (hashed), roles `viewer`/`deployer`/`owner`, permission check on every RPC
-- [ ] Tenant and actor taken from authentication only
-- [ ] Audit event on every mutation; secret-redacting interceptor (rule 3)
+Split into sub-slices, one session each.
+
+#### S3a — access design ⏳
+- [ ] Proposed ADR: token formats, pre-tenant lookup, hashing, idempotency storage
+
+#### S3b — control plane mode ⏳
+- [ ] `bohux controlplane` serves ConnectRPC (h2c) with health; runs `store.Migrate` at
+      start; `bohux admin migrate`. Config from flags/env, documented in one place
+
+#### S3c — authentication and RBAC ⏳
+- [ ] API tokens (hashed), roles `viewer`/`deployer`/`owner`, permission check on every
+      RPC via an interceptor with a per-RPC permission table and a test that every RPC
+      in the generated service descriptors has an entry
+- [ ] Tenant and actor taken from authentication only; tenant bootstrap CLI step;
+      IdentityService + TenantService handlers
+
+#### S3d — redaction ⏳
+- [ ] Secret-redacting interceptor (rule 3) and a test that `SetSecretRequest.value`
+      and token secrets never reach logs, traces, or error strings
+
+#### S3e — resource handlers ⏳
+- [ ] ProjectService, EnvironmentService, AppService on the store, each mutation with
+      an audit event, idempotency key, and `expected_revision_id`
 
 ### S4 — Agent ⏳
 - [ ] Bootstrap-token registration, mTLS, outbound `Connect` stream
@@ -260,6 +281,9 @@ Split into sub-slices, one session each.
   rule for gates: write the ADR as *proposed*, build on it, list it under *Waiting on
   the owner* (O6 onward).
 - S2a done: ADR-0021 (goose on pgx).
+- S2c done: store write path (Open, InTenant, Create/Update/Delete with head CAS and
+  audit event), integration tests green locally.
+- Split S3 into S3a–S3e.
 - S2b done: 11 migrations (all v0.1 resources), `store.Migrate`, unit + integration
   tests passing on local Postgres 16.15; build, vet, golangci-lint (with and without the
   integration tag) clean. Added CI integration job and dev `bohux_app` role.
