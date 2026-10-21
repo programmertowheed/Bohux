@@ -37,7 +37,7 @@ work is in right now*.
 
 | # | Item | Blocks |
 |---|---|---|
-| O1 | Accept or reject ADR-0019 (Caddy only) and ADR-0020 (v0.1 baseline) | S5, S7, S8 scope |
+| O1 | Accept or reject ADR-0020 (v0.1 baseline). ADR-0019 (Caddy) accepted 2026-10-21 | S5, S7, S8 scope |
 | O2 | Run `make run-dev && make footprint` on a 2GB VPS; record results in `docs/footprint.md` | ADR-0002 stays or reopens; nothing before S6 |
 | O3 | Create the `bohumix` GitHub org and move the repo (ADR-0015). Code already uses `github.com/bohumix/bohux` | Public `go get`, not local work |
 | O4 | Confirm the vision change: parity is demand-driven, not the goal | Nothing technical |
@@ -120,6 +120,10 @@ Plan: `docs/specs/api-contract.md` (all questions answered there).
   tests cannot run there. Integration slices (S2+) need CI or a local machine.
 
 ## Session log (newest first)
+
+### 2026-10-21 (later) — branch `claude/relaxed-rubin-76m7dl`
+- Owner accepted ADR-0019: Caddy is the only ingress proxy through v1 (Traefik and nginx rejected).
+- **Next:** unchanged — S1, starting with `common.proto`.
 
 ### 2026-10-21 — branch `claude/relaxed-rubin-76m7dl`
 - Proposed ADR-0019 (Caddy only) and ADR-0020 (v0.1 operational baseline); updated

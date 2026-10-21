@@ -1,6 +1,6 @@
 # ADR-0019: One ingress proxy through v1 — Caddy
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-21
 - **Deciders:** Towheed
 
