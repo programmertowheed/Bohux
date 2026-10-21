@@ -38,11 +38,13 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S15 — web UI (🔄, read-only first cut done)
+- **Slice:** S15 — web UI (🔄: read-only views, live deployments, logs, deploy and
+  rollback, activity, usage done); S16 done
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** release history per App in the UI and create/scale/route forms
-  mirroring the CLI; then the v0.2 resource view (CPU/memory/disk from agents).
+- **Exact next step:** UI forms mirroring the CLI (environment and App create, scale,
+  routes), then the next v0.2 item (Buildpacks/Nixpacks, or registry and Git
+  credentials). Team invites need user accounts: ask the owner first (identity model).
 
 ## Next session prompt
 
@@ -970,7 +972,10 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 - [x] Tests: `/proc` parsing (fixture), report attachment, Docker against a real
       daemon, the API reading a stored report (viewer-scoped); CLI `node list` and
       `app show` columns; UI nodes page and App usage column
-- [ ] The self-deploy test checks the installed UI's CSP and the samples end to end
+- [x] The self-deploy test checks the installed UI's CSP and the samples end to end.
+      **Passed here** on an image with the UI embedded, together with everything else
+      (self-deploy, rollback, fallback, backup, route, 128 polled requests without a
+      failure, samples)
 
 ## Known gaps and notes
 - **CI has not run on this branch.** `ci.yml` triggers on pushes to `main` and on
@@ -1078,7 +1083,10 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 - S14 done: `bohux mcp` (ADR-0018), tool policies in proto, tests.
 - S15 started: ADR-0039 proposed (O26); the read-only web UI, embedded and served
   with a strict CSP, checked in a real browser.
-- **Next:** continue S15.
+- S15 continued: live deployment page, logs, deploy and rollback, activity page;
+  audit events and revisions in the API; S16 resource view (ADR-0040, O28). Full
+  self-deploy test passed on an image with the UI embedded.
+- **Next:** UI forms, then the next v0.2 item.
 
 ### 2026-10-21 (auto run 2, S6a) — branch `claude/relaxed-rubin-76m7dl`
 - Owner asked again for an automatic run, slice after slice, until the session ends.
