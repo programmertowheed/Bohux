@@ -1,4 +1,4 @@
-.PHONY: help generate lint test test-integration conformance build run-dev footprint
+.PHONY: help generate lint test test-integration conformance build image run-dev footprint
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -23,6 +23,9 @@ conformance: ## Provider conformance — the gate for any new provider
 
 build: ## Build the single binary
 	go build -o bin/bohux ./cmd/bohux
+
+image: ## Build the control plane image (ADR-0030); VERSION=x.y.z to stamp it
+	docker build -t bohux:$(or $(VERSION),dev) --build-arg VERSION=$(or $(VERSION),dev) .
 
 run-dev: ## Local stack: postgres, temporal, openbao, buildkit, caddy
 	docker compose -f deploy/dev/compose.yaml up -d

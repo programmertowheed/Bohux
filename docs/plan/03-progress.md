@@ -38,15 +38,18 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S9c2 — the control plane as an image (⏳, next to start)
-- **Exact next step:** write the `Dockerfile` and build it locally (with the generated
-  `gen/` in the build context, since the Buf registry is blocked here).
+- **Slice:** S9d — install bundle (⏳, next to start)
+- **Exact next step:** `deploy/install/compose.yaml` (Postgres, Temporal, OpenBao on the
+  `bohux-infra` network) and the OpenBao auto-unseal choice (ADR-0020 item 6): check what
+  OpenBao 2.4 offers for unattended unseal (static key seal or file storage + init), an
+  ADR if it is a hard-to-reverse choice.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S9c2 (the control plane as
-> an image) on branch `claude/relaxed-rubin-76m7dl`, following ADR-0030 and ADR-0032.
-> Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*). Verify with build, vet, golangci-lint (also with the integration
+> Read CLAUDE.md and docs/plan/03-progress.md, then do slice S9d (install bundle) on
+> branch `claude/relaxed-rubin-76m7dl`, following ADR-0030, ADR-0032, ADR-0020 items
+> 6 and 9, and CLAUDE.md rule 2. Start Postgres, Docker, Temporal and OpenBao (tracker
+> *Known gaps*). Verify with build, vet, golangci-lint (also with the integration
 > tag), unit and integration tests. Tick boxes, update the tracker and the next
 > session prompt, commit, push, and give me the next prompt.
 
@@ -690,10 +693,17 @@ Split into sub-slices, one session each. Includes S7d (OpenBao auto-unseal).
 - **Fixed:** `TestRegisterRefusals/wrong CA pin` failed one run in 256 (its "wrong" pin
   was the right one when the real pin started with `00`)
 
-#### S9c2 — the control plane as an image ⏳
-- [ ] `Dockerfile` for the `bohux` binary (generated code built in, or `buf generate`
-      when `gen/` is absent); runs `bohux controlplane` listening on 0.0.0.0, data dir
-      `/var/lib/bohux`, config from env
+#### S9c2 — the control plane as an image ✅
+- [x] `Dockerfile`: `gen/` used when in the context, else generated with buf (needs the
+      Buf registry); `vendor/` used when present (offline builds), else modules
+      downloaded; static binary on `distroless/static:nonroot` (45.6 MB); listens on
+      0.0.0.0:7400/7443, data dir `/var/lib/bohux` owned by the runtime user so a fresh
+      named volume inherits it; `make image`
+- [x] Smoke-run here against local Postgres and Temporal: healthy, node CA written into
+      the named volume (0600, uid 65532), deploy worker polling. CI job `image` builds
+      from a clean checkout and checks the stamped version
+- **Cloud container note:** build containers cannot reach the Go module proxy here (the
+  egress proxy's CA is not in them); build from a copy with `go mod vendor` and `gen/`
 
 #### S9d — install bundle ⏳
 - [ ] `deploy/install/`: infra Compose (Postgres, Temporal, OpenBao with auto-unseal,
@@ -778,6 +788,9 @@ Split into sub-slices, one session each. Includes S7d (OpenBao auto-unseal).
   `statfs` report ~9.5% free, under the agent's 10% threshold, and the agent refuses
   builds (`DISK_PRESSURE`) as designed. `go clean -cache` frees ~3 GB and lifts it
   above.
+- **Image builds in the cloud container:** `docker build` cannot download Go modules
+  here. Build from a scratch copy: `git ls-files` copied with `gen/`, then
+  `go mod vendor`, then `docker build` there (the Dockerfile uses `vendor/`).
 - **Dev stack:** `deploy/dev/postgres-init/` creates `bohux_app` only on a fresh
   `postgres` volume. An existing volume needs `docker compose down -v` first.
 - **Go 1.23 pin holds dependencies back** (goose ≤ v3.26, pgx ≤ v5.7.6; newer need Go
@@ -834,6 +847,8 @@ Split into sub-slices, one session each. Includes S7d (OpenBao auto-unseal).
 - S9c split into S9c1/S9c2. S9c1 done: ADR-0032 proposed (O18), provider options from
   the API to the Docker provider, owner-only. Fixed a 1-in-256 flaky test.
 - **Next:** S9c2.
+- S9c2 done: the control-plane image, smoke-run, CI builds it.
+- **Next:** S9d.
 
 ### 2026-10-21 (S5e) — branch `claude/relaxed-rubin-76m7dl`
 - S5e done, so S5 is done: agent wired to Docker through the Registry, slugs filled by
