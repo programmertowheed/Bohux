@@ -1,4 +1,4 @@
-.PHONY: help generate lint test test-integration conformance build run-dev
+.PHONY: help generate lint test test-integration conformance build run-dev footprint
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -24,5 +24,8 @@ conformance: ## Provider conformance — the gate for any new provider
 build: ## Build the single binary
 	go build -o bin/bohux ./cmd/bohux
 
-run-dev: ## Local stack: postgres, temporal
+run-dev: ## Local stack: postgres, temporal, openbao, buildkit, caddy
 	docker compose -f deploy/dev/compose.yaml up -d
+
+footprint: ## Measure stack memory for the ADR-0020 gate (run on the target VPS)
+	scripts/footprint.sh

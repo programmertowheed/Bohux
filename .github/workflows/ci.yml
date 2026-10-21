@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  proto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.47.2
+          lint: true
+          format: false
+          breaking: ${{ github.event_name == 'pull_request' }}
+          breaking_against: ${{ github.event.repository.clone_url }}#branch=${{ github.base_ref }}
+          push: false
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.47.2
+          setup_only: true
+      - name: Install code generators
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.35.2
+          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.17.0
+      - name: Generate
+        run: buf generate
+      - name: Check go.mod is tidy
+        run: go mod tidy && git diff --exit-code go.mod go.sum
+      - name: Vet
+        run: go vet ./...
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.5.0
+      - name: Test
+        run: go test ./... -race -count=1
+      - name: Build
+        run: go build -o bin/bohux ./cmd/bohux
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate dev stack
+        run: docker compose -f deploy/dev/compose.yaml config --quiet
