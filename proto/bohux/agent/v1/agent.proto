@@ -151,6 +151,9 @@ message Workload {
   // is sealed in `sealed_secrets` as SecretValues.image_pull_config, never among the
   // container's environment variables.
   bohux.v1.SecretRef image_pull_secret = 16;
+  // Percent of the ingress's traffic this Release takes while the App's live slot keeps
+  // the rest (ADR-0049); 0 switches fully. Not part of the provider spec.
+  uint32 canary_weight = 17;
 }
 
 // The plaintext of Workload.sealed_secrets before sealing (ADR-0008, ADR-0024): the

@@ -21,10 +21,12 @@ type State string
 
 // Deployment states the workflow writes.
 const (
-	StatePending      State = "pending"
-	StateBuilding     State = "building"
-	StateApplying     State = "applying"
-	StateHealthGate   State = "health_gate"
+	StatePending    State = "pending"
+	StateBuilding   State = "building"
+	StateApplying   State = "applying"
+	StateHealthGate State = "health_gate"
+	// StateCanary: the new Release serves its share while the bake runs (ADR-0049).
+	StateCanary       State = "canary"
 	StateSucceeded    State = "succeeded"
 	StateFailed       State = "failed"
 	StateRolledBack   State = "rolled_back"
@@ -51,7 +53,11 @@ const (
 	ReasonCancelled          = "CANCELLED"
 	ReasonCompensationFailed = "COMPENSATION_FAILED"
 	ReasonBuildFailed        = "BUILD_FAILED"
+	ReasonCanaryUnhealthy    = "CANARY_UNHEALTHY"
 )
+
+// SignalPromote ends a canary's bake early (ADR-0049).
+const SignalPromote = "promote"
 
 // Error types of non-retryable activity errors, so the workflow can tell them apart.
 const (
@@ -59,7 +65,16 @@ const (
 	ErrTypeWorkloadFailed = "WorkloadFailed"
 	ErrTypeHealthTimeout  = "HealthTimeout"
 	ErrTypeBuildFailed    = "BuildFailed"
+	// ErrTypeCanaryUnhealthy: the canary was unhealthy for longer than its grace.
+	ErrTypeCanaryUnhealthy = "CanaryUnhealthy"
 )
+
+// Canary is one weighted step (ADR-0049): the new Release takes Weight percent of the
+// App's traffic for Bake, then all of it.
+type Canary struct {
+	Weight uint32
+	Bake   time.Duration
+}
 
 // Actor is who started the Deployment (rule 10). Kind is a store.ActorKind.
 type Actor struct {
@@ -81,6 +96,8 @@ type Input struct {
 	Actor      Actor
 	// HealthTimeout overrides DefaultHealthTimeout when positive.
 	HealthTimeout time.Duration
+	// Canary, when set, makes this a canary deploy (ADR-0049).
+	Canary *Canary `json:",omitempty"`
 }
 
 // Failure is what went wrong, stored as the Deployment's ErrorDetail.
@@ -116,6 +133,9 @@ type AssignInput struct {
 	// fallback the agent applies on its own after this time (ADR-0031). Forward
 	// deploys set it; compensation does not.
 	FallbackAfter time.Time
+	// CanaryWeight, when positive, has the node serve this Release that share of the
+	// App's traffic beside the live slot (ADR-0049).
+	CanaryWeight uint32 `json:",omitempty"`
 }
 
 // Assigned names the node generation that carries the change.
@@ -143,6 +163,15 @@ type WaitInput struct {
 	// Deadline is when the health gate fails with ErrTypeHealthTimeout. Set by the
 	// workflow so activity retries do not extend it.
 	Deadline time.Time
+}
+
+// HoldInput watches a canary through its bake (ADR-0049): the Release must stay
+// healthy, as WaitHealthy judges it, until Until.
+type HoldInput struct {
+	WaitInput
+	Until time.Time
+	// Grace is how long the Release may be unhealthy before the canary fails.
+	Grace time.Duration
 }
 
 // LastHealthyInput asks for the Release of the App's newest succeeded Deployment

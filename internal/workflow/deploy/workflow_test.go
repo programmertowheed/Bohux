@@ -3,6 +3,7 @@ package deploy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,10 @@ type script struct {
 	waitErr   map[string]error
 	// waitDelay delays the new Release's health gate, in workflow time.
 	waitDelay time.Duration
+	// holdErr is what a canary's bake watch returns, after holdDelay (ADR-0049).
+	holdErr   error
+	holdDelay time.Duration
+	holds     []HoldInput
 
 	states  []StateChange
 	assigns []AssignInput
@@ -61,6 +66,8 @@ func (s *script) register(env *testsuite.TestWorkflowEnvironment) {
 	isOther := mock.MatchedBy(func(in WaitInput) bool { return in.ReleaseID != newRelease })
 	env.OnActivity(a.WaitHealthy, mock.Anything, isNew).After(s.waitDelay).Return(wait)
 	env.OnActivity(a.WaitHealthy, mock.Anything, isOther).Return(wait)
+	env.OnActivity(a.HoldHealthy, mock.Anything, mock.Anything).After(s.holdDelay).Return(
+		func(_ context.Context, in HoldInput) error { s.holds = append(s.holds, in); return s.holdErr })
 }
 
 func nonRetryable(typ string) error {
@@ -376,5 +383,120 @@ func TestImageRef(t *testing.T) {
 		if got := imageRef(tt.sourceRef, digest); got != tt.want {
 			t.Errorf("%s: imageRef = %q, want %q", tt.name, got, tt.want)
 		}
+	}
+}
+
+// assignWeights is each assignment's Release and canary weight.
+func assignWeights(as []AssignInput) []string {
+	out := make([]string, len(as))
+	for i, a := range as {
+		out[i] = fmt.Sprintf("%s@%d", a.ReleaseID, a.CanaryWeight)
+	}
+	return out
+}
+
+// TestCanary: a canary serves its weight, is watched through its bake, and is promoted
+// by assigning it with no weight, or rolled back as any failed deploy (ADR-0049). The
+// rollback paths come first (rule 5).
+func TestCanary(t *testing.T) {
+	canaryInput := func() Input {
+		in := input()
+		in.Canary = &Canary{Weight: 10, Bake: 15 * time.Minute}
+		return in
+	}
+	tests := []struct {
+		name        string
+		s           script
+		promoteAt   time.Duration
+		cancelAt    time.Duration
+		want        Result
+		wantStates  []string
+		wantAssigns []string
+	}{
+		{
+			name:        "an unhealthy canary rolls back",
+			s:           script{last: goodRelease, holdErr: nonRetryable(ErrTypeCanaryUnhealthy), holdDelay: 3 * time.Minute},
+			want:        Result{State: StateRolledBack, Failure: &Failure{Reason: ReasonCanaryUnhealthy}},
+			wantStates:  []string{"applying", "health_gate", "canary", "compensating:CANARY_UNHEALTHY", "rolled_back:CANARY_UNHEALTHY"},
+			wantAssigns: []string{newRelease + "@10", goodRelease + "@0"},
+		},
+		{
+			name:        "cancelling during the bake aborts it",
+			s:           script{last: goodRelease, holdDelay: time.Hour},
+			cancelAt:    5 * time.Minute,
+			want:        Result{State: StateCancelled},
+			wantStates:  []string{"applying", "health_gate", "canary", "compensating:CANCELLED", "cancelled"},
+			wantAssigns: []string{newRelease + "@10", goodRelease + "@0"},
+		},
+		{
+			name:        "a canary that never turns healthy never bakes",
+			s:           script{last: goodRelease, waitErr: map[string]error{newRelease: nonRetryable(ErrTypeHealthTimeout)}},
+			want:        Result{State: StateRolledBack, Failure: &Failure{Reason: ReasonHealthTimeout}},
+			wantStates:  []string{"applying", "health_gate", "compensating:HEALTH_TIMEOUT", "rolled_back:HEALTH_TIMEOUT"},
+			wantAssigns: []string{newRelease + "@10", goodRelease + "@0"},
+		},
+		{
+			name:        "a healthy bake promotes",
+			s:           script{last: goodRelease, holdDelay: 15 * time.Minute},
+			want:        Result{State: StateSucceeded},
+			wantStates:  []string{"applying", "health_gate", "canary", "succeeded"},
+			wantAssigns: []string{newRelease + "@10", newRelease + "@0"},
+		},
+		{
+			name:        "promote ends the bake early",
+			s:           script{last: goodRelease, holdDelay: time.Hour},
+			promoteAt:   2 * time.Minute,
+			want:        Result{State: StateSucceeded},
+			wantStates:  []string{"applying", "health_gate", "canary", "succeeded"},
+			wantAssigns: []string{newRelease + "@10", newRelease + "@0"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var ts testsuite.WorkflowTestSuite
+			env := ts.NewTestWorkflowEnvironment()
+			s := tt.s
+			s.register(env)
+			var a *Activities
+			env.OnActivity(a.NotificationChannels, mock.Anything, mock.Anything).Return([]string{}, nil)
+			if tt.promoteAt > 0 {
+				env.RegisterDelayedCallback(func() { env.SignalWorkflow(SignalPromote, nil) }, tt.promoteAt)
+			}
+			if tt.cancelAt > 0 {
+				env.RegisterDelayedCallback(env.CancelWorkflow, tt.cancelAt)
+			}
+			start := env.Now()
+			env.ExecuteWorkflow(Workflow, canaryInput())
+			if err := env.GetWorkflowError(); err != nil {
+				t.Fatal(err)
+			}
+			var res Result
+			if err := env.GetWorkflowResult(&res); err != nil {
+				t.Fatal(err)
+			}
+			if res.State != tt.want.State || (res.Failure == nil) != (tt.want.Failure == nil) ||
+				(res.Failure != nil && res.Failure.Reason != tt.want.Failure.Reason) {
+				t.Errorf("result %+v, want %+v", res, tt.want)
+			}
+			if got := stateList(s.states); !equal(got, tt.wantStates) {
+				t.Errorf("states %v, want %v", got, tt.wantStates)
+			}
+			if got := assignWeights(s.assigns); !equal(got, tt.wantAssigns) {
+				t.Errorf("assigns %v, want %v", got, tt.wantAssigns)
+			}
+			if len(s.assigns) == 2 && s.assigns[1].ReleaseID == newRelease && !s.assigns[1].FallbackAfter.IsZero() {
+				t.Error("the promotion carries a fallback; the Release was already seen healthy")
+			}
+			if len(s.holds) == 1 {
+				h := s.holds[0]
+				if h.Grace != canaryGrace || h.ReleaseID != newRelease ||
+					h.Until.Sub(start) < 15*time.Minute {
+					t.Errorf("hold %+v: want the new release watched for the 15m bake", h)
+				}
+			}
+			if tt.promoteAt > 0 && env.Now().Sub(start) > time.Hour {
+				t.Errorf("promoted at %v, want right after the signal", env.Now().Sub(start))
+			}
+		})
 	}
 }

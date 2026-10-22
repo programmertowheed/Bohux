@@ -62,7 +62,7 @@ func (r *Reconciler) switches(w *agentv1.Workload) bool {
 // make once the ingress serves it, and the refs it keeps.
 func (r *Reconciler) convergeSlots(ctx context.Context, base provider.ResourceRef, w *agentv1.Workload,
 	ws *agentv1.WorkloadStatus, slots map[string]slotEntry, applied appliedSet,
-) (st provider.Status, current bool, cut *cutover, keep []provider.ResourceRef) {
+) (st provider.Status, current bool, cut *cutover, split *canarySplit, keep []provider.ResourceRef) {
 	key := slotKey(base)
 	e := slots[key]
 	live, pending := base, base
@@ -71,40 +71,55 @@ func (r *Reconciler) convergeSlots(ctx context.Context, base provider.ResourceRe
 	if err != nil {
 		fail(ws, "SPEC_INVALID")
 		slog.ErrorContext(ctx, "build spec", "app", w.GetAppId(), "err", err)
-		return provider.Status{}, false, nil, []provider.ResourceRef{live}
+		return provider.Status{}, false, nil, nil, []provider.ResourceRef{live}
 	}
 	stLive, err := r.providerNamed(w.GetProvider()).Status(ctx, live)
 	if err != nil {
 		fail(ws, "STATUS_FAILED")
 		slog.ErrorContext(ctx, "provider status", "app", w.GetAppId(), "err", err)
-		return provider.Status{}, false, nil, []provider.ResourceRef{live, pending}
+		return provider.Status{}, false, nil, nil, []provider.ResourceRef{live, pending}
 	}
 	if !stLive.Exists || e.Hash == spec.Hash || (e.Hash == "" && stLive.Hash == spec.Hash) {
 		// The live slot runs w (or nothing runs): converge in place, and drop a
 		// pending slot a compensation or fallback left behind.
 		if err := r.record(applied, live, w.GetProvider()); err != nil {
 			fail(ws, "STATE_WRITE_FAILED")
-			return provider.Status{}, false, nil, []provider.ResourceRef{live, pending}
+			return provider.Status{}, false, nil, nil, []provider.ResourceRef{live, pending}
 		}
 		st := r.converge(ctx, live, w, ws)
 		slots[key] = slotEntry{Slot: e.Slot, Hash: spec.Hash}
-		return st, true, nil, []provider.ResourceRef{live}
+		return st, true, nil, nil, []provider.ResourceRef{live}
 	}
 	// A new spec: bring it up beside the live slot, which keeps serving.
 	if err := r.record(applied, pending, w.GetProvider()); err != nil {
 		fail(ws, "STATE_WRITE_FAILED")
-		return stLive, false, nil, []provider.ResourceRef{live, pending}
+		return stLive, false, nil, nil, []provider.ResourceRef{live, pending}
 	}
 	st = r.converge(ctx, pending, w, ws)
 	if st.Running && st.Healthy && len(st.Endpoints) > 0 {
-		return st, true, &cutover{key: key, from: live, to: pending, hash: spec.Hash},
+		if w.GetCanaryWeight() > 0 && stLive.Running && len(stLive.Endpoints) > 0 {
+			// A canary: both slots serve, weighted, until the Release is assigned with
+			// no weight (ADR-0049). An unhealthy canary falls to the branch below and
+			// the live slot serves alone again.
+			return st, true, nil, &canarySplit{live: stLive.Endpoints, weight: w.GetCanaryWeight()},
+				[]provider.ResourceRef{live, pending}
+		}
+		return st, true, &cutover{key: key, from: live, to: pending, hash: spec.Hash}, nil,
 			[]provider.ResourceRef{live, pending}
 	}
 	// Not ready: report the new Release as it is, serve the old one.
 	if ws.GetState() == agentv1.WorkloadState_WORKLOAD_STATE_HEALTHY {
 		ws.State = agentv1.WorkloadState_WORKLOAD_STATE_APPLYING
 	}
-	return stLive, false, nil, []provider.ResourceRef{live, pending}
+	return stLive, false, nil, nil, []provider.ResourceRef{live, pending}
+}
+
+// liveEndpoint is the live slot's endpoint for port, "" without a split.
+func (s *canarySplit) liveEndpoint(port int32) string {
+	if s == nil {
+		return ""
+	}
+	return s.live[port]
 }
 
 // finish makes a cut-over permanent once the ingress serves its new slot: record it

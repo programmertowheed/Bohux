@@ -192,10 +192,11 @@ func (r *Reconciler) Once(ctx context.Context) *agentv1.StatusReport {
 			st      provider.Status
 			current = true
 			cut     *cutover
+			split   *canarySplit
 		)
 		if r.switches(w) {
 			var keep []provider.ResourceRef
-			st, current, cut, keep = r.convergeSlots(ctx, ref, w, ws, slots, applied)
+			st, current, cut, split, keep = r.convergeSlots(ctx, ref, w, ws, slots, applied)
 			for _, k := range keep {
 				desired[k] = true
 			}
@@ -213,7 +214,8 @@ func (r *Reconciler) Once(ctx context.Context) *agentv1.StatusReport {
 			st = r.converge(ctx, ref, w, ws)
 		}
 		if len(w.GetRoutes()) > 0 {
-			routed = append(routed, routedWorkload{w: w, ws: ws, endpoints: st.Endpoints, current: current, cut: cut})
+			routed = append(routed, routedWorkload{w: w, ws: ws, endpoints: st.Endpoints, current: current, cut: cut,
+				split: split})
 		}
 		if fellBack {
 			if ws.Failure == nil {
@@ -252,6 +254,15 @@ type routedWorkload struct {
 	// progress, ADR-0035); cut is the switch to finish once the ingress serves w.
 	current bool
 	cut     *cutover
+	// split, during a canary, is the live slot's endpoints and the new Release's share
+	// of the traffic (ADR-0049).
+	split *canarySplit
+}
+
+// canarySplit serves a canary beside the live slot.
+type canarySplit struct {
+	live   map[int32]string
+	weight uint32
 }
 
 // serve loads the node's ingress with every routed workload's hosts (ADR-0034). A
@@ -285,7 +296,12 @@ func (r *Reconciler) serve(ctx context.Context, routed []routedWorkload, slots m
 				}
 			}
 			r.endpoints[key] = ep
-			sites = append(sites, ingress.Site{Host: rt.GetHost(), Upstreams: []string{ep}})
+			site := ingress.Site{Host: rt.GetHost(), Upstreams: []string{ep}}
+			if live := rw.split.liveEndpoint(rt.GetPort()); live != "" && live != ep {
+				share := int(rw.split.weight)
+				site.Upstreams, site.Weights = []string{live, ep}, []int{100 - share, share}
+			}
+			sites = append(sites, site)
 		}
 	}
 	if err := r.Ingress.Load(ctx, sites); err != nil {
@@ -474,8 +490,9 @@ func (r *Reconciler) spec(ref provider.ResourceRef, w *agentv1.Workload) (provid
 	}
 	shape := proto.Clone(w).(*agentv1.Workload)
 	shape.SealedSecrets, shape.DeploymentId = nil, ""
-	// The fallback changes what may run later, not what runs now.
-	shape.Fallback, shape.FallbackAfter = nil, nil
+	// The fallback changes what may run later, not what runs now; a canary's weight
+	// changes what the ingress does (ADR-0049).
+	shape.Fallback, shape.FallbackAfter, shape.CanaryWeight = nil, nil, 0
 	// Routes reload the ingress, never the containers (ADR-0034); only whether there
 	// are any changes what runs (the provider joins the workload to the ingress).
 	ingress := len(shape.GetRoutes()) > 0

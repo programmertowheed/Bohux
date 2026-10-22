@@ -26,6 +26,8 @@ var (
 	fallbackMargin = 2 * time.Minute
 	// healthHeartbeat is how often WaitHealthy heartbeats; twice it is its timeout.
 	healthHeartbeat = 30 * time.Second
+	// canaryGrace is how long a canary may be unhealthy before it fails (ADR-0049).
+	canaryGrace = 30 * time.Second
 )
 
 // Workflow runs one Deployment (ADR-0026), then posts its outcome to the project's
@@ -98,7 +100,11 @@ func (d *run) deploy(ctx workflow.Context) (Result, error) {
 	// From here on something may be assigned, so every failure compensates. The node
 	// also gets the workload being replaced, in case this run cannot compensate.
 	fallbackAfter := workflow.Now(ctx).Add(d.timeout + fallbackMargin)
-	assigned, err := d.assign(ctx, in.ReleaseID, fallbackAfter)
+	var weight uint32
+	if in.Canary != nil {
+		weight = in.Canary.Weight
+	}
+	assigned, err := d.assignWith(ctx, in.ReleaseID, fallbackAfter, weight)
 	if err != nil {
 		return d.compensate(ctx, failureOf(err, ReasonAssignFailed), temporal.IsCanceledError(err))
 	}
@@ -107,6 +113,11 @@ func (d *run) deploy(ctx workflow.Context) (Result, error) {
 	}
 	if err := d.wait(ctx, assigned, in.ReleaseID); err != nil {
 		return d.compensate(ctx, failureOf(err, ReasonHealthTimeout), temporal.IsCanceledError(err))
+	}
+	if in.Canary != nil {
+		if f, cancelled := d.canary(ctx, assigned); f != nil {
+			return d.compensate(ctx, f, cancelled)
+		}
 	}
 	if err := d.set(ctx, StateSucceeded, nil); err != nil {
 		// Healthy, but cancelled before it was recorded: a cancel means undo.
@@ -182,6 +193,12 @@ func (d *run) set(ctx workflow.Context, s State, f *Failure) error {
 }
 
 func (d *run) assign(ctx workflow.Context, release string, fallbackAfter time.Time) (Assigned, error) {
+	return d.assignWith(ctx, release, fallbackAfter, 0)
+}
+
+// assignWith assigns release, serving it weight percent of the traffic beside the live
+// slot when weight is positive (ADR-0049).
+func (d *run) assignWith(ctx workflow.Context, release string, fallbackAfter time.Time, weight uint32) (Assigned, error) {
 	var (
 		a   *Activities
 		out Assigned
@@ -189,8 +206,58 @@ func (d *run) assign(ctx workflow.Context, release string, fallbackAfter time.Ti
 	err := workflow.ExecuteActivity(storeCtx(ctx), a.AssignRelease, AssignInput{
 		TenantID: d.in.TenantID, AppID: d.in.AppID, ReleaseID: release,
 		DeploymentID: d.in.DeploymentID, Actor: d.in.Actor, FallbackAfter: fallbackAfter,
+		CanaryWeight: weight,
 	}).Get(ctx, &out)
 	return out, err
+}
+
+// canary runs a healthy canary's bake, then promotes it (ADR-0049): it waits for the
+// bake to end with the Release healthy throughout, or for a promote signal, then
+// assigns the Release with no weight, so the node cuts over, and waits for that. It
+// returns the failure to compensate for, if any, and whether it was a cancellation.
+func (d *run) canary(ctx workflow.Context, assigned Assigned) (*Failure, bool) {
+	var a *Activities
+	if err := d.set(ctx, StateCanary, nil); err != nil {
+		return failureOf(err, ReasonAssignFailed), temporal.IsCanceledError(err)
+	}
+	bake := d.in.Canary.Bake
+	hctx, stopHold := workflow.WithCancel(ctx)
+	opts := storeOptions
+	opts.StartToCloseTimeout = bake + d.timeout + time.Minute
+	opts.ScheduleToCloseTimeout = bake + d.timeout + 2*time.Minute
+	opts.HeartbeatTimeout = 2 * healthHeartbeat
+	hold := workflow.ExecuteActivity(workflow.WithActivityOptions(hctx, opts), a.HoldHealthy, HoldInput{
+		WaitInput: WaitInput{TenantID: d.in.TenantID, NodeID: assigned.NodeID, Generation: assigned.Generation,
+			AppID: d.in.AppID, ReleaseID: d.in.ReleaseID, Replicas: assigned.Replicas, Routed: assigned.Routed},
+		Until: workflow.Now(ctx).Add(bake), Grace: canaryGrace,
+	})
+	var holdErr error
+	promoted := false
+	sel := workflow.NewSelector(ctx)
+	sel.AddFuture(hold, func(f workflow.Future) { holdErr = f.Get(ctx, nil) })
+	sel.AddReceive(workflow.GetSignalChannel(ctx, SignalPromote), func(c workflow.ReceiveChannel, _ bool) {
+		c.Receive(ctx, nil)
+		promoted = true
+	})
+	sel.Select(ctx)
+	if promoted {
+		stopHold()
+	} else if holdErr != nil {
+		f := failureOf(holdErr, ReasonCanaryUnhealthy)
+		if isType(holdErr, ErrTypeCanaryUnhealthy) {
+			f = &Failure{Reason: ReasonCanaryUnhealthy}
+		}
+		return f, temporal.IsCanceledError(holdErr)
+	}
+	// The Release was seen healthy, so the promotion carries no fallback.
+	full, err := d.assignWith(ctx, d.in.ReleaseID, time.Time{}, 0)
+	if err != nil {
+		return failureOf(err, ReasonAssignFailed), temporal.IsCanceledError(err)
+	}
+	if err := d.wait(ctx, full, d.in.ReleaseID); err != nil {
+		return failureOf(err, ReasonHealthTimeout), temporal.IsCanceledError(err)
+	}
+	return nil, false
 }
 
 // wait runs the health gate with its own deadline, so activity retries cannot extend

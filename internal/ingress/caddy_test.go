@@ -65,3 +65,47 @@ func TestRender(t *testing.T) {
 		t.Error("a site without an upstream rendered")
 	}
 }
+
+
+// TestRenderWeights: a canary's site renders as weighted round robin over its
+// upstreams (ADR-0049), and weights that do not match the upstreams are refused.
+func TestRenderWeights(t *testing.T) {
+	c := &Caddy{AdminSocket: "/run/bohux-caddy/admin.sock"}
+	b, err := c.Render([]Site{{Host: "api.example.com", Upstreams: []string{"api-blue:8080", "api-green:8080"},
+		Weights: []int{90, 10}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Apps struct {
+			HTTP struct {
+				Servers map[string]struct {
+					Routes []struct {
+						Handle []struct {
+							Upstreams []struct {
+								Dial string `json:"dial"`
+							} `json:"upstreams"`
+							LoadBalancing struct {
+								SelectionPolicy struct {
+									Policy  string `json:"policy"`
+									Weights []int  `json:"weights"`
+								} `json:"selection_policy"`
+							} `json:"load_balancing"`
+						} `json:"handle"`
+					} `json:"routes"`
+				} `json:"servers"`
+			} `json:"http"`
+		} `json:"apps"`
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	h := cfg.Apps.HTTP.Servers["bohux"].Routes[0].Handle[0]
+	if len(h.Upstreams) != 2 || h.LoadBalancing.SelectionPolicy.Policy != "weighted_round_robin" ||
+		len(h.LoadBalancing.SelectionPolicy.Weights) != 2 || h.LoadBalancing.SelectionPolicy.Weights[1] != 10 {
+		t.Errorf("handler = %+v", h)
+	}
+	if _, err := c.Render([]Site{{Host: "x.example.com", Upstreams: []string{"a:1"}, Weights: []int{1, 2}}}); err == nil {
+		t.Error("weights that do not match the upstreams rendered")
+	}
+}

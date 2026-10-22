@@ -89,7 +89,7 @@ func (a *Activities) RecordStart(ctx context.Context, in Input) (bool, error) {
 	err = a.Store.InTenant(ctx, tenant, func(tx *store.Tx) error {
 		row := DeploymentRow{
 			ID: deployment, ReleaseID: release, EnvironmentID: env, RollbackOf: rollbackOf,
-			Reason: in.Reason, WorkflowID: run.ID, RunID: run.RunID,
+			Reason: in.Reason, WorkflowID: run.ID, RunID: run.RunID, Canary: in.Canary,
 		}
 		if err := InsertDeployment(ctx, tx, row, actor); err != nil {
 			return err
@@ -118,6 +118,8 @@ type DeploymentRow struct {
 	Reason        string
 	WorkflowID    string
 	RunID         string
+	// Canary, when set, records a canary deploy (ADR-0049).
+	Canary *Canary
 }
 
 // InsertDeployment inserts the Deployment in state pending unless a row with its ID
@@ -143,12 +145,17 @@ func InsertDeployment(ctx context.Context, tx *store.Tx, d DeploymentRow, actor 
 	if exists {
 		return nil
 	}
-	_, err = tx.CreateWithID(ctx, "deployments", d.ID,
-		[]store.Col{
-			{Name: "release_id", Value: d.ReleaseID}, {Name: "environment_id", Value: d.EnvironmentID},
-			{Name: "strategy", Value: "recreate"}, {Name: "rollback_of", Value: d.RollbackOf},
-			{Name: "reason", Value: d.Reason},
-		},
+	head := []store.Col{
+		{Name: "release_id", Value: d.ReleaseID}, {Name: "environment_id", Value: d.EnvironmentID},
+		{Name: "strategy", Value: "recreate"}, {Name: "rollback_of", Value: d.RollbackOf},
+		{Name: "reason", Value: d.Reason},
+	}
+	if d.Canary != nil {
+		head[2].Value = "canary"
+		head = append(head, store.Col{Name: "canary_weight", Value: int16(d.Canary.Weight)},
+			store.Col{Name: "canary_bake_seconds", Value: int32(d.Canary.Bake / time.Second)})
+	}
+	_, err = tx.CreateWithID(ctx, "deployments", d.ID, head,
 		[]store.Col{
 			{Name: "state", Value: string(StatePending)}, {Name: "workflow_id", Value: d.WorkflowID},
 			{Name: "workflow_run_id", Value: d.RunID}, {Name: "started_at", Value: time.Now()},
@@ -405,7 +412,7 @@ func buildWorkload(ctx context.Context, tx *store.Tx, app uuid.UUID, in AssignIn
 	w := &agentv1.Workload{
 		AppId: app.String(), EnvironmentId: env.String(), ReleaseId: in.ReleaseID,
 		DeploymentId: in.DeploymentID, Provider: provider, Image: imageRef(sourceRef, digest),
-		Runtime: runtime, Secrets: secrets, Routes: rs,
+		Runtime: runtime, Secrets: secrets, Routes: rs, CanaryWeight: in.CanaryWeight,
 	}
 	// The pull credential is the App's current one, like its routes: a rollback pulls an
 	// old image with today's credential (ADR-0041).
@@ -490,6 +497,45 @@ func (a *Activities) WaitHealthy(ctx context.Context, in WaitInput) error {
 		if !time.Now().Before(in.Deadline) {
 			return temporal.NewNonRetryableApplicationError(
 				"release did not turn healthy before the deadline", ErrTypeHealthTimeout, nil)
+		}
+		activity.RecordHeartbeat(ctx)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+}
+
+// HoldHealthy watches a canary through its bake (ADR-0049): it returns at in.Until if
+// the Release is healthy then, and fails with ErrTypeCanaryUnhealthy once the Release
+// has been unhealthy for longer than in.Grace, so one restart is not a verdict.
+func (a *Activities) HoldHealthy(ctx context.Context, in HoldInput) error {
+	ids, err := parseIDs(in.TenantID, in.NodeID)
+	if err != nil {
+		return err
+	}
+	interval := a.PollInterval
+	if interval <= 0 {
+		interval = defaultPollInterval
+	}
+	var unhealthySince time.Time
+	for {
+		ok, err := a.healthy(ctx, ids[0], ids[1], in.WaitInput)
+		if err != nil {
+			return err
+		}
+		now := time.Now()
+		switch {
+		case ok && !now.Before(in.Until):
+			return nil
+		case ok:
+			unhealthySince = time.Time{}
+		case unhealthySince.IsZero():
+			unhealthySince = now
+		case now.Sub(unhealthySince) > in.Grace:
+			return temporal.NewNonRetryableApplicationError(
+				"the canary was unhealthy for longer than its grace", ErrTypeCanaryUnhealthy, nil)
 		}
 		activity.RecordHeartbeat(ctx)
 		select {

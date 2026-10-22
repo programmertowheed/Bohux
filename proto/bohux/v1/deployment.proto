@@ -5,6 +5,7 @@ package bohux.v1;
 import "bohux/v1/common.proto";
 import "bohux/v1/options.proto";
 import "google/api/field_behavior.proto";
+import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
@@ -33,6 +34,17 @@ message Deployment {
   google.protobuf.Timestamp finished_at = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
   // Set when state is FAILED, COMPENSATING, or ROLLED_BACK.
   ErrorDetail failure = 11 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // Set when strategy is CANARY (ADR-0049).
+  Canary canary = 12 [(google.api.field_behavior) = IMMUTABLE];
+}
+
+// One weighted step: the new Release takes weight_percent of the App's traffic for
+// bake, then all of it, unless it turns unhealthy or is cancelled (ADR-0049).
+message Canary {
+  // 1 to 99.
+  uint32 weight_percent = 1 [(google.api.field_behavior) = REQUIRED];
+  // One minute to 24 hours.
+  google.protobuf.Duration bake = 2 [(google.api.field_behavior) = REQUIRED];
 }
 
 enum DeploymentStrategy {
@@ -41,6 +53,9 @@ enum DeploymentStrategy {
   // Stop old, start new. The only v0.1 strategy; has downtime on host ports (ADR-0020).
   // Zero-downtime strategies arrive with ingress (ADR-0019).
   DEPLOYMENT_STRATEGY_RECREATE = 1;
+  // Part of the traffic first, then all of it (ADR-0049). Needs `canary`, and an App
+  // with routes and no host port, which deploys into its other slot (ADR-0035).
+  DEPLOYMENT_STRATEGY_CANARY = 2;
 }
 
 enum DeploymentState {
@@ -59,6 +74,8 @@ enum DeploymentState {
   // Compensation in progress: assigning the last healthy Release.
   DEPLOYMENT_STATE_COMPENSATING = 9;
   DEPLOYMENT_STATE_CANCELLED = 10;
+  // The new Release serves its canary share while the bake runs (ADR-0049).
+  DEPLOYMENT_STATE_CANARY = 11;
 }
 
 service DeploymentService {
@@ -80,7 +97,13 @@ service DeploymentService {
   rpc Rollback(RollbackRequest) returns (RollbackResponse) {
     option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
   }
+  // Cancelling a canary aborts it: the live Release takes all traffic again.
   rpc CancelDeployment(CancelDeploymentRequest) returns (CancelDeploymentResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
+  // Ends a canary's bake now: the new Release takes all traffic (ADR-0049). Only a
+  // Deployment in CANARY can be promoted.
+  rpc PromoteDeployment(PromoteDeploymentRequest) returns (PromoteDeploymentResponse) {
     option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
   }
 }
@@ -92,6 +115,8 @@ message CreateDeploymentRequest {
   string rollback_of = 4;
   string reason = 5;
   string idempotency_key = 6 [(google.api.field_behavior) = REQUIRED];
+  // Required when strategy is CANARY.
+  Canary canary = 7;
 }
 
 message CreateDeploymentResponse {
@@ -147,5 +172,14 @@ message CancelDeploymentRequest {
 }
 
 message CancelDeploymentResponse {
+  Deployment deployment = 1;
+}
+
+message PromoteDeploymentRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+  string idempotency_key = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+message PromoteDeploymentResponse {
   Deployment deployment = 1;
 }

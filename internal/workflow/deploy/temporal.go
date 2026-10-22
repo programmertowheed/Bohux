@@ -79,6 +79,14 @@ func (s *Starter) Cancel(ctx context.Context, workflowID, runID string) error {
 	return fmt.Errorf("%w: %w", ErrUnavailable, err)
 }
 
+// Promote signals a canary run to end its bake now (ADR-0049).
+func (s *Starter) Promote(ctx context.Context, workflowID, runID string) error {
+	if err := s.Client.SignalWorkflow(ctx, workflowID, runID, SignalPromote, nil); err != nil {
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	return nil
+}
+
 // workerRetry is how long RunWorker waits between attempts to start polling.
 const workerRetry = 5 * time.Second
 

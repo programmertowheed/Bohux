@@ -28,6 +28,9 @@ const ConfigFile = "caddy.json"
 type Site struct {
 	Host      string
 	Upstreams []string
+	// Weights, when set, splits requests between the upstreams in these proportions
+	// (Caddy's weighted round robin), one per upstream: a canary (ADR-0049).
+	Weights []int
 }
 
 // Caddy is the node's Caddy, reached through its admin socket.
@@ -59,9 +62,17 @@ func (c *Caddy) Render(sites []Site) ([]byte, error) {
 		for _, u := range s.Upstreams {
 			ups = append(ups, map[string]string{"dial": u})
 		}
+		proxy := map[string]any{"handler": "reverse_proxy", "upstreams": ups}
+		if len(s.Weights) > 0 {
+			if len(s.Weights) != len(s.Upstreams) {
+				return nil, fmt.Errorf("site %s has %d weights for %d upstreams", s.Host, len(s.Weights), len(s.Upstreams))
+			}
+			proxy["load_balancing"] = map[string]any{"selection_policy": map[string]any{
+				"policy": "weighted_round_robin", "weights": s.Weights}}
+		}
 		routes = append(routes, map[string]any{
 			"match":    []map[string]any{{"host": []string{s.Host}}},
-			"handle":   []map[string]any{{"handler": "reverse_proxy", "upstreams": ups}},
+			"handle":   []map[string]any{proxy},
 			"terminal": true,
 		})
 		if s.Host == "localhost" || strings.HasSuffix(s.Host, ".localhost") {

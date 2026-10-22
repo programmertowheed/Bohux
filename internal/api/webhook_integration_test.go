@@ -51,6 +51,8 @@ func (f *fakeDeployer) StartBuild(_ context.Context, in deploy.BuildInput) (stri
 
 func (f *fakeDeployer) Cancel(context.Context, string, string) error { return nil }
 
+func (f *fakeDeployer) Promote(context.Context, string, string) error { return nil }
+
 func (f *fakeDeployer) count() (int, int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -99,6 +99,12 @@ func TestCaddy(t *testing.T) {
 		"-v", sockDir+":"+sockDir, "-v", c.Dir+":/etc/bohux-ingress:ro",
 		caddyImage, "caddy", "run", "--config", "/etc/bohux-ingress/"+ConfigFile)
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
+	t.Cleanup(func() {
+		if t.Failed() {
+			out, _ := exec.Command("docker", "logs", "--tail", "30", name).CombinedOutput()
+			t.Logf("caddy logs:\n%s", out)
+		}
+	})
 	_, port, err := net.SplitHostPort(docker(t, "port", name, "443/tcp"))
 	if err != nil {
 		t.Fatal(err)
@@ -137,6 +143,32 @@ func TestCaddy(t *testing.T) {
 			}
 			return err
 		})
+	})
+	t.Run("weights split requests between upstreams (a canary)", func(t *testing.T) {
+		canary := "canary-" + suffix
+		docker(t, "run", "-d", "--name", canary, "--network", network, "--network-alias", "canary",
+			"busybox:1.36", "sh", "-c", "mkdir -p /www && echo canary > /www/index.html && exec httpd -f -p 8080 -h /www")
+		t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", canary).Run() })
+		// The hosts loaded so far stay, so the restart below still serves them.
+		split := append(append([]Site{}, sites...), Site{Host: "www.localhost", Upstreams: []string{"web:8080"}},
+			Site{Host: "split.localhost", Upstreams: []string{"web:8080", "canary:8080"}, Weights: []int{3, 1}})
+		eventually(t, "load the weighted site", func() error { return c.Load(ctx, split) })
+		_, port, err := net.SplitHostPort(docker(t, "port", name, "443/tcp"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, "serve split.localhost", func() error { _, err := get(port, "split.localhost"); return err })
+		counts := map[string]int{}
+		for range 40 {
+			body, err := get(port, "split.localhost")
+			if err != nil {
+				t.Fatal(err)
+			}
+			counts[body]++
+		}
+		if counts["canary"] < 8 || counts["canary"] > 12 || counts["hello"]+counts["canary"] != 40 {
+			t.Errorf("40 requests at weights 3:1 went %v; want about 30 and 10", counts)
+		}
 	})
 	t.Run("a restarted Caddy serves from the file alone", func(t *testing.T) {
 		docker(t, "restart", name)

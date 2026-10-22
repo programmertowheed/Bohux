@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/gen/bohux/v1/bohuxv1connect"
@@ -42,6 +44,7 @@ type deployRequest struct {
 	env        uuid.UUID
 	rollbackOf *uuid.UUID
 	reason     string
+	canary     *deploy.Canary
 }
 
 func (ds *deploymentService) CreateDeployment(ctx context.Context, req *connect.Request[bohuxv1.CreateDeploymentRequest]) (*connect.Response[bohuxv1.CreateDeploymentResponse], error) {
@@ -54,10 +57,18 @@ func (ds *deploymentService) CreateDeployment(ctx context.Context, req *connect.
 	if err != nil {
 		return nil, err
 	}
+	var canary *deploy.Canary
 	switch msg.GetStrategy() {
 	case bohuxv1.DeploymentStrategy_DEPLOYMENT_STRATEGY_UNSPECIFIED, bohuxv1.DeploymentStrategy_DEPLOYMENT_STRATEGY_RECREATE:
+		if msg.GetCanary() != nil {
+			return nil, invalidArgument("canary", "UNEXPECTED", "canary needs strategy CANARY")
+		}
+	case bohuxv1.DeploymentStrategy_DEPLOYMENT_STRATEGY_CANARY:
+		if canary, err = canaryOf(msg.GetCanary()); err != nil {
+			return nil, err
+		}
 	default:
-		return nil, invalidArgument("strategy", "UNSUPPORTED", "only the recreate strategy exists")
+		return nil, invalidArgument("strategy", "UNSUPPORTED", "strategy must be RECREATE or CANARY")
 	}
 	var rollbackOf *uuid.UUID
 	if msg.GetRollbackOf() != "" {
@@ -69,11 +80,57 @@ func (ds *deploymentService) CreateDeployment(ctx context.Context, req *connect.
 	}
 	d, err := ds.start(ctx, deployRequest{rpc: bohuxv1connect.DeploymentServiceCreateDeploymentProcedure,
 		key: msg.GetIdempotencyKey(), msg: msg, release: release, env: env, rollbackOf: rollbackOf,
-		reason: msg.GetReason()})
+		reason: msg.GetReason(), canary: canary})
 	if err != nil {
 		return nil, err
 	}
 	return connect.NewResponse(&bohuxv1.CreateDeploymentResponse{Deployment: d}), nil
+}
+
+// Bounds of a canary (ADR-0049).
+const (
+	minCanaryBake = time.Minute
+	maxCanaryBake = 24 * time.Hour
+)
+
+// canaryOf validates a CANARY deployment's step.
+func canaryOf(c *bohuxv1.Canary) (*deploy.Canary, error) {
+	if c == nil {
+		return nil, invalidArgument("canary", "REQUIRED", "strategy CANARY needs canary")
+	}
+	if w := c.GetWeightPercent(); w < 1 || w > 99 {
+		return nil, invalidArgument("canary.weight_percent", "OUT_OF_RANGE", "weight_percent must be 1 to 99")
+	}
+	bake := c.GetBake().AsDuration()
+	if !c.GetBake().IsValid() || bake < minCanaryBake || bake > maxCanaryBake || bake%time.Second != 0 {
+		return nil, invalidArgument("canary.bake", "OUT_OF_RANGE", "bake must be whole seconds from 1m to 24h")
+	}
+	return &deploy.Canary{Weight: c.GetWeightPercent(), Bake: bake}, nil
+}
+
+// switchesSlots reports whether the App's current revision deploys into its other
+// slot (ADR-0035): it has routes and publishes no host port. Only such an App can have
+// a canary (ADR-0049).
+func switchesSlots(ctx context.Context, tx *store.Tx, app uuid.UUID) (bool, error) {
+	var routes, rt []byte
+	if err := tx.QueryRow(ctx, `SELECT r.routes, r.runtime FROM apps_heads a
+		JOIN apps_revisions r ON r.id = a.revision_id WHERE a.id = $1`, app).Scan(&routes, &rt); err != nil {
+		return false, fmt.Errorf("read app: %w", err)
+	}
+	var rs []json.RawMessage
+	if err := json.Unmarshal(routes, &rs); err != nil {
+		return false, fmt.Errorf("decode app routes: %w", err)
+	}
+	runtime := &bohuxv1.Runtime{}
+	if err := loadJSON.Unmarshal(rt, runtime); err != nil {
+		return false, fmt.Errorf("decode app runtime: %w", err)
+	}
+	for _, p := range runtime.GetPorts() {
+		if p.GetHostPort() != 0 {
+			return false, nil
+		}
+	}
+	return len(rs) > 0, nil
 }
 
 // Rollback deploys an earlier Release of the App (ADR-0010). With no target it picks
@@ -201,6 +258,16 @@ func (ds *deploymentService) start(ctx context.Context, r deployRequest) (*bohux
 		if _, problem := deploy.ValidateRelease(ctx, tx, app, r.release, r.env); problem != nil {
 			return connect.NewError(connect.CodeFailedPrecondition, problem)
 		}
+		if r.canary != nil {
+			ok, err := switchesSlots(ctx, tx, app)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return connect.NewError(connect.CodeFailedPrecondition, errors.New(
+					"a canary needs an app with routes and no host port, which deploys into its other slot"))
+			}
+		}
 		if r.rollbackOf != nil {
 			var ok bool
 			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM deployments_heads d
@@ -228,7 +295,8 @@ func (ds *deploymentService) start(ctx context.Context, r deployRequest) (*bohux
 	in := deploy.Input{
 		TenantID: p.Tenant.String(), DeploymentID: id.String(), AppID: app.String(),
 		EnvironmentID: r.env.String(), ReleaseID: r.release.String(), Reason: r.reason,
-		Actor: deploy.Actor{ID: actor.ID.String(), Kind: string(actor.Kind)},
+		Actor:  deploy.Actor{ID: actor.ID.String(), Kind: string(actor.Kind)},
+		Canary: r.canary,
 	}
 	if r.rollbackOf != nil {
 		in.RollbackOf = r.rollbackOf.String()
@@ -246,7 +314,7 @@ func (ds *deploymentService) start(ctx context.Context, r deployRequest) (*bohux
 	err = ds.s.Store.InTenant(ctx, p.Tenant, func(tx *store.Tx) error {
 		if err := deploy.InsertDeployment(ctx, tx, deploy.DeploymentRow{
 			ID: id, ReleaseID: r.release, EnvironmentID: r.env, RollbackOf: r.rollbackOf,
-			Reason: r.reason, WorkflowID: workflowID, RunID: runID,
+			Reason: r.reason, WorkflowID: workflowID, RunID: runID, Canary: r.canary,
 		}, actor); err != nil {
 			return err
 		}
@@ -485,6 +553,57 @@ func (ds *deploymentService) CancelDeployment(ctx context.Context, req *connect.
 	return connect.NewResponse(&bohuxv1.CancelDeploymentResponse{Deployment: d}), nil
 }
 
+// PromoteDeployment ends a canary's bake now (ADR-0049). The run assigns the Release
+// with no weight and writes the states that follow.
+func (ds *deploymentService) PromoteDeployment(ctx context.Context, req *connect.Request[bohuxv1.PromoteDeploymentRequest]) (*connect.Response[bohuxv1.PromoteDeploymentResponse], error) {
+	p, _ := auth.FromContext(ctx)
+	id, err := parseID("id", req.Msg.GetId())
+	if err != nil {
+		return nil, err
+	}
+	if req.Msg.GetIdempotencyKey() == "" {
+		return nil, invalidArgument("idempotency_key", "REQUIRED", "idempotency_key is required")
+	}
+	d, err := ds.read(ctx, id, auth.RoleDeployer)
+	if err != nil {
+		return nil, err
+	}
+	if d.GetState() != bohuxv1.DeploymentState_DEPLOYMENT_STATE_CANARY {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("only a deployment in canary can be promoted"))
+	}
+	if ds.s.Deploys == nil {
+		return nil, errNoDeploys
+	}
+	var runID string
+	err = ds.s.Store.InTenant(ctx, p.Tenant, func(tx *store.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT r.workflow_run_id FROM deployments_heads h
+			JOIN deployments_revisions r ON r.id = h.revision_id WHERE h.id = $1`, id).Scan(&runID); err != nil {
+			return fmt.Errorf("read run: %w", err)
+		}
+		env, err := uuid.Parse(d.GetEnvironmentId())
+		if err != nil {
+			return fmt.Errorf("stored environment id: %w", err)
+		}
+		project, err := environmentProject(ctx, tx, env)
+		if err != nil {
+			return err
+		}
+		return tx.AuditOnly(ctx, store.Audit{Actor: p.Actor(),
+			Action:       bohuxv1connect.DeploymentServicePromoteDeploymentProcedure,
+			ResourceType: deploymentType, ProjectID: project}, id)
+	})
+	if err != nil {
+		return nil, toConnect(ctx, err)
+	}
+	if err := ds.s.Deploys.Promote(ctx, d.GetWorkflowId(), runID); err != nil {
+		if errors.Is(err, deploy.ErrUnavailable) {
+			return nil, errNoDeploys
+		}
+		return nil, toConnect(ctx, err)
+	}
+	return connect.NewResponse(&bohuxv1.PromoteDeploymentResponse{Deployment: d}), nil
+}
+
 func terminal(s bohuxv1.DeploymentState) bool {
 	switch s {
 	case bohuxv1.DeploymentState_DEPLOYMENT_STATE_SUCCEEDED, bohuxv1.DeploymentState_DEPLOYMENT_STATE_FAILED,
@@ -495,7 +614,8 @@ func terminal(s bohuxv1.DeploymentState) bool {
 }
 
 const deploymentSelect = `SELECT ` + metaColumns + `, h.release_id, h.environment_id, h.strategy,
-	h.rollback_of, h.reason, r.state, r.workflow_id, r.started_at, r.finished_at, r.failure
+	h.rollback_of, h.reason, r.state, r.workflow_id, r.started_at, r.finished_at, r.failure,
+	h.canary_weight, h.canary_bake_seconds
 	FROM deployments_heads h JOIN deployments_revisions r ON r.id = h.revision_id`
 
 var deploymentStates = map[string]bohuxv1.DeploymentState{
@@ -504,6 +624,7 @@ var deploymentStates = map[string]bohuxv1.DeploymentState{
 	"awaiting_approval": bohuxv1.DeploymentState_DEPLOYMENT_STATE_AWAITING_APPROVAL,
 	"applying":          bohuxv1.DeploymentState_DEPLOYMENT_STATE_APPLYING,
 	"health_gate":       bohuxv1.DeploymentState_DEPLOYMENT_STATE_HEALTH_GATE,
+	"canary":            bohuxv1.DeploymentState_DEPLOYMENT_STATE_CANARY,
 	"succeeded":         bohuxv1.DeploymentState_DEPLOYMENT_STATE_SUCCEEDED,
 	"failed":            bohuxv1.DeploymentState_DEPLOYMENT_STATE_FAILED,
 	"rolled_back":       bohuxv1.DeploymentState_DEPLOYMENT_STATE_ROLLED_BACK,
@@ -527,10 +648,11 @@ func scanDeployment(row pgx.Row) (*bohuxv1.Deployment, error) {
 		rollbackOf        *uuid.UUID
 		started, finished *time.Time
 		failure           []byte
+		weight, bake      *int32
 		d                 bohuxv1.Deployment
 	)
 	if err := row.Scan(append(m.dest(), &release, &env, &strategy, &rollbackOf, &d.Reason, &state,
-		&d.WorkflowId, &started, &finished, &failure)...); err != nil {
+		&d.WorkflowId, &started, &finished, &failure, &weight, &bake)...); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
 		}
@@ -538,6 +660,11 @@ func scanDeployment(row pgx.Row) (*bohuxv1.Deployment, error) {
 	}
 	d.Meta, d.ReleaseId, d.EnvironmentId = m.proto(), release.String(), env.String()
 	d.Strategy = bohuxv1.DeploymentStrategy_DEPLOYMENT_STRATEGY_RECREATE
+	if strategy == "canary" && weight != nil && bake != nil {
+		d.Strategy = bohuxv1.DeploymentStrategy_DEPLOYMENT_STRATEGY_CANARY
+		d.Canary = &bohuxv1.Canary{WeightPercent: uint32(*weight),
+			Bake: durationpb.New(time.Duration(*bake) * time.Second)}
+	}
 	d.State, d.StartedAt, d.FinishedAt = deploymentStates[state], tsOrNil(started), tsOrNil(finished)
 	if rollbackOf != nil {
 		d.RollbackOf = rollbackOf.String()
