@@ -1,6 +1,9 @@
 # ADR-0045: Swarm provider — what it must decide before it is built
 
-- **Status:** proposed — needs the owner's answers to the questions below before code
+- **Status:** proposed — the owner answered on 2026-10-22 (O37): **a single-manager
+  swarm** for v0.3, health from the image's `HEALTHCHECK`, and Swarm Apps
+  **image-only** (no registry push credentials on agents). To be rewritten as decided
+  before the Swarm provider's code
 - **Date:** 2026-10-21
 - **Deciders:** Towheed
 
