@@ -63,7 +63,8 @@ deploy states.
    refused as one in progress; cancelling it rolls back.
 6. **Only routed Apps produce ingress numbers.** An App with an SLO but no routes is
    judged on health alone until the PromQL source exists; the API accepts the SLO and
-   the deploy says so in its log.
+   `bohux app slo` says so when it sets one on such an App (a Deployment has no log of
+   its own to say it in).
 
 ## Alternatives considered
 - **Caddy's Prometheus metrics** (`/metrics` on the admin API). Per server and per

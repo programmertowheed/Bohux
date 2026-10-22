@@ -115,6 +115,28 @@ func TestResourceCommands(t *testing.T) {
 		t.Error("removing a route the app does not have succeeded")
 	}
 
+	// The SLO deploys are judged by (ADR-0050); changing routes after keeps it.
+	must("app", "slo", "api", "-e", "prod", "--availability", "99.9", "--latency", "250ms@95", "--watch", "5m")
+	must("route", "add", "api", "slo.example.com", "-e", "prod")
+	if out := must("app", "show", "api", "-e", "prod"); !strings.Contains(out, "99.9%, 95% < 250ms, burn 10, watch 5m0s") {
+		t.Errorf("app show after app slo:\n%s", out)
+	}
+	for _, bad := range [][]string{
+		{"--latency", "300ms@95"}, {"--availability", "50"}, {"--clear", "--availability", "99"}, {"--latency", "fast"}, {},
+	} {
+		args := append([]string{"app", "slo", "api", "-e", "prod"}, bad...)
+		if len(bad) > 0 && bad[0] == "--latency" {
+			args = append(args, "--availability", "99.9")
+		}
+		if _, err := bohux("", args...); err == nil {
+			t.Errorf("app slo %v succeeded", bad)
+		}
+	}
+	must("app", "slo", "api", "-e", "prod", "--clear")
+	if out := must("app", "show", "api", "-e", "prod", "-o", "json"); strings.Contains(out, "availability_target") {
+		t.Errorf("app show after app slo --clear:\n%s", out)
+	}
+
 	if out := must("node", "list"); !strings.Contains(out, "vps-1") {
 		t.Errorf("node list:\n%s", out)
 	}

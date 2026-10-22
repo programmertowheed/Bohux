@@ -5,6 +5,7 @@ package ingress
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -81,7 +82,9 @@ func TestCaddy(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
-	c := &Caddy{AdminSocket: filepath.Join(sockDir, "admin.sock"), Dir: t.TempDir()}
+	// The access log sits beside the socket, at the same path inside and out (ADR-0050).
+	c := &Caddy{AdminSocket: filepath.Join(sockDir, "admin.sock"), Dir: t.TempDir(),
+		AccessLog: filepath.Join(sockDir, "access.log")}
 	first, err := c.Render(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -169,6 +172,39 @@ func TestCaddy(t *testing.T) {
 		if counts["canary"] < 8 || counts["canary"] > 12 || counts["hello"]+counts["canary"] != 40 {
 			t.Errorf("40 requests at weights 3:1 went %v; want about 30 and 10", counts)
 		}
+	})
+	t.Run("the access log names each request's upstream and nothing about the request", func(t *testing.T) {
+		eventually(t, "log the split's requests", func() error {
+			b, err := os.ReadFile(c.AccessLog)
+			if err != nil {
+				return err
+			}
+			if strings.Contains(string(b), "split.localhost") || strings.Contains(string(b), "172.") ||
+				strings.Contains(string(b), "127.0.0.1") {
+				t.Fatalf("the access log holds a host or an address:\n%s", b)
+			}
+			byUpstream := map[string]int{}
+			for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+				var l map[string]any
+				if err := json.Unmarshal([]byte(line), &l); err != nil {
+					return fmt.Errorf("line %q: %w", line, err)
+				}
+				for _, f := range []string{"request", "resp_headers", "user_id"} {
+					if _, ok := l[f]; ok {
+						t.Fatalf("field %s logged: %s", f, line)
+					}
+				}
+				if _, ok := l["duration"].(float64); !ok || l["status"] != float64(200) {
+					return fmt.Errorf("line without a status or duration: %s", line)
+				}
+				up, _ := l["upstream"].(string)
+				byUpstream[up]++
+			}
+			if byUpstream["canary:8080"] < 10 || byUpstream["web:8080"] < 30 {
+				return fmt.Errorf("requests by upstream %v; want at least 30 to web:8080 and 10 to canary:8080", byUpstream)
+			}
+			return nil
+		})
 	})
 	t.Run("a restarted Caddy serves from the file alone", func(t *testing.T) {
 		docker(t, "restart", name)

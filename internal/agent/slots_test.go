@@ -10,6 +10,7 @@ import (
 	"github.com/bohumix/bohux/internal/ingress"
 	"github.com/bohumix/bohux/internal/pki"
 	"github.com/bohumix/bohux/internal/provider"
+	"github.com/bohumix/bohux/internal/slo"
 )
 
 // TestSlotSwitch is ADR-0035, broken Release first (CLAUDE.md rule 5): a routed App
@@ -128,7 +129,9 @@ func TestCanarySplit(t *testing.T) {
 	}
 	fake, ing := newFake(), &fakeIngress{}
 	fake.broken = map[string]bool{"r2": true}
-	r := &Reconciler{State: st, Cache: c, Provider: fake, Ingress: ing}
+	// Each slot has served a different number of requests (ADR-0050).
+	traffic := fakeTraffic{"api:8080": 100, "api-blue:8080": 7}
+	r := &Reconciler{State: st, Cache: c, Provider: fake, Ingress: ing, Traffic: traffic}
 	base := provider.ResourceRef{Environment: "env", App: "api"}
 	slot := func(s string) provider.ResourceRef { ref := base; ref.Slot = s; return ref }
 	site := func() ingress.Site {
@@ -153,7 +156,7 @@ func TestCanarySplit(t *testing.T) {
 		return len(s.Upstreams) == 1 && s.Upstreams[0] == upstream && len(s.Weights) == 0
 	}
 
-	if ws := pass(1, "r1", 0); !ws.GetIngressLoaded() || !alone("api:8080") {
+	if ws := pass(1, "r1", 0); !ws.GetIngressLoaded() || !alone("api:8080") || ws.GetTraffic().GetRequests() != 100 {
 		t.Fatalf("first deploy: %v, site %+v", ws, site())
 	}
 	t.Run("a canary that never turns healthy never serves", func(t *testing.T) {
@@ -171,6 +174,10 @@ func TestCanarySplit(t *testing.T) {
 		if !ws.GetIngressLoaded() || ws.GetReleaseId() != "r3" ||
 			!slices.Equal(s.Upstreams, []string{"api:8080", "api-blue:8080"}) || !slices.Equal(s.Weights, []int{90, 10}) {
 			t.Errorf("canary: %v, site %+v", ws, s)
+		}
+		// The report carries the canary slot's traffic only, the Release it reports.
+		if tr := ws.GetTraffic(); tr.GetRequests() != 7 || tr.GetServerErrors() != 1 || len(tr.GetLatencyBuckets()) != 12 {
+			t.Errorf("canary traffic: %v", tr)
 		}
 		if !fake.isRunning(slot("")) || !fake.isRunning(slot("blue")) {
 			t.Error("both slots must run during a canary")
@@ -202,5 +209,24 @@ func TestCanarySplit(t *testing.T) {
 		if !ws.GetIngressLoaded() || !alone("api-blue:8080") || fake.isRunning(slot("")) {
 			t.Errorf("after promotion: %v, site %+v, live still running %v", ws, site(), fake.isRunning(slot("")))
 		}
+		if ws.GetTraffic().GetRequests() != 7 {
+			t.Errorf("after promotion, traffic %v; want the promoted slot's", ws.GetTraffic())
+		}
 	})
+}
+
+// fakeTraffic serves each endpoint's request count, one server error per endpoint
+// that served any.
+type fakeTraffic map[string]uint64
+
+func (f fakeTraffic) Counts(endpoints ...string) slo.Counts {
+	c := slo.Counts{Latency: make([]uint64, len(slo.LatencyBoundsMS)+1)}
+	for _, ep := range endpoints {
+		if n := f[ep]; n > 0 {
+			c.Requests += n
+			c.ServerErrors++
+			c.Latency[0] += n
+		}
+	}
+	return c
 }

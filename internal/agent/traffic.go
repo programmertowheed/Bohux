@@ -56,13 +56,15 @@ func (t *Traffic) Run(ctx context.Context) error {
 	}
 }
 
-// poll reads what was appended since the last call. The first open starts at the end
-// (counts are since the agent started); after Caddy rolls the file the rest of the old
+// poll reads what was appended since the last call. A file that exists when the agent
+// starts is read from its end (counts are since the agent started); after Caddy rolls the file the rest of the old
 // one is read before the new one, from its start.
 func (t *Traffic) poll() {
 	if t.f == nil {
 		f, err := os.Open(t.Path)
 		if errors.Is(err, fs.ErrNotExist) {
+			// Caddy has written nothing yet: read the file from its start once it exists.
+			t.opened = true
 			return
 		}
 		if err != nil {

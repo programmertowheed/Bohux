@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
@@ -399,5 +401,56 @@ func TestAppRoutes(t *testing.T) {
 	}
 	if _, err := create(root2, env2, "takes-deleted", route("www.example.com")); err != nil {
 		t.Fatalf("a deleted app's host: %v", err)
+	}
+}
+
+// TestAppSLO: an App's SLO (ADR-0050) is stored and read back, survives a scale, is
+// refused out of range, and is cleared by an update without one.
+func TestAppSLO(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	srv := h.server()
+	apps := bohuxv1connect.NewAppServiceClient(srv.Client(), srv.URL)
+	envs := bohuxv1connect.NewEnvironmentServiceClient(srv.Client(), srv.URL)
+	e, err := envs.CreateEnvironment(ctx, req(h.root, &bohuxv1.CreateEnvironmentRequest{
+		ProjectId: h.project("web").String(), Slug: "prod", ProviderBinding: dockerOn(h.node("vps-1")),
+		IdempotencyKey: "env"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := e.Msg.GetEnvironment().GetMeta().GetId()
+	src := &bohuxv1.Source{Kind: &bohuxv1.Source_Image{Image: &bohuxv1.ImageSource{
+		Repository: "ghcr.io/acme/api", Digest: "sha256:" + strings.Repeat("ab", 32)}}}
+	rt := &bohuxv1.Runtime{Replicas: 1, Ports: []*bohuxv1.Port{{ContainerPort: 8080}}}
+	want := &bohuxv1.SLO{AvailabilityTarget: 0.999, Latency: &bohuxv1.LatencyObjective{ThresholdMs: 250, Target: 0.95},
+		MaxBurnRate: 14.4, Watch: durationpb.New(5 * time.Minute)}
+
+	_, err = apps.CreateApp(ctx, req(h.root, &bohuxv1.CreateAppRequest{EnvironmentId: env, Slug: "bad",
+		Source: src, Runtime: rt, Slo: &bohuxv1.SLO{AvailabilityTarget: 0.5}, IdempotencyKey: "bad"}))
+	wantCode(t, err, connect.CodeInvalidArgument)
+
+	created, err := apps.CreateApp(ctx, req(h.root, &bohuxv1.CreateAppRequest{EnvironmentId: env, Slug: "api",
+		Source: src, Runtime: rt, Slo: want, IdempotencyKey: "api"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := created.Msg.GetApp().GetMeta().GetId()
+	got, err := apps.GetApp(ctx, req(h.root, &bohuxv1.GetAppRequest{Lookup: &bohuxv1.GetAppRequest_Id{Id: id}}))
+	if err != nil || !proto.Equal(got.Msg.GetApp().GetSlo(), want) {
+		t.Fatalf("read back %v, %v; want %v", got.Msg.GetApp().GetSlo(), err, want)
+	}
+	scaled, err := apps.ScaleApp(ctx, req(h.root, &bohuxv1.ScaleAppRequest{Id: id, Replicas: 2,
+		ExpectedRevisionId: got.Msg.GetApp().GetMeta().GetRevisionId(), IdempotencyKey: "scale"}))
+	if err != nil || !proto.Equal(scaled.Msg.GetApp().GetSlo(), want) {
+		t.Fatalf("after scale %v, %v; want the SLO kept", scaled.Msg.GetApp().GetSlo(), err)
+	}
+	_, err = apps.UpdateApp(ctx, req(h.root, &bohuxv1.UpdateAppRequest{Id: id, Source: src, Runtime: rt,
+		Slo:                &bohuxv1.SLO{AvailabilityTarget: 0.999, Latency: &bohuxv1.LatencyObjective{ThresholdMs: 300, Target: 0.95}},
+		ExpectedRevisionId: scaled.Msg.GetApp().GetMeta().GetRevisionId(), IdempotencyKey: "bad-latency"}))
+	wantCode(t, err, connect.CodeInvalidArgument)
+	cleared, err := apps.UpdateApp(ctx, req(h.root, &bohuxv1.UpdateAppRequest{Id: id, Source: src, Runtime: rt,
+		ExpectedRevisionId: scaled.Msg.GetApp().GetMeta().GetRevisionId(), IdempotencyKey: "clear"}))
+	if err != nil || cleared.Msg.GetApp().GetSlo() != nil {
+		t.Fatalf("after clearing %v, %v; want none", cleared.Msg.GetApp().GetSlo(), err)
 	}
 }

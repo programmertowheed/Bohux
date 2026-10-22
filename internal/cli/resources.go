@@ -630,13 +630,19 @@ func (r *resource) appSLO(ctx context.Context, args []string) error {
 			want.Watch = durationpb.New(*watch)
 		}
 	}
-	return r.updateApp(ctx, pos[0], func(a *bohuxv1.App) bool {
+	routed := true
+	err = r.updateApp(ctx, pos[0], func(a *bohuxv1.App) bool {
+		routed = len(a.GetRoutes()) > 0
 		if proto.Equal(a.GetSlo(), want) {
 			return false
 		}
 		a.Slo = want
 		return true
 	})
+	if err == nil && want != nil && !routed {
+		r.printf("%s has no routes: the ingress sees none of its traffic, so its deploys are judged by health alone\n", pos[0])
+	}
+	return err
 }
 
 // parseLatency reads THRESHOLD@PERCENT, e.g. 300ms@95.

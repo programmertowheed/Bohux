@@ -15,6 +15,7 @@ import (
 	agentv1 "github.com/bohumix/bohux/gen/bohux/agent/v1"
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/internal/agentapi"
+	"github.com/bohumix/bohux/internal/slo"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/store/fixture"
 	"github.com/bohumix/bohux/internal/store/storetest"
@@ -451,6 +452,56 @@ func TestHoldHealthy(t *testing.T) {
 	}()
 	if err := hold(400*time.Millisecond, 2*time.Second); err != nil {
 		t.Errorf("a dip within the grace = %v, want passed", err)
+	}
+}
+
+// TestHoldHealthySLO judges the Release's traffic while it is held (ADR-0050): a burst
+// of 5xx or of slow requests fails the hold with the SLO's error; too little traffic,
+// good traffic, and counters that went back (an agent restart) do not.
+func TestHoldHealthySLO(t *testing.T) {
+	h := newHarness(t)
+	app := uuid.Must(uuid.NewV7()).String()
+	counts := func(requests, errors, slow uint64) *agentv1.TrafficStats {
+		b := make([]uint64, len(slo.LatencyBoundsMS)+1)
+		b[0], b[len(b)-1] = requests-slow, slow
+		return &agentv1.TrafficStats{Requests: requests, ServerErrors: errors, LatencyBuckets: b}
+	}
+	report := func(tr *agentv1.TrafficStats) {
+		h.report(&agentv1.StatusReport{Generation: 3, Workloads: []*agentv1.WorkloadStatus{
+			{AppId: app, ReleaseId: "r2", State: agentv1.WorkloadState_WORKLOAD_STATE_HEALTHY, ReadyReplicas: 1,
+				IngressLoaded: true, Traffic: tr}}})
+	}
+	objective := &slo.Objective{Availability: 0.999, LatencyThresholdMS: 250, LatencyTarget: 0.95, MaxBurnRate: 10}
+	tests := []struct {
+		name          string
+		before, after *agentv1.TrafficStats
+		want          string
+	}{
+		{"a burst of server errors", counts(1000, 0, 0), counts(1100, 20, 0), ErrTypeSLOAvailability},
+		{"a burst of slow requests", counts(1000, 0, 0), counts(1100, 0, 100), ErrTypeSLOLatency},
+		{"too few requests for a verdict", counts(1000, 0, 0), counts(1010, 10, 10), ""},
+		{"good traffic", counts(1000, 0, 0), counts(1500, 0, 5), ""},
+		{"counters that went back start the window again", counts(1000, 0, 0), counts(60, 0, 0), ""},
+		{"no counters: health alone", nil, nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report(tt.before)
+			go func() {
+				time.Sleep(150 * time.Millisecond)
+				report(tt.after)
+			}()
+			_, err := h.env.ExecuteActivity(h.acts.HoldHealthy, HoldInput{
+				WaitInput: WaitInput{TenantID: h.tenant.String(), NodeID: h.node.String(), Generation: 3, AppID: app,
+					ReleaseID: "r2", Replicas: 1, Routed: true},
+				Until: time.Now().Add(700 * time.Millisecond), Grace: time.Second, SLO: objective})
+			if tt.want == "" && err != nil {
+				t.Errorf("HoldHealthy = %v, want passed", err)
+			}
+			if tt.want != "" && !isType(err, tt.want) {
+				t.Errorf("HoldHealthy = %v, want %s", err, tt.want)
+			}
+		})
 	}
 }
 

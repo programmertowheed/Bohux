@@ -477,12 +477,19 @@ func TestBuildThenDeploy(t *testing.T) {
 // ingress, on the latest generation, which must assign it with weight.
 func (d *deployHarness) reportServed(release string, weight uint32) {
 	d.t.Helper()
+	d.reportTraffic(release, weight, nil)
+}
+
+// reportTraffic is reportServed with the ingress counters of the Release's slot
+// (ADR-0050).
+func (d *deployHarness) reportTraffic(release string, weight uint32, traffic *agentv1.TrafficStats) {
+	d.t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		gen, w := d.latestWorkload()
 		if w.GetReleaseId() == release && w.GetCanaryWeight() == weight {
 			ws := &agentv1.WorkloadStatus{AppId: d.app, ReleaseId: release, State: healthy, ReadyReplicas: 1,
-				IngressLoaded: true}
+				IngressLoaded: true, Traffic: traffic}
 			b, err := protojson.Marshal(&agentv1.StatusReport{Generation: gen, Workloads: []*agentv1.WorkloadStatus{ws}})
 			if err != nil {
 				d.t.Fatal(err)
@@ -658,5 +665,94 @@ func TestCanaryWorkflow(t *testing.T) {
 		}); err != nil || promoted != 1 {
 			t.Errorf("audited promotions = %d, %v; want 1", promoted, err)
 		}
+	})
+}
+
+// TestSLOWorkflow runs the SLO gate on a real Temporal (ADR-0050), failing cases first
+// (rule 5): a deploy that burns its error budget while verifying rolls back, cancelling
+// one that verifies rolls back, and another deploy waits while one verifies.
+func TestSLOWorkflow(t *testing.T) {
+	ctx := context.Background()
+	d := newDeployHarness(t)
+	srv := d.server()
+	apps := bohuxv1connect.NewAppServiceClient(srv.Client(), srv.URL)
+	src := &bohuxv1.Source{Kind: &bohuxv1.Source_Image{Image: &bohuxv1.ImageSource{
+		Repository: "ghcr.io/acme/shop", Digest: "sha256:" + strings.Repeat("ef", 32)}}}
+	rt := &bohuxv1.Runtime{Replicas: 1, Ports: []*bohuxv1.Port{{ContainerPort: 8080}}}
+	routes := []*bohuxv1.Route{{Host: "shop.example.com", Port: 8080}}
+	a, err := apps.CreateApp(ctx, req(d.token, &bohuxv1.CreateAppRequest{EnvironmentId: d.env, Slug: "shop",
+		IdempotencyKey: "a-shop", Source: src, Runtime: rt, Routes: routes}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.app = a.Msg.GetApp().GetMeta().GetId()
+	traffic := func(requests, errors uint64) *agentv1.TrafficStats {
+		b := make([]uint64, 12)
+		b[0] = requests
+		return &agentv1.TrafficStats{Requests: requests, ServerErrors: errors, LatencyBuckets: b}
+	}
+
+	// Without an SLO a deploy succeeds once healthy, as before.
+	r1 := d.release("s1")
+	first, err := d.deploy(r1, "s-d1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.reportServed(r1, 0)
+	d.waitState(first.GetMeta().GetId(), bohuxv1.DeploymentState_DEPLOYMENT_STATE_SUCCEEDED)
+
+	if _, err := apps.UpdateApp(ctx, req(d.token, &bohuxv1.UpdateAppRequest{Id: d.app, Source: src, Runtime: rt,
+		Routes: routes, Slo: &bohuxv1.SLO{AvailabilityTarget: 0.999, Watch: durationpb.New(time.Hour)},
+		ExpectedRevisionId: a.Msg.GetApp().GetMeta().GetRevisionId(), IdempotencyKey: "a-shop-slo"})); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("burning the error budget while verifying rolls back", func(t *testing.T) {
+		r2 := d.release("s2")
+		dep, err := d.deploy(r2, "s-d2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.reportTraffic(r2, 0, traffic(1000, 0))
+		d.waitState(dep.GetMeta().GetId(), bohuxv1.DeploymentState_DEPLOYMENT_STATE_VERIFYING)
+		// The judge takes its baseline on its first look, whenever that is: the counters
+		// keep growing, with 15% server errors, until it reaches a verdict.
+		for i := uint64(1); ; i++ {
+			d.reportTraffic(r2, 0, traffic(1000+200*i, 30*i))
+			r, err := d.deployments.GetDeployment(ctx, req(d.token, &bohuxv1.GetDeploymentRequest{Id: dep.GetMeta().GetId()}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Msg.GetDeployment().GetState() != bohuxv1.DeploymentState_DEPLOYMENT_STATE_VERIFYING {
+				break
+			}
+			if i > 100 {
+				t.Fatal("still verifying after 20,000 requests at 15% server errors")
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		d.waitState(dep.GetMeta().GetId(), bohuxv1.DeploymentState_DEPLOYMENT_STATE_COMPENSATING)
+		d.reportServed(r1, 0)
+		got := d.waitState(dep.GetMeta().GetId(), bohuxv1.DeploymentState_DEPLOYMENT_STATE_ROLLED_BACK)
+		if got.GetFailure().GetReason() != deploy.ReasonSLOAvailability {
+			t.Errorf("rolled back with %v, want %s", got.GetFailure(), deploy.ReasonSLOAvailability)
+		}
+	})
+	t.Run("a deploy waits while another verifies; cancelling rolls back", func(t *testing.T) {
+		r3, r4 := d.release("s3"), d.release("s4")
+		dep, err := d.deploy(r3, "s-d3")
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.reportTraffic(r3, 0, traffic(10, 0))
+		d.waitState(dep.GetMeta().GetId(), bohuxv1.DeploymentState_DEPLOYMENT_STATE_VERIFYING)
+		_, err = d.deploy(r4, "s-d4")
+		wantCode(t, err, connect.CodeFailedPrecondition)
+		if _, err := d.deployments.CancelDeployment(ctx, req(d.token, &bohuxv1.CancelDeploymentRequest{
+			Id: dep.GetMeta().GetId(), IdempotencyKey: "s-x3"})); err != nil {
+			t.Fatal(err)
+		}
+		d.reportServed(r1, 0)
+		d.waitState(dep.GetMeta().GetId(), bohuxv1.DeploymentState_DEPLOYMENT_STATE_CANCELLED)
 	})
 }

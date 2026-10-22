@@ -193,6 +193,10 @@ func (c *command) watch(ctx context.Context, id string, start time.Time, last *s
 				c.printf("               %d%% of traffic for %s; end it now with `bohux deployment promote %s`, "+
 					"or abort with `bohux deployment cancel %s`\n", cn.GetWeightPercent(), cn.GetBake().AsDuration(), id, id)
 			}
+			if (*d).GetState() == bohuxv1.DeploymentState_DEPLOYMENT_STATE_VERIFYING {
+				c.printf("               judging its traffic against the App's SLO; roll back now with "+
+					"`bohux deployment cancel %s`\n", id)
+			}
 		}
 	}
 	if terminal((*d).GetState()) {

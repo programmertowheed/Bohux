@@ -555,7 +555,7 @@ func (a *Activities) HoldHealthy(ctx context.Context, in HoldInput) error {
 			unhealthySince = now
 		case now.Sub(unhealthySince) > in.Grace:
 			return temporal.NewNonRetryableApplicationError(
-				"the canary was unhealthy for longer than its grace", ErrTypeCanaryUnhealthy, nil)
+				"the Release was unhealthy for longer than its grace", ErrTypeCanaryUnhealthy, nil)
 		}
 		activity.RecordHeartbeat(ctx)
 		select {

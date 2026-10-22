@@ -108,3 +108,82 @@ func TestRenderWeights(t *testing.T) {
 		t.Error("weights that do not match the upstreams rendered")
 	}
 }
+
+// TestRenderAccessLog: with an access log, every route names its upstream in the log
+// and the log keeps no request or response headers (ADR-0050); without one, neither.
+func TestRenderAccessLog(t *testing.T) {
+	type rendered struct {
+		Logging struct {
+			Logs map[string]struct {
+				Include []string `json:"include"`
+				Exclude []string `json:"exclude"`
+				Writer  struct {
+					Output   string `json:"output"`
+					Filename string `json:"filename"`
+					RollKeep int    `json:"roll_keep"`
+				} `json:"writer"`
+				Encoder struct {
+					Format string                       `json:"format"`
+					Fields map[string]map[string]string `json:"fields"`
+				} `json:"encoder"`
+			} `json:"logs"`
+		} `json:"logging"`
+		Apps struct {
+			HTTP struct {
+				Servers map[string]struct {
+					Logs *struct {
+						DefaultLoggerName string `json:"default_logger_name"`
+					} `json:"logs"`
+					Routes []struct {
+						Handle []map[string]any `json:"handle"`
+					} `json:"routes"`
+				} `json:"servers"`
+			} `json:"http"`
+		} `json:"apps"`
+	}
+	sites := []Site{{Host: "api.example.com", Upstreams: []string{"api-blue:8080"}}}
+	for _, tt := range []struct {
+		name      string
+		accessLog string
+	}{{"with an access log", "/run/bohux-caddy/access.log"}, {"without", ""}} {
+		t.Run(tt.name, func(t *testing.T) {
+			b, err := (&Caddy{AdminSocket: "/run/bohux-caddy/admin.sock", AccessLog: tt.accessLog}).Render(sites)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var cfg rendered
+			if err := json.Unmarshal(b, &cfg); err != nil {
+				t.Fatal(err)
+			}
+			srv := cfg.Apps.HTTP.Servers["bohux"]
+			first := srv.Routes[0].Handle[0]
+			if tt.accessLog == "" {
+				if srv.Logs != nil || cfg.Logging.Logs != nil || first["handler"] != "reverse_proxy" {
+					t.Errorf("logging rendered without an access log: %s", b)
+				}
+				return
+			}
+			if first["handler"] != "log_append" || first["key"] != "upstream" ||
+				first["value"] != "{http.reverse_proxy.upstream.hostport}" ||
+				srv.Routes[0].Handle[1]["handler"] != "reverse_proxy" {
+				t.Errorf("route handlers = %+v", srv.Routes[0].Handle)
+			}
+			if srv.Logs == nil || srv.Logs.DefaultLoggerName != "bohux" {
+				t.Errorf("server logs = %+v", srv.Logs)
+			}
+			l := cfg.Logging.Logs["bohux"]
+			if l.Writer.Output != "file" || l.Writer.Filename != tt.accessLog || l.Writer.RollKeep != 1 ||
+				len(l.Include) != 1 || cfg.Logging.Logs["default"].Exclude[0] != l.Include[0] {
+				t.Errorf("access logger = %+v", cfg.Logging.Logs)
+			}
+			if l.Encoder.Format != "filter" {
+				t.Errorf("encoder = %+v", l.Encoder)
+			}
+			for _, f := range []string{"request", "resp_headers", "user_id"} {
+				if l.Encoder.Fields[f]["filter"] != "delete" {
+					t.Errorf("field %s is kept: %+v", f, l.Encoder.Fields)
+				}
+			}
+		})
+	}
+}
