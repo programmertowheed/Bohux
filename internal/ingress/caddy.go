@@ -42,6 +42,10 @@ type Caddy struct {
 	Dir string
 	// ACMEEmail is the ACME account's e-mail for automatic HTTPS; may be empty.
 	ACMEEmail string
+	// AccessLog, if set, is where Caddy writes one line per request with its upstream,
+	// status, and duration, and nothing else, for the SLO gate (ADR-0050). The same
+	// path inside Caddy's container and on the host, like AdminSocket.
+	AccessLog string
 
 	mu     sync.Mutex
 	loaded []byte // last config Caddy accepted from this process
@@ -63,6 +67,12 @@ func (c *Caddy) Render(sites []Site) ([]byte, error) {
 			ups = append(ups, map[string]string{"dial": u})
 		}
 		proxy := map[string]any{"handler": "reverse_proxy", "upstreams": ups}
+		handle := []map[string]any{proxy}
+		if c.AccessLog != "" {
+			// Names the upstream (so the slot) that served the request in its log line.
+			handle = []map[string]any{{"handler": "log_append", "key": "upstream",
+				"value": "{http.reverse_proxy.upstream.hostport}"}, proxy}
+		}
 		if len(s.Weights) > 0 {
 			if len(s.Weights) != len(s.Upstreams) {
 				return nil, fmt.Errorf("site %s has %d weights for %d upstreams", s.Host, len(s.Weights), len(s.Upstreams))
@@ -72,7 +82,7 @@ func (c *Caddy) Render(sites []Site) ([]byte, error) {
 		}
 		routes = append(routes, map[string]any{
 			"match":    []map[string]any{{"host": []string{s.Host}}},
-			"handle":   []map[string]any{proxy},
+			"handle":   handle,
 			"terminal": true,
 		})
 		if s.Host == "localhost" || strings.HasSuffix(s.Host, ".localhost") {
@@ -89,23 +99,46 @@ func (c *Caddy) Render(sites []Site) ([]byte, error) {
 			"issuers": []map[string]any{{"module": "internal"}}})
 	}
 	policies = append(policies, map[string]any{"issuers": []map[string]any{acme}})
+	server := map[string]any{"listen": []string{":443"}, "routes": routes}
 	cfg := map[string]any{
 		// Loading replaces the whole config, admin listener included: keep it on the socket.
 		// On a socket Caddy accepts only the listed Host headers; Go always sends one.
 		"admin": map[string]any{"listen": "unix/" + c.AdminSocket, "origins": []string{"localhost"}},
 		"apps": map[string]any{
-			"http": map[string]any{"servers": map[string]any{"bohux": map[string]any{
-				"listen": []string{":443"},
-				"routes": routes,
-			}}},
-			"tls": map[string]any{"automation": map[string]any{"policies": policies}},
+			"http": map[string]any{"servers": map[string]any{"bohux": server}},
+			"tls":  map[string]any{"automation": map[string]any{"policies": policies}},
 		},
+	}
+	if c.AccessLog != "" {
+		server["logs"] = map[string]any{"default_logger_name": accessLogger}
+		cfg["logging"] = accessLogging(c.AccessLog)
 	}
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("encode caddy config: %w", err)
 	}
 	return append(b, '\n'), nil
+}
+
+// accessLogger names the server's access logger: Caddy logs as http.log.access.<it>.
+const accessLogger = "bohux"
+
+// accessLogging keeps access lines out of Caddy's own output and writes them to path,
+// rolled at 10 MB with one old file kept. The filter deletes the request (its URI,
+// headers, and addresses) and the response headers, so a line holds only its time,
+// duration, status, and upstream: no URL, token, or client address (ADR-0050).
+func accessLogging(path string) map[string]any {
+	drop := map[string]any{"filter": "delete"}
+	return map[string]any{"logs": map[string]any{
+		"default": map[string]any{"exclude": []string{"http.log.access." + accessLogger}},
+		accessLogger: map[string]any{
+			"include": []string{"http.log.access." + accessLogger},
+			"writer":  map[string]any{"output": "file", "filename": path, "roll_size_mb": 10, "roll_keep": 1},
+			"encoder": map[string]any{"format": "filter", "wrap": map[string]any{"format": "json"},
+				"fields": map[string]any{"request": drop, "resp_headers": drop, "user_id": drop,
+					"bytes_read": drop, "size": drop}},
+		},
+	}}
 }
 
 // Load makes Caddy serve sites. It does nothing when this process already loaded the

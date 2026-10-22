@@ -23,6 +23,7 @@ import (
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/internal/ingress"
 	"github.com/bohumix/bohux/internal/provider"
+	"github.com/bohumix/bohux/internal/slo"
 )
 
 const (
@@ -61,6 +62,9 @@ type Reconciler struct {
 	// Usage supplies the latest resource sample for reports (ADR-0040); nil reports
 	// none.
 	Usage UsageSource
+	// Traffic counts routed workloads' requests at the ingress for the SLO gate
+	// (ADR-0050); nil reports none.
+	Traffic TrafficSource
 	// Link, if set, says whether the control plane rejects this agent. A new release
 	// healthy while it does cannot be seen healthy there (a control plane that refuses
 	// its own agent), so it does not cancel its fallback (ADR-0042). An unreachable
@@ -84,6 +88,12 @@ type UsageSource interface {
 // Ingress serves hosts from endpoints; ingress.Caddy implements it.
 type Ingress interface {
 	Load(ctx context.Context, sites []ingress.Site) error
+}
+
+// TrafficSource returns the ingress's counters for the upstreams dialled as endpoints;
+// Traffic implements it.
+type TrafficSource interface {
+	Counts(endpoints ...string) slo.Counts
 }
 
 // Latest is the most recent pass's report, or nil before the first one. It satisfies
@@ -316,7 +326,26 @@ func (r *Reconciler) serve(ctx context.Context, routed []routedWorkload, slots m
 		if rw.cut != nil {
 			r.finish(ctx, rw.cut, slots, applied)
 		}
+		r.attachTraffic(rw)
 	}
+}
+
+// attachTraffic reports the ingress's counters for the slot that runs the workload's
+// Release: its own endpoints, which during a canary are the new slot's (ADR-0050).
+func (r *Reconciler) attachTraffic(rw routedWorkload) {
+	if r.Traffic == nil || len(rw.endpoints) == 0 {
+		return
+	}
+	seen := map[string]bool{}
+	var eps []string
+	for _, ep := range rw.endpoints {
+		if !seen[ep] {
+			seen[ep] = true
+			eps = append(eps, ep)
+		}
+	}
+	c := r.Traffic.Counts(eps...)
+	rw.ws.Traffic = &agentv1.TrafficStats{Requests: c.Requests, ServerErrors: c.ServerErrors, LatencyBuckets: c.Latency}
 }
 
 // attachUsage adds the latest sample to the report: the node's, and each workload's

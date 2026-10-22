@@ -195,9 +195,15 @@ func runAgent(ctx context.Context, cfg agentConfig) error {
 	sampler := &agent.Sampler{Paths: disk.Paths, Provider: p}
 	link := &agent.Link{}
 	rec := &agent.Reconciler{State: st, Cache: cache, Provider: p, Extra: extra, Usage: sampler, Link: link}
+	var traffic *agent.Traffic
 	if cfg.IngressSocket != "" {
+		// The access log sits beside the admin socket, in the directory Caddy and the
+		// agent share at the same path (ADR-0050).
+		accessLog := filepath.Join(filepath.Dir(cfg.IngressSocket), "access.log")
 		rec.Ingress = &ingress.Caddy{AdminSocket: cfg.IngressSocket, ACMEEmail: cfg.ACMEEmail,
-			Dir: filepath.Join(stateDir, "ingress")}
+			Dir: filepath.Join(stateDir, "ingress"), AccessLog: accessLog}
+		traffic = &agent.Traffic{Path: accessLog}
+		rec.Traffic = traffic
 	}
 	opts := agent.RunOptions{State: st, Cache: cache, Reports: rec, Disk: disk, Link: link,
 		Providers: descriptors,
@@ -209,6 +215,9 @@ func runAgent(ctx context.Context, cfg agentConfig) error {
 		func(ctx context.Context) error { return agent.Run(ctx, opts) },
 		disk.Run,
 		sampler.Run,
+	}
+	if traffic != nil {
+		tasks = append(tasks, traffic.Run)
 	}
 	if images, ok := p.(provider.ImageStore); ok {
 		tasks = append(tasks, (&agent.Retention{Images: images, Cache: cache}).Run)
