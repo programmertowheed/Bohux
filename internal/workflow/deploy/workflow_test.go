@@ -39,6 +39,7 @@ type script struct {
 func (s *script) register(env *testsuite.TestWorkflowEnvironment) {
 	var a *Activities
 	env.RegisterActivity(&Activities{})
+	env.RegisterWorkflow(NotifyWorkflow)
 	env.OnActivity(a.RecordStart, mock.Anything, mock.Anything).Return(
 		func(context.Context, Input) (bool, error) { return s.building, s.recordErr })
 	env.OnActivity(a.WaitReleaseReady, mock.Anything, mock.Anything).Return(

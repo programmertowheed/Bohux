@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
@@ -30,24 +31,54 @@ type NotifyInput struct {
 	StartedBy    string
 }
 
-// notifyEnd posts the run's outcome to its project's channels: one activity lists
-// them, one per channel posts, each retried on its own. A notification never changes
-// the outcome, so every error ends here (ADR-0038 item 3).
+// NotifyWorkflowID names the notification run of one Deployment (ADR-0048).
+func NotifyWorkflowID(deploymentID string) string { return "notify/" + deploymentID }
+
+// notifyEnd hands the run's outcome to its own notification workflow, abandoned when
+// this run ends, so the App is free for its next deploy while channels are retried
+// (ADR-0048). Runs started before that change notify inline, as they did.
 func (d *run) notifyEnd(ctx workflow.Context, res Result) {
 	if workflow.GetVersion(ctx, "notify-channels", workflow.DefaultVersion, 1) != 1 {
 		return
 	}
 	dctx, _ := workflow.NewDisconnectedContext(ctx)
-	log := workflow.GetLogger(dctx)
-	var a *Activities
 	in := NotifyInput{TenantID: d.in.TenantID, DeploymentID: d.in.DeploymentID, State: res.State,
 		Failure: res.Failure, StartedBy: d.in.Actor.Kind}
+	if workflow.GetVersion(ctx, "notify-child", workflow.DefaultVersion, 1) != 1 {
+		notifyChannels(dctx, in)
+		return
+	}
+	cctx := workflow.WithChildOptions(dctx, workflow.ChildWorkflowOptions{
+		WorkflowID:            NotifyWorkflowID(d.in.DeploymentID),
+		ParentClosePolicy:     enumspb.PARENT_CLOSE_POLICY_ABANDON,
+		WorkflowIDReusePolicy: enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+	})
+	// Waiting for the start records it before this run completes; the child's own
+	// end is never waited for.
+	child := workflow.ExecuteChildWorkflow(cctx, NotifyWorkflow, in)
+	if err := child.GetChildWorkflowExecution().Get(cctx, nil); err != nil {
+		workflow.GetLogger(dctx).Warn("start notification run", "error", err)
+	}
+}
+
+// NotifyWorkflow posts one Deployment's outcome to its project's channels (ADR-0038,
+// ADR-0048). It always succeeds: a notification never changes the outcome.
+func NotifyWorkflow(ctx workflow.Context, in NotifyInput) error {
+	notifyChannels(ctx, in)
+	return nil
+}
+
+// notifyChannels lists the channels that want the state, then posts to each, every
+// one retried on its own; every error ends here (ADR-0038 item 3).
+func notifyChannels(ctx workflow.Context, in NotifyInput) {
+	log := workflow.GetLogger(ctx)
+	var a *Activities
 	var channels []string
-	if err := workflow.ExecuteActivity(storeCtx(dctx), a.NotificationChannels, in).Get(dctx, &channels); err != nil {
+	if err := workflow.ExecuteActivity(storeCtx(ctx), a.NotificationChannels, in).Get(ctx, &channels); err != nil {
 		log.Warn("list notification channels", "error", err)
 		return
 	}
-	send := workflow.WithActivityOptions(dctx, workflow.ActivityOptions{
+	send := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 30 * time.Second,
 		RetryPolicy: &temporal.RetryPolicy{InitialInterval: 5 * time.Second, BackoffCoefficient: 2,
 			MaximumAttempts: 5},
@@ -59,7 +90,7 @@ func (d *run) notifyEnd(ctx workflow.Context, res Result) {
 		futures[i] = workflow.ExecuteActivity(send, a.NotifyChannel, c)
 	}
 	for i, f := range futures {
-		if err := f.Get(dctx, nil); err != nil {
+		if err := f.Get(ctx, nil); err != nil {
 			log.Warn("notification not delivered", "channel", channels[i], "error", err)
 		}
 	}
