@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync/atomic"
@@ -168,6 +169,13 @@ func session(ctx context.Context, client agentv1connect.AgentServiceClient, o Ru
 		Providers:         o.Providers,
 		AppliedGeneration: o.Cache.Generation(),
 	}}}); err != nil {
+		if errors.Is(err, io.EOF) {
+			// The control plane ended the stream first; its reason is on the receive
+			// side.
+			if _, rerr := stream.Receive(); rerr != nil {
+				err = rerr
+			}
+		}
 		return fmt.Errorf("send hello: %w", err)
 	}
 

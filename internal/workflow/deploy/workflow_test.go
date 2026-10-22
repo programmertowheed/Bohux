@@ -320,6 +320,7 @@ func TestCancelBeforeAssign(t *testing.T) {
 	s := script{last: goodRelease}
 	var a *Activities
 	env.RegisterActivity(&Activities{})
+	env.RegisterWorkflow(NotifyWorkflow)
 	starts := 0
 	env.OnActivity(a.RecordStart, mock.Anything, mock.Anything).After(time.Hour).Return(
 		func(context.Context, Input) (bool, error) { starts++; return false, nil })

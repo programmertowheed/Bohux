@@ -11,6 +11,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
+	"io"
 	"net/http"
 	"testing"
 	"time"
@@ -94,9 +96,10 @@ func (h *harness) waitState(node, want string) {
 // open sends Hello and returns the stream and its first response (or error).
 func open(ctx context.Context, c agentv1connect.AgentServiceClient, first *agentv1.ConnectRequest) (*connect.BidiStreamForClient[agentv1.ConnectRequest, agentv1.ConnectResponse], *agentv1.ConnectResponse, error) {
 	stream := c.Connect(ctx)
-	if err := stream.Send(first); err != nil {
+	if err := stream.Send(first); err != nil && !errors.Is(err, io.EOF) {
 		return stream, nil, err
 	}
+	// io.EOF from Send means the server ended the stream; Receive returns why.
 	msg, err := stream.Receive()
 	return stream, msg, err
 }
