@@ -38,17 +38,17 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S25 — canary deploys (v0.3, ADR-0049) done, after S21–S24. v0.2 is done
-  except the items O35 lists.
+- **Slice:** S26 — SLO gate and automatic rollback (v0.3, ADR-0050) done, after
+  S21–S25. v0.2 is done except the items O35 lists.
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
 - **Exact next step:** every remaining roadmap item needs an owner decision. Ask the
   owner to pick the next slice: v0.2's O35 (managed Postgres/Redis, envelope
-  encryption, team invites) or a v0.3 item (preview environments, OTEL/SLO health gate
-  and automatic rollback — it would judge canaries too, migrations as a gated step,
-  scheduled restore drills, cron jobs, Compose apps, volumes and S3 backups), or
+  encryption, team invites) or a v0.3 item (the SLO gate's optional PromQL source with
+  OTEL correlation and deploy markers, preview environments, migrations as a gated
+  step, scheduled restore drills, cron jobs, Compose apps, volumes and S3 backups), or
   hardening: a Swarm end-to-end test, CI via a PR (O24). Review the proposed ADRs
-  (O19–O42).
+  (O19–O43).
 
 ## Next session prompt
 
@@ -106,6 +106,7 @@ work is in right now*.
 | O40 | Accept or reject ADR-0045 as rewritten (Swarm provider: the node's own dockerd as a one-node swarm manager; one stack per workload with `stack.yaml` + 0600 `secrets.env`; health checks inside each task's network namespace; `dnsrr` endpoints on an attachable `bohux-ingress` overlay; live-restore waived on a manager; the agent runs Swarm beside Docker and records each workload's provider) | S21 |
 | O41 | Accept or reject ADR-0048 (a Deployment's notifications run in their own `notify/<deployment id>` workflow, a child abandoned when the deploy run ends, so the App is free at once; runs from before keep notifying inline behind a version gate; recorded histories replayed in a unit test). Amends ADR-0038 item 3 | S24 |
 | O42 | Accept or reject ADR-0049 (canary deploys: strategy CANARY with one weight 1–99% and a bake 1m–24h per deployment; the weight rides on the workload outside the spec hash; Caddy weighted round robin across the two slots; the workflow's CANARY state watches health with a 30 s grace, then promotes by reassigning with weight 0; PromoteDeployment ends the bake, CancelDeployment aborts). Changes deployment.proto and agent.proto; migration 00024 | S25 |
+| O43 | Accept or reject ADR-0050 (SLO gate: Caddy writes an access log beside its admin socket with only upstream, status and duration; the agent tails it and reports per-slot counters in memory; `App.slo` = availability 0.9–0.99999, optional latency threshold (a histogram bound) and target, max burn rate (default 10), watch 1m–1h (default 10m); burn rate over the window since the hold began, no verdict under 50 requests; judged during a canary's bake and, otherwise, in a new `VERIFYING` state; violations roll back with `SLO_AVAILABILITY`/`SLO_LATENCY`). Item 6 amended while proposed: the CLI, not a deploy log, says an unrouted App is judged by health alone. Changes app.proto, agent.proto, deployment.proto; migration 00025 | S26 |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -1158,6 +1159,45 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 
 ## v0.3 slices
 
+### S26 — SLO gate and automatic rollback from ingress traffic (ADR-0050) ✅
+- [x] Owner chose: metrics from the node's ingress (PromQL optional, later), an SLO as
+      a target with a burn-rate threshold, judged during a canary's bake and a watch
+      window after other deploys. Proposed ADR-0050 (O43)
+- [x] Proto: `App.slo` (`SLO`, `LatencyObjective`), `WorkloadStatus.traffic`
+      (`TrafficStats`), `DEPLOYMENT_STATE_VERIFYING`. Migration 00025 (the slo column,
+      the state)
+- [x] `internal/slo`: fixed latency buckets, the window over cumulative counters (a
+      counter going back restarts it), the burn-rate verdict with a 50-request floor
+- [x] Ingress: with `Caddy.AccessLog`, each route starts with `log_append upstream`
+      and a file logger (roll 10 MB, keep 1) whose filter encoder deletes the request,
+      response headers and user; the agent's log sits beside the admin socket
+- [x] Agent: `Traffic` tails the log (starts at the end of a file present at start,
+      reads a later file from its start, survives rolls and truncation, keeps partial
+      lines), counts per upstream in memory; the reconciler reports the counters of the
+      slot running each routed workload's Release
+- [x] API: SLO validated, stored, returned, kept by scale and every App update path;
+      the deploy run gets it from the App's current revision
+- [x] Workflow: `HoldHealthy` judges the traffic with the objective (non-retryable
+      `SLO_AVAILABILITY`/`SLO_LATENCY`); a canary's bake uses it; other deploys hold in
+      `VERIFYING` for the watch window; failures compensate. No version gate: only runs
+      with an SLO take the new path (replay test passes)
+- [x] CLI `bohux app slo` (`--availability --latency 250ms@95 --burn --watch | --clear`,
+      warns for an App without routes), SLO column in `app show`, follow explains
+      VERIFYING; CLI and UI updates keep the SLO; UI shows it on the App page
+- [x] Tests: verdicts (unit), workflow SLO gate (6 cases), tailer, render, real Caddy
+      2.8.4 writing only upstream/status/duration, reconciler per-slot counters during
+      a canary and after promotion, validation (unit + Postgres), CLI, `HoldHealthy` on
+      Postgres (6 cases), a deploy rolled back by its SLO and a verifying deploy
+      blocking another and cancelled, on real Temporal
+- [x] Live on the test install upgraded to this branch: the access log held only the
+      three fields; the report carried hello's counters; a release whose
+      `/cgi-bin/boom` returns 500 (health still green) was rolled back from
+      `verifying` with `SLO_AVAILABILITY` about 8 s into the watch, under 80 failing
+      requests
+- [ ] Not done: the optional PromQL source (its own ADR), OTEL correlation and deploy
+      markers; the App page's SLO line not looked at in a browser (typechecked and
+      unit-tested only)
+
 ### S25 — Canary deploys through Caddy weights (ADR-0049) ✅
 - [x] Owner chose canary, promoted automatically after a bake (with promote and abort),
       one step, per deployment. Proposed ADR-0049 (O42)
@@ -1364,6 +1404,15 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   1.24–1.26). Raising the `go` directive is cheap and its own commit when wanted.
 
 ## Session log (newest first)
+
+### 2026-10-22 (S26) — branch `claude/relaxed-rubin-76m7dl`
+- Owner picked the SLO gate (ingress metrics, target + burn rate, canary bake + watch
+  window). ADR-0050 proposed (O43), item 6 amended (no deployment log exists). Tests
+  found the tailer skipping the first lines of a log created after the agent started;
+  fixed. Checked live: a 5xx-returning release rolled back with `SLO_AVAILABILITY`.
+- Verified: build, vet, golangci-lint (plain, integration, integration+e2e), macOS
+  build, unit with race, full integration suite, e2e (see the result below), web
+  typecheck/tests/build. No provider changed, so no conformance run.
 
 ### 2026-10-22 (S25) — branch `claude/relaxed-rubin-76m7dl`
 - Owner picked canary deploys (auto-promote after a bake, one step, per deployment).

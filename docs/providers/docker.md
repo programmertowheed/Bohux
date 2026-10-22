@@ -77,9 +77,36 @@ bohux deployment cancel <deployment id>             # abort: the live release ta
 Once the new slot is healthy, Caddy splits requests by weighted round robin between the
 two slots (per request, not per user) and the Deployment is in `canary`. If the new
 Release stays unhealthy for 30 seconds during the bake, the deploy rolls back as a failed
-health gate does; when the bake ends it is promoted and the old slot goes. Health is the
-only judge for now. Apps with a host port cannot have a canary (two copies cannot hold
-the port).
+health gate does; when the bake ends it is promoted and the old slot goes. With an SLO
+(below) its traffic is judged too. Apps with a host port cannot have a canary (two copies
+cannot hold the port).
+
+## SLO gate (ADR-0050)
+
+An App can carry an SLO; its deploys are then judged by their real traffic as well as
+their health, and rolled back when they burn the error budget too fast:
+
+```sh
+bohux app slo api -e prod --availability 99.9 --latency 250ms@95 --watch 10m
+bohux app slo api -e prod --clear
+```
+
+- **Where the numbers come from:** the node's Caddy writes one line per request to
+  `access.log` beside its admin socket, with only the upstream (the slot), the status
+  and the duration; the request, its headers, addresses and the response headers are
+  filtered out. The file rolls at 10 MB with one old file kept. The agent tails it,
+  counts per slot in memory, and sends the counters of the slot that runs each
+  workload's Release in its status reports. Nothing is stored.
+- **The verdict:** burn rate = the share of bad requests (5xx; or slower than the
+  latency threshold, one of 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000 ms)
+  ÷ the share the target allows. Above `--burn` (default 10) with at least 50 requests
+  in the window, the deploy rolls back with reason `SLO_AVAILABILITY` or `SLO_LATENCY`.
+  With fewer requests there is no verdict and health decides.
+- **When:** during a canary's bake; otherwise the Deployment stays `verifying` for the
+  watch window (1m to 1h, default 10m) after it is healthy, and another deploy of the
+  App waits. `bohux deployment cancel` rolls it back.
+- Only requests through the ingress count: an App without routes is judged by health
+  alone, and errors returned as 2xx are invisible.
 
 ## Builds (ADR-0028)
 

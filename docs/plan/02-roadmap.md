@@ -57,8 +57,11 @@ rule.** Scope is fixed by ADR-0011, extended by ADR-0020.
 ## v0.3 — The reason to choose this (weeks 21–30)
 - [ ] Preview environments per PR, with seeded data
 - [x] Blue/green and canary via Caddy weighted upstreams (ADR-0019) — blue/green S10f (ADR-0035), canary S25 (ADR-0049)
-- [ ] OTEL correlation, deploy markers, SLO burn-rate health gate
-- [ ] Automatic rollback on SLO violation
+- [ ] OTEL correlation, deploy markers, SLO burn-rate health gate — the gate done in S26
+      from ingress traffic (ADR-0050); OTEL correlation, deploy markers and the optional
+      PromQL source still open
+- [x] Automatic rollback on SLO violation — S26 (ADR-0050), during a canary's bake or a
+      watch window after the deploy
 - [ ] Schema migrations as a gated workflow step
 - [ ] **Scheduled automated restore drills** — a backup you have not restored is a feeling
 - [x] Second provider (Swarm) — proves the boundary is real (S21, single-manager swarm; ADR-0045)
