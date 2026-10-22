@@ -1,4 +1,5 @@
-import { bytes, enumName, short } from "./format";
+import { buildName, bytes, enumName, short } from "./format";
+import { BuildStrategy } from "./gen/bohux/v1/app_pb";
 
 test("enum names read like the CLI's", () => {
   expect(enumName("DEPLOYMENT_STATE_", "DEPLOYMENT_STATE_ROLLED_BACK")).toBe("rolled back");
@@ -12,4 +13,10 @@ test("short IDs are the last eight characters", () => {
 test("byte counts read like the CLI's", () => {
   expect(bytes(64n * 2n ** 20n)).toBe("64MiB");
   expect(bytes(3 * 2 ** 29)).toBe("1.5GiB");
+});
+
+test("build strategies read as sentences", () => {
+  expect(buildName(BuildStrategy.UNSPECIFIED)).toBe("its Dockerfile, or Railpack if it has none");
+  expect(buildName(BuildStrategy.RAILPACK)).toBe("Railpack");
+  expect(buildName(BuildStrategy.DOCKERFILE)).toBe("its Dockerfile");
 });

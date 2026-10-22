@@ -280,6 +280,8 @@ message BuildRequest {
   bohux.v1.SecretRef ssh_key = 6;
   // SecretValues with ssh_key, sealed to the node's key; set by the relay alone.
   bytes sealed_secrets = 7;
+  // The App's strategy; UNSPECIFIED means auto, decided after the fetch (ADR-0047).
+  bohux.v1.BuildStrategy strategy = 8;
 }
 
 // Agent → control plane: how a build ended.
@@ -291,4 +293,7 @@ message BuildResult {
   string commit = 3;
   // Set when the build failed, e.g. DISK_PRESSURE, SOURCE_FETCH_FAILED, BUILD_FAILED.
   bohux.v1.ErrorDetail failure = 4;
+  // The builder used: DOCKERFILE or RAILPACK. Unset when the build failed before one
+  // was chosen.
+  bohux.v1.BuildStrategy strategy = 5;
 }

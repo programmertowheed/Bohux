@@ -9,7 +9,7 @@ import { ReleaseService, ReleaseState } from "../gen/bohux/v1/release_pb";
 import { DeploymentService, DeploymentState } from "../gen/bohux/v1/deployment_pb";
 import { SecretService } from "../gen/bohux/v1/secret_pb";
 import { Failed, Loading, Table } from "../components/Table";
-import { enumName, short, when } from "../format";
+import { buildName, enumName, short, when } from "../format";
 import { Webhooks } from "../components/Hooks";
 
 function key(): string {
@@ -40,6 +40,11 @@ export function AppPage() {
   return (
     <section className="space-y-8">
       <h1 className="text-xl font-semibold">{project} / {env} / {app}</h1>
+      {a.data.app.source?.kind.case === "git" && (
+        <p className="text-sm text-muted">
+          Built from {a.data.app.source.kind.value.repoUrl} with {buildName(a.data.app.source.kind.value.strategy)}
+        </p>
+      )}
       <div>
         <h2 className="mb-2 font-semibold">Releases</h2>
         <Table

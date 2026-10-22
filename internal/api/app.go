@@ -153,6 +153,9 @@ func validSource(src *bohuxv1.Source) error {
 			return invalidArgument("source.git.ssh_key_secret", "INVALID",
 				"a deploy key needs an ssh:// or user@host:path repository URL")
 		}
+		if _, ok := bohuxv1.BuildStrategy_name[int32(k.Git.GetStrategy())]; !ok {
+			return invalidArgument("source.git.strategy", "INVALID", "strategy must be unspecified (auto), DOCKERFILE, or RAILPACK")
+		}
 	case *bohuxv1.Source_Image:
 		if k.Image.GetRepository() == "" {
 			return invalidArgument("source.image.repository", "REQUIRED", "repository is required")

@@ -77,12 +77,16 @@ message ImageSource {
   string digest = 2 [(google.api.field_behavior) = REQUIRED];
 }
 
-// v0.1 builds Dockerfiles only (ADR-0011 item 7). Other strategies are added as values
-// here when they ship.
+// How a Git source is built (ADR-0011 item 7, ADR-0047).
 enum BuildStrategy {
-  // Server default: DOCKERFILE.
+  // Auto: the Dockerfile at the build context's root if there is one, otherwise
+  // Railpack.
   BUILD_STRATEGY_UNSPECIFIED = 0;
+  // Always the Dockerfile; a missing one fails the build.
   BUILD_STRATEGY_DOCKERFILE = 1;
+  // Always Railpack, which detects the language and framework, even when a Dockerfile
+  // exists.
+  BUILD_STRATEGY_RAILPACK = 2;
 }
 
 message Runtime {

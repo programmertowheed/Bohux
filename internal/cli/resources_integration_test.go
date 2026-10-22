@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -161,6 +162,17 @@ func TestResourceCommands(t *testing.T) {
 	}
 
 	must("app", "create", "site", "-e", "prod", "--git", "https://example.com/acme/site.git", "--port", "8080")
+	// The build strategy (ADR-0047): auto unless --build says otherwise.
+	if out := must("app", "show", "site", "-e", "prod"); !strings.Contains(out, "BUILD") || !strings.Contains(out, "auto") {
+		t.Errorf("app show of a git app without --build:\n%s", out)
+	}
+	must("app", "create", "rp", "-e", "prod", "--git", "https://example.com/acme/rp.git", "--build", "railpack")
+	if out := must("app", "show", "rp", "-e", "prod", "-o", "json"); !strings.Contains(out, "BUILD_STRATEGY_RAILPACK") {
+		t.Errorf("app show of a railpack app:\n%s", out)
+	}
+	if _, err := bohux("", "app", "create", "bad", "-e", "prod", "--git", "https://example.com/x.git", "--build", "pack"); !errors.Is(err, ErrUsage) {
+		t.Errorf("--build pack = %v, want a usage error", err)
+	}
 
 	// A Git deploy key, also an environment secret (ADR-0041).
 	if _, err := bohux("-----BEGIN OPENSSH PRIVATE KEY-----\nc2VrcmV0LWtleQ==\n-----END OPENSSH PRIVATE KEY-----\n",

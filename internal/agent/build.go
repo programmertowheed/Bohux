@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -25,7 +26,24 @@ const (
 	BuildFetchFailed  = "SOURCE_FETCH_FAILED"
 	BuildFailed       = "BUILD_FAILED"
 	BuildNoBuilder    = "BUILDER_UNAVAILABLE"
+	// BuildPlanFailed: Railpack could not tell how to build the source (ADR-0047).
+	BuildPlanFailed = "BUILD_PLAN_FAILED"
 )
+
+// RailpackImage is Railpack's BuildKit frontend, pinned by digest (ADR-0047). Its
+// /railpack binary writes the build plan and the same image builds it, so the plan and
+// the frontend are always one version. Upgrading Railpack is changing this line.
+const RailpackImage = "ghcr.io/railwayapp/railpack-frontend:v0.43.0@sha256:355ef61fae6f2551103cd8b10c710cb07167dd353d561f15c69b8d7ac1c676cc"
+
+// Limits of the container that plans a Railpack build.
+const (
+	railpackMemory = "512m"
+	railpackPids   = "256"
+)
+
+// proxyVars are passed from the agent's environment to the planning container, which
+// needs the internet to resolve package versions.
+var proxyVars = []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"}
 
 // BuilderName is the buildx builder the agent builds with. An operator may create it
 // beforehand with their own options (proxies, mirrors, limits); the agent then uses it
@@ -64,6 +82,12 @@ type Builder struct {
 	}
 	// SSH is the ssh client git fetches with; empty means "ssh" on PATH.
 	SSH string
+	// Railpack is the Railpack frontend image; empty means RailpackImage. Tests use a
+	// local copy.
+	Railpack string
+	// RailpackNetwork is the planning container's network; empty means Docker's
+	// default bridge.
+	RailpackNetwork string
 
 	mu      sync.Mutex
 	results map[string]*agentv1.BuildResult
@@ -91,8 +115,10 @@ func (b *Builder) Build(ctx context.Context, req *agentv1.BuildRequest) *agentv1
 }
 
 func (b *Builder) build(ctx context.Context, req *agentv1.BuildRequest) *agentv1.BuildResult {
+	var strategy bohuxv1.BuildStrategy // unset until chosen
 	fail := func(reason string) *agentv1.BuildResult {
-		return &agentv1.BuildResult{ReleaseId: req.GetReleaseId(), Failure: &bohuxv1.ErrorDetail{Reason: reason}}
+		return &agentv1.BuildResult{ReleaseId: req.GetReleaseId(), Failure: &bohuxv1.ErrorDetail{Reason: reason},
+			Strategy: strategy}
 	}
 	if b.Disk != nil {
 		if degraded, _ := b.Disk.Degraded(); degraded {
@@ -150,13 +176,31 @@ func (b *Builder) build(ctx context.Context, req *agentv1.BuildRequest) *agentv1
 		slog.ErrorContext(ctx, "buildx builder", "err", err)
 		return fail(BuildNoBuilder)
 	}
+	contextDir := filepath.Join(dir, sub)
+	strategy = chooseStrategy(req.GetStrategy(), contextDir)
 	args := []string{"buildx", "build", "--builder", BuilderName, "--load", "-q",
 		"--label", "io.bohux.app=" + req.GetAppId(), "--label", "io.bohux.release=" + req.GetReleaseId()}
-	if keyFile != "" {
-		// For RUN --mount=type=ssh steps that fetch private dependencies.
-		args = append(args, "--ssh", "default="+keyFile)
+	switch strategy {
+	case bohuxv1.BuildStrategy_BUILD_STRATEGY_RAILPACK:
+		planDir, err := os.MkdirTemp(b.WorkDir, "plan-")
+		if err != nil {
+			slog.ErrorContext(ctx, "railpack plan dir", "err", err)
+			return fail(BuildFailed)
+		}
+		defer func() { _ = os.RemoveAll(planDir) }()
+		if reason := b.prepare(ctx, req.GetReleaseId(), contextDir, planDir); reason != "" {
+			return fail(reason)
+		}
+		// The cache key keeps one App's package caches from another's (ADR-0047).
+		args = append(args, "--build-arg", "BUILDKIT_SYNTAX="+b.railpackImage(),
+			"--build-arg", "cache-key="+req.GetAppId(), "-f", filepath.Join(planDir, "railpack-plan.json"))
+	default:
+		if keyFile != "" {
+			// For RUN --mount=type=ssh steps that fetch private dependencies.
+			args = append(args, "--ssh", "default="+keyFile)
+		}
 	}
-	out, err := b.run(ctx, nil, "docker", append(args, filepath.Join(dir, sub))...)
+	out, err := b.run(ctx, nil, "docker", append(args, contextDir)...)
 	if err != nil {
 		slog.WarnContext(ctx, "docker buildx build", "release", req.GetReleaseId(), "err", err)
 		return fail(BuildFailed)
@@ -166,7 +210,98 @@ func (b *Builder) build(ctx context.Context, req *agentv1.BuildRequest) *agentv1
 		slog.WarnContext(ctx, "docker buildx build printed no image ID", "release", req.GetReleaseId())
 		return fail(BuildFailed)
 	}
-	return &agentv1.BuildResult{ReleaseId: req.GetReleaseId(), ImageId: id, Commit: commit}
+	return &agentv1.BuildResult{ReleaseId: req.GetReleaseId(), ImageId: id, Commit: commit, Strategy: strategy}
+}
+
+// chooseStrategy resolves auto: the Dockerfile at the context's root if there is one,
+// otherwise Railpack (ADR-0047).
+func chooseStrategy(asked bohuxv1.BuildStrategy, contextDir string) bohuxv1.BuildStrategy {
+	if asked != bohuxv1.BuildStrategy_BUILD_STRATEGY_UNSPECIFIED {
+		return asked
+	}
+	if st, err := os.Stat(filepath.Join(contextDir, "Dockerfile")); err == nil && st.Mode().IsRegular() {
+		return bohuxv1.BuildStrategy_BUILD_STRATEGY_DOCKERFILE
+	}
+	return bohuxv1.BuildStrategy_BUILD_STRATEGY_RAILPACK
+}
+
+func (b *Builder) railpackImage() string {
+	if b.Railpack != "" {
+		return b.Railpack
+	}
+	return RailpackImage
+}
+
+// prepare writes Railpack's build plan for the checkout into planDir. It runs in a
+// throwaway container that sees the checkout read-only and planDir, with no
+// capabilities, so nothing from the repository runs on the host (ADR-0047). It returns
+// a failure reason, empty on success.
+func (b *Builder) prepare(ctx context.Context, release, contextDir, planDir string) string {
+	args := []string{"run", "--rm", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+		"--memory", railpackMemory, "--pids-limit", railpackPids,
+		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "-e", "HOME=/tmp",
+		"-v", contextDir + ":/app:ro", "-v", planDir + ":/out", "--entrypoint", "/railpack"}
+	if b.RailpackNetwork != "" {
+		args = append(args, "--network", b.RailpackNetwork)
+	}
+	env := append(os.Environ(), b.Env...)
+	for _, v := range proxyVars {
+		if hasEnv(env, v) {
+			args = append(args, "-e", v) // the value comes from docker's own environment
+		}
+	}
+	args = append(args, b.railpackImage(), "prepare", "/app",
+		"--plan-out", "/out/railpack-plan.json", "--info-out", "/out/railpack-info.json")
+	_, err := b.run(ctx, nil, "docker", args...)
+	if err == nil {
+		return ""
+	}
+	log := slog.With("release", release)
+	for _, msg := range railpackErrors(filepath.Join(planDir, "railpack-info.json")) {
+		log.WarnContext(ctx, "railpack", "error", msg)
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		// Railpack's "this app cannot be planned"; 75 is its transient failure.
+		log.WarnContext(ctx, "railpack prepare: no build plan", "err", err)
+		return BuildPlanFailed
+	}
+	log.WarnContext(ctx, "railpack prepare", "err", err)
+	return BuildFailed
+}
+
+func hasEnv(env []string, name string) bool {
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k == name && v != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// railpackErrors reads the error messages from Railpack's info file, which it writes
+// even when planning fails.
+func railpackErrors(path string) []string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var info struct {
+		Logs []struct {
+			Level string `json:"Level"`
+			Msg   string `json:"Msg"`
+		} `json:"logs"`
+	}
+	if json.Unmarshal(b, &info) != nil {
+		return nil
+	}
+	var out []string
+	for _, l := range info.Logs {
+		if l.Level == "error" {
+			out = append(out, l.Msg)
+		}
+	}
+	return out
 }
 
 // deployKey opens the build's sealed deploy key, empty when it has none.

@@ -75,6 +75,21 @@ a registry mirror, a CA, or other limits, create the builder yourself first, e.g
 builder as it is. Builds are refused while the node reports disk pressure.
 `bohux agent register` refuses a node without the buildx plugin.
 
+**Without a Dockerfile: Railpack (ADR-0047).** A Git App builds its `Dockerfile` (at the
+root of its subpath) when it has one and otherwise lets
+[Railpack](https://railpack.com) detect the language and build it. `--build dockerfile`
+or `--build railpack` on `bohux app create` forces one or the other. The agent runs
+`railpack prepare` in a throwaway container from the pinned image
+`ghcr.io/railwayapp/railpack-frontend:v0.43.0` (checkout read-only, no capabilities,
+Docker's default bridge, the agent's `HTTP(S)_PROXY` passed in), then builds on the same
+`bohux` builder with that image as the BuildKit frontend and the App's ID as Railpack's
+cache key, so Apps never share package caches. The node needs `ghcr.io` and the hosts
+Railpack's mise downloads from; the first Railpack build pulls Railpack's builder and
+runtime images into the BuildKit cache. A repository Railpack cannot plan (no language
+detected, no start command) fails the Release with `BUILD_PLAN_FAILED`; Railpack's
+messages are in the agent's log. A deploy key is used for the fetch but not offered to
+Railpack's build steps.
+
 **Private repositories (ADR-0041).** A Git source may name an environment secret
 holding a private SSH deploy key, with an `ssh://` or `user@host:path` URL:
 

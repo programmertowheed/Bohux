@@ -171,7 +171,7 @@ func (a *Activities) RunBuild(ctx context.Context, in BuildInput) (BuildOutcome,
 	}()
 	res, err := a.Builds.Build(ctx, ids[0], node, &agentv1.BuildRequest{
 		ReleaseId: in.ReleaseID, AppId: app.String(), RepoUrl: git.GetRepoUrl(), Ref: ref, Subpath: git.GetSubpath(),
-		SshKey: sshKey,
+		SshKey: sshKey, Strategy: git.GetStrategy(),
 	})
 	if err != nil {
 		// Including agentapi.ErrNodeOffline: Temporal retries until the node is back.

@@ -552,7 +552,7 @@ func TestBuildActivities(t *testing.T) {
 				return err
 			}
 			_, err = tx.Update(ctx, "apps", app, rev, []store.Col{
-				{Name: "source", Value: `{"git": {"repo_url": "git@example.com:acme/web.git", "ssh_key_secret": "DEPLOY_KEY"}}`},
+				{Name: "source", Value: `{"git": {"repo_url": "git@example.com:acme/web.git", "ssh_key_secret": "DEPLOY_KEY", "strategy": "BUILD_STRATEGY_RAILPACK"}}`},
 				{Name: "runtime", Value: rt}, {Name: "secrets", Value: secs}},
 				store.Audit{Actor: audit.Actor, Action: "test", ResourceType: "bohux.v1.App"})
 			return err
@@ -567,6 +567,10 @@ func TestBuildActivities(t *testing.T) {
 		got := disp.got[len(disp.got)-1]
 		if k := got.GetSshKey(); k.GetKey() != "DEPLOY_KEY" || k.GetHandle() != "openbao:deploy-key" || len(got.GetSealedSecrets()) != 0 {
 			t.Errorf("dispatched key %v, sealed %d bytes; want the handle only", k, len(got.GetSealedSecrets()))
+		}
+		// The App's build strategy reaches the agent (ADR-0047).
+		if got.GetStrategy() != bohuxv1.BuildStrategy_BUILD_STRATEGY_RAILPACK {
+			t.Errorf("dispatched strategy %v, want RAILPACK", got.GetStrategy())
 		}
 
 		if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {

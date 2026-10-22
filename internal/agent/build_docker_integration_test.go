@@ -73,7 +73,9 @@ func TestBuilderDocker(t *testing.T) {
 		t.Fatalf("build failed: %v", res.GetFailure())
 	}
 	t.Cleanup(func() { _ = exec.Command("docker", "rmi", "-f", res.GetImageId()).Run() })
-	if res.GetCommit() != commit || !strings.HasPrefix(res.GetImageId(), "sha256:") {
+	// Auto finds the Dockerfile (ADR-0047).
+	if res.GetCommit() != commit || !strings.HasPrefix(res.GetImageId(), "sha256:") ||
+		res.GetStrategy() != bohuxv1.BuildStrategy_BUILD_STRATEGY_DOCKERFILE {
 		t.Errorf("result = %v, want commit %s", res, commit)
 	}
 	labels := dockerCLI(t, "image", "inspect", res.GetImageId(), "--format",

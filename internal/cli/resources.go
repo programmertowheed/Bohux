@@ -24,8 +24,9 @@ import (
 const ResourceCommands = `  project list|create      projects
   env list|create          environments of a project (-p)
   app list|show|create|pull-secret|deploy-key
-                           apps of an environment (-p, -e); pull-secret and deploy-key
-                           name the secret with a registry credential or an SSH key
+                           apps of an environment (-p, -e); create --git builds the
+                           Dockerfile, or Railpack without one (--build); pull-secret and
+                           deploy-key name the secret with a registry credential or an SSH key
   route list|add|remove    an app's hosts on the node's ingress
   secret list|set          an environment's secrets; set reads the value from stdin
   node list|token          nodes, and bootstrap tokens to register one
@@ -552,8 +553,28 @@ func (r *resource) appShow(ctx context.Context, args []string) error {
 	if pull == "" {
 		pull = "-"
 	}
-	return r.emit(&bohuxv1.GetAppResponse{App: a}, append(append([]string{}, appHeader...), "CPU", "MEMORY", "PULL SECRET"),
-		[][]string{append(appRow(a), cpu, mem, pull)})
+	build := "-"
+	if g := a.GetSource().GetGit(); g != nil {
+		build = buildStrategyName(g.GetStrategy())
+	}
+	return r.emit(&bohuxv1.GetAppResponse{App: a}, append(append([]string{}, appHeader...), "BUILD", "CPU", "MEMORY", "PULL SECRET"),
+		[][]string{append(appRow(a), build, cpu, mem, pull)})
+}
+
+// buildStrategies are --build's values (ADR-0047).
+var buildStrategies = map[string]bohuxv1.BuildStrategy{
+	"auto":       bohuxv1.BuildStrategy_BUILD_STRATEGY_UNSPECIFIED,
+	"dockerfile": bohuxv1.BuildStrategy_BUILD_STRATEGY_DOCKERFILE,
+	"railpack":   bohuxv1.BuildStrategy_BUILD_STRATEGY_RAILPACK,
+}
+
+func buildStrategyName(s bohuxv1.BuildStrategy) string {
+	for name, v := range buildStrategies {
+		if v == s {
+			return name
+		}
+	}
+	return s.String()
 }
 
 // appDeployKey sets or clears the secret a Git App's source is fetched with
@@ -616,7 +637,8 @@ func (s *repeated) Set(v string) error { *s = append(*s, v); return nil }
 
 func (r *resource) appCreate(ctx context.Context, args []string) error {
 	image := r.fs.String("image", "", "prebuilt image, repository@sha256:<digest>")
-	git := r.fs.String("git", "", "Git repository URL to build from (Dockerfile)")
+	git := r.fs.String("git", "", "Git repository URL to build from")
+	build := r.fs.String("build", "auto", "how --git builds: auto (the Dockerfile if there is one, else Railpack), dockerfile, or railpack")
 	ref := r.fs.String("ref", "", "default branch, tag, or commit to build")
 	deployKey := r.fs.String("ssh-key-secret", "", "environment secret holding an SSH deploy key for --git")
 	replicas := r.fs.Int("replicas", 1, "replicas")
@@ -642,7 +664,12 @@ func (r *resource) appCreate(ctx context.Context, args []string) error {
 		}
 		src.Kind = &bohuxv1.Source_Image{Image: img}
 	case *git != "":
-		src.Kind = &bohuxv1.Source_Git{Git: &bohuxv1.GitSource{RepoUrl: *git, Ref: *ref, SshKeySecret: *deployKey}}
+		strategy, ok := buildStrategies[*build]
+		if !ok {
+			return fmt.Errorf("app create: --build %q: want auto, dockerfile, or railpack: %w", *build, ErrUsage)
+		}
+		src.Kind = &bohuxv1.Source_Git{Git: &bohuxv1.GitSource{RepoUrl: *git, Ref: *ref, SshKeySecret: *deployKey,
+			Strategy: strategy}}
 	default:
 		return fmt.Errorf("app create: --image or --git is required: %w", ErrUsage)
 	}

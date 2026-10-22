@@ -1,4 +1,5 @@
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
+import { BuildStrategy } from "./gen/bohux/v1/app_pb";
 
 // enumName turns DEPLOYMENT_STATE_ROLLED_BACK into "rolled back".
 export function enumName(prefix: string, name: string | undefined): string {
@@ -23,4 +24,16 @@ export function bytes(n: bigint | number): string {
   if (v >= 2 ** 20) return `${Math.round(v / 2 ** 20)}MiB`;
   if (v >= 2 ** 10) return `${Math.round(v / 2 ** 10)}KiB`;
   return `${v}B`;
+}
+
+// buildName says how a Git App builds (ADR-0047).
+export function buildName(s: BuildStrategy): string {
+  switch (s) {
+    case BuildStrategy.DOCKERFILE:
+      return "its Dockerfile";
+    case BuildStrategy.RAILPACK:
+      return "Railpack";
+    default:
+      return "its Dockerfile, or Railpack if it has none";
+  }
 }
