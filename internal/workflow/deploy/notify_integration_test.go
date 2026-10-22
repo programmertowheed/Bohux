@@ -63,12 +63,7 @@ func TestNotifyActivities(t *testing.T) {
 	if _, err := h.env.ExecuteActivity(h.acts.RecordStart, in); err != nil {
 		t.Fatal(err)
 	}
-	var project uuid.UUID
-	if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
-		return tx.QueryRow(ctx, `SELECT project_id FROM environments_heads WHERE id = $1`, env).Scan(&project)
-	}); err != nil {
-		t.Fatal(err)
-	}
+	project := h.projectOf(env)
 	other, _ := fixture.App(t, h.st, h.tenant, "elsewhere", "other-env")
 	var otherProject uuid.UUID
 	if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
@@ -79,26 +74,7 @@ func TestNotifyActivities(t *testing.T) {
 	}
 	channel := func(project uuid.UUID, kind, path string, signing string, states ...string) uuid.UUID {
 		t.Helper()
-		id := uuid.Must(uuid.NewV7())
-		secrets[notify.URLPath(h.tenant, id)] = srv.URL + path
-		var sh *string
-		if signing != "" {
-			secrets[notify.SigningPath(h.tenant, id)] = signing
-			s := openbao.HandlePrefix + notify.SigningPath(h.tenant, id)
-			sh = &s
-		}
-		if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
-			_, err := tx.CreateWithID(ctx, "notification_channels", id, []store.Col{
-				{Name: "project_id", Value: project}, {Name: "kind", Value: kind}, {Name: "states", Value: states},
-				{Name: "url_handle", Value: openbao.HandlePrefix + notify.URLPath(h.tenant, id)},
-				{Name: "url_host", Value: "127.0.0.1"}, {Name: "signing_handle", Value: sh},
-			}, nil, store.Audit{Actor: store.Actor{ID: store.SystemActorID, Kind: store.ActorSystem},
-				Action: "test", ResourceType: "bohux.v1.NotificationChannel", ProjectID: project})
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
-		return id
+		return h.channel(secrets, project, kind, srv.URL+path, signing, states...)
 	}
 	channel(project, "slack", "/slack", "", "failed", "rolled_back")
 	channel(project, "webhook", "/hook", "sign-me", "rolled_back")
@@ -160,4 +136,44 @@ func TestNotifyActivities(t *testing.T) {
 		!strings.Contains(seen.Data, "/api: deployment rolled back") || !strings.Contains(seen.Data, ReasonHealthTimeout) {
 		t.Errorf("relay saw rcpt %v, data %q", seen.Rcpt, seen.Data)
 	}
+}
+
+// projectOf returns the project of an environment.
+func (h *harness) projectOf(env uuid.UUID) uuid.UUID {
+	h.t.Helper()
+	ctx := context.Background()
+	var project uuid.UUID
+	if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+		return tx.QueryRow(ctx, `SELECT project_id FROM environments_heads WHERE id = $1`, env).Scan(&project)
+	}); err != nil {
+		h.t.Fatal(err)
+	}
+	return project
+}
+
+// channel creates a notification channel of the project posting to url, with its
+// secrets in secrets, and returns its ID.
+func (h *harness) channel(secrets memSecrets, project uuid.UUID, kind, url, signing string, states ...string) uuid.UUID {
+	h.t.Helper()
+	ctx := context.Background()
+	id := uuid.Must(uuid.NewV7())
+	secrets[notify.URLPath(h.tenant, id)] = url
+	var sh *string
+	if signing != "" {
+		secrets[notify.SigningPath(h.tenant, id)] = signing
+		s := openbao.HandlePrefix + notify.SigningPath(h.tenant, id)
+		sh = &s
+	}
+	if err := h.st.InTenant(ctx, h.tenant, func(tx *store.Tx) error {
+		_, err := tx.CreateWithID(ctx, "notification_channels", id, []store.Col{
+			{Name: "project_id", Value: project}, {Name: "kind", Value: kind}, {Name: "states", Value: states},
+			{Name: "url_handle", Value: openbao.HandlePrefix + notify.URLPath(h.tenant, id)},
+			{Name: "url_host", Value: "127.0.0.1"}, {Name: "signing_handle", Value: sh},
+		}, nil, store.Audit{Actor: store.Actor{ID: store.SystemActorID, Kind: store.ActorSystem},
+			Action: "test", ResourceType: "bohux.v1.NotificationChannel", ProjectID: project})
+		return err
+	}); err != nil {
+		h.t.Fatal(err)
+	}
+	return id
 }

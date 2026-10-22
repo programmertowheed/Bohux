@@ -100,6 +100,7 @@ func RunWorker(ctx context.Context, c client.Client, queue string, acts *Activit
 		w = worker.New(c, queue, worker.Options{})
 		w.RegisterWorkflow(Workflow)
 		w.RegisterWorkflow(BuildWorkflow)
+		w.RegisterWorkflow(NotifyWorkflow)
 		w.RegisterActivity(acts)
 		err := w.Start()
 		if err == nil {

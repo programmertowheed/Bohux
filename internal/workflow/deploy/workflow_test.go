@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/workflow"
 )
 
 const (
@@ -30,10 +31,18 @@ type script struct {
 	waitErr   map[string]error
 	// waitDelay delays the new Release's health gate, in workflow time.
 	waitDelay time.Duration
+	// notifyDelay is how long the notification child runs, in workflow time.
+	notifyDelay time.Duration
+	// runClosed, when set, is asked whether the deploy run had closed when the
+	// notification child finished.
+	runClosed func() bool
 
-	states  []StateChange
-	assigns []AssignInput
-	waits   []WaitInput
+	states   []StateChange
+	assigns  []AssignInput
+	waits    []WaitInput
+	notified []NotifyInput
+	// closedFirst records runClosed for each notification child.
+	closedFirst []bool
 }
 
 func (s *script) register(env *testsuite.TestWorkflowEnvironment) {
@@ -60,6 +69,18 @@ func (s *script) register(env *testsuite.TestWorkflowEnvironment) {
 	isOther := mock.MatchedBy(func(in WaitInput) bool { return in.ReleaseID != newRelease })
 	env.OnActivity(a.WaitHealthy, mock.Anything, isNew).After(s.waitDelay).Return(wait)
 	env.OnActivity(a.WaitHealthy, mock.Anything, isOther).Return(wait)
+	// A stand-in registered under the child's name, not a mock: the test environment
+	// reports a mocked child started only once it has finished.
+	env.RegisterWorkflowWithOptions(func(ctx workflow.Context, in NotifyInput) error {
+		if err := workflow.Sleep(ctx, s.notifyDelay); err != nil {
+			return err
+		}
+		s.notified = append(s.notified, in)
+		if s.runClosed != nil {
+			s.closedFirst = append(s.closedFirst, s.runClosed())
+		}
+		return nil
+	}, workflow.RegisterOptions{Name: "NotifyWorkflow"})
 }
 
 func nonRetryable(typ string) error {
@@ -324,6 +345,8 @@ func TestCancelBeforeAssign(t *testing.T) {
 		func(context.Context, Input) (bool, error) { starts++; return false, nil })
 	env.OnActivity(a.SetState, mock.Anything, mock.Anything).Return(
 		func(_ context.Context, c StateChange) error { s.states = append(s.states, c); return nil })
+	env.RegisterWorkflow(NotifyWorkflow)
+	env.OnWorkflow(NotifyWorkflow, mock.Anything, mock.Anything).Return(nil)
 	env.RegisterDelayedCallback(env.CancelWorkflow, time.Minute)
 	env.ExecuteWorkflow(Workflow, input())
 	if err := env.GetWorkflowError(); err != nil {

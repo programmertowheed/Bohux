@@ -28,9 +28,10 @@ var (
 	healthHeartbeat = 30 * time.Second
 )
 
-// Workflow runs one Deployment (ADR-0026), then posts its outcome to the project's
-// notification channels (ADR-0038). Its errors are infrastructure errors only; a deploy
-// that fails or rolls back returns its Result with a nil error.
+// Workflow runs one Deployment (ADR-0026), then hands its outcome to a NotifyWorkflow
+// child for the project's notification channels and closes without waiting for it
+// (ADR-0038, ADR-0048). Its errors are infrastructure errors only; a deploy that fails
+// or rolls back returns its Result with a nil error.
 func Workflow(ctx workflow.Context, in Input) (Result, error) {
 	timeout := in.HealthTimeout
 	if timeout <= 0 {
