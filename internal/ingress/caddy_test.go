@@ -66,7 +66,6 @@ func TestRender(t *testing.T) {
 	}
 }
 
-
 // TestRenderWeights: a canary's site renders as weighted round robin over its
 // upstreams (ADR-0049), and weights that do not match the upstreams are refused.
 func TestRenderWeights(t *testing.T) {
