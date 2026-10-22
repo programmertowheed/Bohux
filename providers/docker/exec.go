@@ -34,9 +34,15 @@ func (p *Provider) Exec(ctx context.Context, req provider.ExecRequest) (provider
 		args = append(args, "--index", req.Instance[i+1:])
 	}
 	args = append(append(args, service), req.Command...)
-	c := p.cmd(ctx, "", args...)
-	if req.TTY {
-		return startTTY(c, req.Rows, req.Cols)
+	return StartSession(p.cmd(ctx, "", args...), req.TTY, req.Rows, req.Cols)
+}
+
+// StartSession starts c, a docker CLI exec, as an exec session: on a pseudo-terminal
+// the agent holds when tty is set, with pipes otherwise. The Swarm provider shares it
+// (ADR-0045).
+func StartSession(c *exec.Cmd, tty bool, rows, cols uint16) (provider.Session, error) {
+	if tty {
+		return startTTY(c, rows, cols)
 	}
 	stdin, err := c.StdinPipe()
 	if err != nil {

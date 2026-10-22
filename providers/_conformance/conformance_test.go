@@ -18,6 +18,7 @@ import (
 	"github.com/bohumix/bohux/internal/provider/conformance"
 	"github.com/bohumix/bohux/internal/provider/memory"
 	"github.com/bohumix/bohux/providers/docker"
+	"github.com/bohumix/bohux/providers/swarm"
 )
 
 var (
@@ -28,6 +29,7 @@ var (
 // subjects builds each provider under test with its inspector and fixture.
 var subjects = map[string]func(target string) (conformance.Subject, error){
 	docker.Name: dockerSubject,
+	swarm.Name:  swarmSubject,
 	memory.Name: func(string) (conformance.Subject, error) {
 		p := memory.New()
 		p.StepDelay = 20 * time.Millisecond
