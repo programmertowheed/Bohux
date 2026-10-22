@@ -38,23 +38,28 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S23 — Railpack builds (v0.2, ADR-0047) done. v0.2 is done except the items
-  O35 lists (managed Postgres/Redis, envelope encryption, team invites)
+- **Slice:** S21 — Swarm provider (v0.3, ADR-0045) done, after S22 (web terminal) and
+  S23 (Railpack builds). v0.2 is done except the items O35 lists.
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** S21 — the Swarm provider, single manager (O37): rewrite ADR-0045
-  as decided, then build it to the conformance suite. Still for the owner: review the
-  proposed ADRs (O19–O39), CI via a PR (O24), O35.
+- **Exact next step:** every remaining roadmap item needs an owner decision. Ask the
+  owner to pick the next slice: v0.2's O35 (managed Postgres/Redis, envelope
+  encryption, team invites) or a v0.3 item (preview environments, canary through
+  Caddy weights, OTEL/SLO health gate and automatic rollback, migrations as a gated
+  step, scheduled restore drills, cron jobs, Compose apps, volumes and S3 backups), or
+  hardening: a Swarm end-to-end test, the notification race (suggested task), CI via a
+  PR (O24). Review the proposed ADRs (O19–O40).
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md, then take the slice *Current focus*
-> names (S23 Nixpacks, then S21 Swarm) on branch `claude/relaxed-rubin-76m7dl`:
-> ADR first as proposed, then the code. Start Postgres, Docker, Temporal and OpenBao
-> (tracker *Known gaps*, including the disk workaround). Verify with build, vet,
-> golangci-lint (also with the integration tag), unit, integration, and e2e tests.
-> Tick boxes, update the tracker and the next session prompt, commit, push, and give
-> me the next prompt. If you hit a decision only I can make, ask me before building.
+> Read CLAUDE.md and docs/plan/03-progress.md. Start Postgres, Docker, Temporal and
+> OpenBao (tracker *Known gaps*, including the disk and swarm-daemon notes). Then ask
+> me, with the choices *Current focus* lists, which slice to take next; write its ADR
+> first as proposed, then the code, on branch `claude/relaxed-rubin-76m7dl`. Verify
+> with build, vet, golangci-lint (also with the integration tag), unit, integration,
+> e2e, and the conformance suites the change touches. Tick boxes, update the tracker
+> and the next session prompt, commit, push, and give me the next prompt. If you hit
+> a decision only I can make, ask me before building.
 
 ## Waiting on the owner
 
@@ -95,9 +100,10 @@ work is in right now*.
 | O34 | Accept or reject ADR-0043 (email notifications: `EMAIL` channels with a `mailto:` list in OpenBao; one SMTP relay per install, TLS required). Adds a proto enum value, migration 00022, four control-plane settings | S19 |
 | O35 | Remaining v0.2 items need a product call before code: **managed Postgres/Redis** (needs app-to-app networking in an environment, which does not exist: each App is its own Compose network; plus image pinning, volume lifecycle, backups); **envelope encryption** (what threat beyond OpenBao's own barrier: crypto-shredding environments? its backups then need the keys); **team invites** (user accounts); **Buildpacks/Nixpacks** (O32); **web terminal** (O29) | next v0.2 items |
 | O36 | Accept or reject ADR-0044 (webhook watch paths: path prefixes, no globs; changed files from the push payload; deploys anyway when the list may be incomplete). Adds `Webhook.paths`, migration 00023 | S20 |
-| O37 | ~~Swarm questions~~ — **answered 2026-10-22: a single-manager swarm, health from the image's `HEALTHCHECK`, Swarm Apps image-only** (noted in ADR-0045). Next: rewrite ADR-0045 as decided, then the provider | S21 |
+| O37 | ~~Swarm questions~~ — **answered 2026-10-22: a single-manager swarm, no registry push, and live-restore waived on a swarm manager** (the agent's own daemon, so Caddy, Compose and Swarm share an attachable `bohux-ingress` overlay). Built in S21 (ADR-0045 rewritten as decided, see O40) | — |
 | O38 | Accept or reject ADR-0046 (web terminal: `GET /sockets/v1/exec`, token in the first frame, binary protobuf `ExecRequest`/`ExecResponse` frames, close code 4000 + Connect code; the Connect handler's body shared, so the same permission check and audit; xterm.js with its `<style>` elements copied into adopted stylesheets so the CSP is unchanged; adds `github.com/coder/websocket` and two npm packages) | S22 |
 | O39 | Accept or reject ADR-0047 (builds without a Dockerfile: `GitSource.strategy` UNSPECIFIED now means auto — the Dockerfile if present, else Railpack; new `BUILD_STRATEGY_RAILPACK`; one frontend image pinned by digest runs `railpack prepare` in a locked-down container and is the BuildKit frontend; the App ID is Railpack's cache key; `BUILD_PLAN_FAILED`). Changes app.proto and agent.proto | S23 |
+| O40 | Accept or reject ADR-0045 as rewritten (Swarm provider: the node's own dockerd as a one-node swarm manager; one stack per workload with `stack.yaml` + 0600 `secrets.env`; health checks inside each task's network namespace; `dnsrr` endpoints on an attachable `bohux-ingress` overlay; live-restore waived on a manager; the agent runs Swarm beside Docker and records each workload's provider) | S21 |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -1129,6 +1135,39 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 
 ## v0.3 slices
 
+### S21 — Swarm provider, single manager (ADR-0045) ✅
+- [x] Owner answered O37 (single manager, no registry push) and, when it turned out
+      Swarm cannot run with live-restore, chose to waive live-restore on a manager with
+      `bohux-ingress` as an attachable overlay. ADR-0045 rewritten as decided (O40)
+- [x] `providers/swarm`: Describe (active manager, exactly one node), Plan, Apply
+      (`stack.yaml` + 0600 `secrets.env` first, private image pulled with the throwaway
+      credential, `docker stack deploy --resolve-image never --prune`, forced update
+      for a restart), Status (running tasks, spec-hash labels, health), Logs (`docker
+      service logs`, stderr marked), Exec (`docker exec` into the task), Scale,
+      Destroy (waits for the stack's tasks and networks); `Spec.Raw` networks and
+      volumes, `publish_address` refused
+- [x] Health checks inside the task's network namespace (locked thread, `setns`),
+      image-agnostic; `dnsrr` endpoints aliased on the ingress overlay; slugs cut so
+      service names fit Swarm's 63 characters
+- [x] The Docker provider's exec session, limits, pull credential, atomic write, and
+      replica edit exported for Swarm (no copies)
+- [x] Agent: runs Swarm beside Docker when its daemon is a one-node manager; each
+      workload, its logs and exec go to the provider it names; `applied.json` records
+      the owner, and records without one (older agents) belong to Docker, so an upgrade
+      destroys nothing. Registration and the installer accept a swarm manager without
+      live-restore and warn; the installer creates the overlay there
+- [x] Tests: **conformance green against a real single-manager swarm** (16 cases,
+      175 s, a second dockerd in the cloud container); Docker conformance still green;
+      render, names, logs, options (unit); two providers in the reconciler, legacy
+      records (unit); a manager registers without live-restore (integration); a
+      Compose container on the overlay reachable by alias (by hand)
+- [x] CI job `conformance-swarm` (the runner's dockerd becomes the manager);
+      `docs/providers/swarm.md`
+- [ ] Not done: an end-to-end run of the control plane and agent deploying to Swarm
+      (the routing is unit-tested and the provider conformance-tested, not the two
+      together); the resource view does not sample Swarm workloads
+
+
 ### S20 — Monorepo watch paths (ADR-0044) ✅
 - [x] Proposed ADR-0044 (O36): up to 20 repository-relative prefixes per `github`
       webhook; the push's commits' added/modified/removed files decide; no file list,
@@ -1141,6 +1180,24 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       signed deliveries inside and outside the paths (integration), CLI
 
 ## Known gaps and notes
+- **A swarm daemon in the cloud container (S21):** the main dockerd has live-restore,
+  so swarm runs on a second one, without iptables or a default bridge so it leaves the
+  main daemon alone:
+  ```
+  mkdir -p /var/lib/bohux-swarm-test /run/bohux-swarm
+  setsid nohup dockerd --data-root /var/lib/bohux-swarm-test --host unix:///run/bohux-swarm/docker.sock \
+    --pidfile /run/bohux-swarm/docker.pid --exec-root /run/bohux-swarm/exec --bridge none \
+    --iptables=false --ip-masq=false --default-address-pool base=10.200.0.0/16,size=24 > /tmp/dockerd-swarm.log 2>&1 &
+  DOCKER_HOST=unix:///run/bohux-swarm/docker.sock docker swarm init --advertise-addr 127.0.0.1 --default-addr-pool 10.201.0.0/16
+  docker save busybox:1.36 | DOCKER_HOST=unix:///run/bohux-swarm/docker.sock docker load
+  go test ./providers/_conformance -provider=swarm -target=unix:///run/bohux-swarm/docker.sock -v
+  ```
+  Service VIPs need IPVS, which this daemon lacks; the provider uses `dnsrr`, so it
+  does not matter. Builds there need `--network none`.
+- **After the cloud container restarts, the main dockerd can lose `docker0`** (builds
+  fail: "adding interface … to bridge docker0 failed"). Restart dockerd (live-restore
+  keeps containers), then `docker restart bohux-mirror`: its port forward does not
+  come back by itself.
 - **Railpack in the cloud container (S23):** ghcr.io blobs are blocked here. To run
   `TestBuilderRailpack`'s planning cases: download
   `railpack-v0.43.0-x86_64-unknown-linux-musl.tar.gz` and `checksums.txt` from the
@@ -1256,6 +1313,15 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   1.24–1.26). Raising the `go` directive is cheap and its own commit when wanted.
 
 ## Session log (newest first)
+
+### 2026-10-22 (S21) — branch `claude/relaxed-rubin-76m7dl`
+- Swarm cannot run with live-restore; the owner chose to waive it on a manager.
+  ADR-0045 rewritten as decided (O40); the provider passed the conformance suite on
+  its first full run against a real swarm. The agent runs it beside Docker.
+- Verified: build, vet, golangci-lint (both tag sets), macOS build, unit with race,
+  full integration suite, e2e (deploy, build, restore drill all green this time),
+  Docker and Swarm conformance. The session's worker restarted four times; services
+  are now started detached.
 
 ### 2026-10-22 (S23) — branch `claude/relaxed-rubin-76m7dl`
 - Nixpacks is maintenance-only upstream; the owner switched O32 to Railpack (auto

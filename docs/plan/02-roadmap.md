@@ -61,7 +61,7 @@ rule.** Scope is fixed by ADR-0011, extended by ADR-0020.
 - [ ] Automatic rollback on SLO violation
 - [ ] Schema migrations as a gated workflow step
 - [ ] **Scheduled automated restore drills** — a backup you have not restored is a feeling
-- [ ] Second provider (Swarm) — proves the boundary is real
+- [x] Second provider (Swarm) — proves the boundary is real (S21, single-manager swarm; ADR-0045)
 - [ ] Scheduled jobs (cron) per app, run as Temporal schedules (rule 6) — needs workflow design
 - [ ] Docker Compose apps (multi-container) as an App source — needs an ADR (changes App)
 - [ ] Volume management and volume backups to S3-compatible storage
