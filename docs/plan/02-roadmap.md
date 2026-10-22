@@ -48,7 +48,8 @@ rule.** Scope is fixed by ADR-0011, extended by ADR-0020.
 - [x] MCP server: `bohux mcp` over stdio, tools generated from `proto/` (ADR-0018) — S14
 - [x] Notifications on deploy/failure/rollback (Slack, Discord, email, webhook) — S13, S19
 - [ ] Team invites and member management (CLI + UI)
-- [ ] Web terminal into a running container (UI over the existing `Exec` verb)
+- [x] Web terminal into a running container (UI over the existing `Exec` verb) — S22,
+      through a WebSocket bridge (ADR-0046)
 - [x] Private registry credentials, SSH key and Git source management — S17
 - [x] Basic server and app resource view (CPU/memory/disk) from node agents — current
       values only; history goes to the user's OTLP backend (non-goal: metrics storage) — S16

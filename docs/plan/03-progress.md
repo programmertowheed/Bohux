@@ -38,25 +38,27 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S20 — webhook watch paths (v0.3, ADR-0044) done. v0.2 is done except the
-  items O35 lists; S15's web terminal is ⛔ on O29
+- **Slice:** S22 — web terminal (v0.2, ADR-0046) done. The owner answered O29, O32 and
+  O37 on 2026-10-22. v0.2 is done except Nixpacks (S23, now unblocked) and the items
+  O35 still lists (managed Postgres/Redis, envelope encryption, team invites)
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** the remaining work needs owner calls: v0.2's open items (O35,
-  O32, O29), the Swarm provider's design (O37, ADR-0045), restore drills (the age
-  private key is kept off the host by design), and the other v0.3 items need workflow
-  or data-model designs. Ask the owner which to take next; and review the proposed
-  ADRs (O19–O37). Meanwhile: CI via a PR (O24), live-install checks. Buildpacks/Nixpacks needs an owner choice
-  (O32); team invites need user accounts (identity model): ask the owner first.
+- **Exact next step:** S23 — Nixpacks auto-detect builds (O32: Nixpacks). Write the ADR
+  first (it extends ADR-0011 item 7): when a Git App without a Dockerfile uses it, how
+  the agent gets and pins the `nixpacks` binary, and whether its plan goes through the
+  existing buildx builder (ADR-0028). Then S21 — the Swarm provider, single manager
+  (O37): rewrite ADR-0045 as decided, then build it to the conformance suite. Still
+  for the owner: review the proposed ADRs (O19–O38), CI via a PR (O24), O35.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md. I have answered <O-items> under *Waiting on
-> the owner*; mark the ADRs accordingly and take the next slice they unblock, on branch
-> `claude/relaxed-rubin-76m7dl`. Start Postgres, Docker, Temporal and OpenBao (tracker *Known gaps*).
-> Verify with build, vet, golangci-lint (also with the integration tag), unit and
-> integration tests. Tick boxes, update the tracker and the next session prompt,
-> commit, push, and give me the next prompt.
+> Read CLAUDE.md and docs/plan/03-progress.md, then take the slice *Current focus*
+> names (S23 Nixpacks, then S21 Swarm) on branch `claude/relaxed-rubin-76m7dl`:
+> ADR first as proposed, then the code. Start Postgres, Docker, Temporal and OpenBao
+> (tracker *Known gaps*, including the disk workaround). Verify with build, vet,
+> golangci-lint (also with the integration tag), unit, integration, and e2e tests.
+> Tick boxes, update the tracker and the next session prompt, commit, push, and give
+> me the next prompt. If you hit a decision only I can make, ask me before building.
 
 ## Waiting on the owner
 
@@ -87,17 +89,18 @@ work is in right now*.
 | O24 | Open a PR for this branch (or allow CI on it) so the CI matrix runs at least once; nothing has run on GitHub yet | Confidence in every slice since S6 |
 | O25 | Accept or reject ADR-0038 (deploy notifications: project channels, URL in OpenBao, sent by activities after the terminal state; no email yet). Adds `notification.proto` | S13 |
 | O26 | Accept or reject ADR-0039 (web UI sign-in with an API token in `sessionStorage`, strict CSP, no cookie sessions until user accounts exist) | S15 |
-| O27 | Logs in the UI: keep the plain `<pre>` (no ANSI colors) or allow xterm.js, which needs `style-src 'unsafe-inline'` or nonces in the CSP (ADR-0013 vs ADR-0039) | S15 log view |
+| O27 | Logs in the UI: keep the plain `<pre>` (no ANSI colors) or render them with xterm.js. Since ADR-0046 xterm.js works under the unchanged CSP, so this is now only a product choice | S15 log view |
 | O28 | Accept or reject ADR-0040 (resource view: agents sample node and workloads every 30 s, carried in status reports, no history) | S16 |
-| O29 | Web terminal (v0.2): `Exec` is bidirectional; browsers cannot stream both ways over Connect on HTTP/1.1. Options: a WebSocket bridge on the control plane (a UI-only path, rule 8), or HTTP/2 end to end via the ingress | S15 |
+| O29 | ~~Web terminal transport~~ — **answered 2026-10-22: a WebSocket bridge.** Built in S22 (ADR-0046, see O38) | — |
 | O30 | Accept or reject ADR-0041 (registry credentials and Git deploy keys are environment secrets the App names; sealed apart from its env vars; on the node only for the one command). Adds `App.image_pull_secret`, migration 00021 | S17 |
 | O31 | Git host keys for deploy-key fetches: trusted on first use per node and pinned in `<state>/builds/known_hosts` (now). Alternative: a known_hosts secret per environment, refusing unknown hosts | S17 |
-| O32 | Buildpacks or Nixpacks (v0.2 "auto-detect builds"): which builder, and is the extra builder image on the node acceptable (ADR-0011 item 7 lists Dockerfile only) | next v0.2 item |
+| O32 | ~~Buildpacks or Nixpacks~~ — **answered 2026-10-22: Nixpacks.** Next: an ADR for it (it extends ADR-0011 item 7, Dockerfile only), then the slice | S23 |
 | O33 | Accept or reject ADR-0042 (refines ADR-0031: a release healthy while the control plane *rejects* its agent does not cancel its fallback; an unreachable control plane changes nothing, rule 1; found when a new control plane refused its own agent) | S15 check |
 | O34 | Accept or reject ADR-0043 (email notifications: `EMAIL` channels with a `mailto:` list in OpenBao; one SMTP relay per install, TLS required). Adds a proto enum value, migration 00022, four control-plane settings | S19 |
 | O35 | Remaining v0.2 items need a product call before code: **managed Postgres/Redis** (needs app-to-app networking in an environment, which does not exist: each App is its own Compose network; plus image pinning, volume lifecycle, backups); **envelope encryption** (what threat beyond OpenBao's own barrier: crypto-shredding environments? its backups then need the keys); **team invites** (user accounts); **Buildpacks/Nixpacks** (O32); **web terminal** (O29) | next v0.2 items |
 | O36 | Accept or reject ADR-0044 (webhook watch paths: path prefixes, no globs; changed files from the push payload; deploys anyway when the list may be incomplete). Adds `Webhook.paths`, migration 00023 | S20 |
-| O37 | Swarm provider (v0.3): answer ADR-0045's questions before it is built — multi-node in scope or a single manager; health for remote tasks (image `HEALTHCHECK` or a probe container); may agents hold registry push credentials | S21 |
+| O37 | ~~Swarm questions~~ — **answered 2026-10-22: a single-manager swarm, health from the image's `HEALTHCHECK`, Swarm Apps image-only** (noted in ADR-0045). Next: rewrite ADR-0045 as decided, then the provider | S21 |
+| O38 | Accept or reject ADR-0046 (web terminal: `GET /sockets/v1/exec`, token in the first frame, binary protobuf `ExecRequest`/`ExecResponse` frames, close code 4000 + Connect code; the Connect handler's body shared, so the same permission check and audit; xterm.js with its `<style>` elements copied into adopted stylesheets so the CSP is unchanged; adds `github.com/coder/websocket` and two npm packages) | S22 |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -934,7 +937,7 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       token); stdio smoke test against the live install
 - [x] Docs: `docs/reference/config.md` (`bohux mcp`, scoped tokens; the resource commands)
 
-### S15 — Web UI, read-only (ADR-0012, ADR-0013, ADR-0039) ✅ (web terminal ⛔ on O29)
+### S15 — Web UI, read-only (ADR-0012, ADR-0013, ADR-0039) ✅ (web terminal: S22)
 - [x] Proposed ADR-0039 (O26): sign in with an API token kept in `sessionStorage`
       only, no new auth path on the API, strict CSP; the first UI is read-only
 - [x] `web/`: Vite + React 18 + TypeScript, Tailwind (tokens as CSS variables, light
@@ -990,9 +993,8 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       token sees only its project and is refused once revoked
 - [x] The pull-secret and deploy-key fields clicked through in Chromium on the upgraded
       install (server refusals shown; the good value saved)
-- [ ] Not in the UI: the web terminal needs bidirectional streaming, which Connect over
-      HTTP/1.1 in a browser does not have (a WebSocket endpoint would be a UI-only path:
-      owner decision under rule 8, O29)
+- [x] The web terminal needs bidirectional streaming, which Connect in a browser does
+      not have: built in S22 over a WebSocket bridge the owner chose (O29, ADR-0046)
 
 ### S16 — Resource view (ADR-0040) ✅
 - [x] Proposed ADR-0040 (O28): agents sample the node (`/proc`, `statfs`) and, through
@@ -1073,6 +1075,31 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       untrusted certificate fails before auth; recipients parsing; API; the activity
       end to end; flags; config
 
+### S22 — Web terminal (ADR-0046) ✅
+- [x] Owner chose the transport (O29): a WebSocket bridge. Proposed ADR-0046 (O38):
+      `GET /sockets/v1/exec`; the first frame is the API token (no header, URL, or
+      subprotocol, which reach logs); then binary protobuf `ExecRequest` /
+      `ExecResponse`; closes with 1000 after the exit or 4000 + the Connect code and its
+      message; pings every 30 s; 64 KiB frames; cross-origin upgrades refused
+- [x] One implementation: the Connect `Exec` body takes any `Receive`/`Send` stream;
+      the bridge authenticates through the auth interceptor's own check, so the role,
+      project scope, and audit event are the CLI's. No proto change (comment only)
+- [x] UI: a Terminal page per App (`terminal` next to `logs`), xterm.js loaded only
+      there (a 339 KB chunk); command field, connect/disconnect, the exit status or the
+      refusal shown. xterm.js's `<style>` elements are copied into adopted stylesheets,
+      so the CSP is unchanged
+- [x] Tests: the bridge's refusals (no token, unknown token, viewer, bad frames, missing
+      command, offline node) with close codes, the audit event, and cross-origin
+      (integration); a whole TTY session over the socket against a real agent with
+      exit status 4 (e2e); frame encoding and close messages (vitest)
+- [x] Checked in Chromium against the test install upgraded to this branch: a shell
+      in `demo/prod/hello`, red renders red under the real CSP, `stty size` matches the
+      browser's terminal, `exit 5` shows status 5, a viewer token gets "permission
+      denied". Found and fixed there: coder/websocket v1.8.12 sent a second close frame
+      and Chromium lost the exit status (now v1.8.14)
+- [x] The build e2e test ran in the cloud container for the first time (disk freed,
+      below) and caught a wrong audit count in last session's exec test (4 sessions, not 2)
+
 ## v0.3 slices
 
 ### S20 — Monorepo watch paths (ADR-0044) ✅
@@ -1087,6 +1114,22 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       signed deliveries inside and outside the paths (integration), CLI
 
 ## Known gaps and notes
+- **Disk workaround for builds in the cloud container (2026-10-22):** with ~9% free the
+  agent refuses builds. Move the Go caches to tmpfs and run e2e with `TMPDIR` there:
+  ```
+  mv /root/go/pkg/mod /dev/shm/gomod && ln -s /dev/shm/gomod /root/go/pkg/mod
+  rm -rf /root/.cache/go-build && mkdir -p /dev/shm/gobuild && ln -s /dev/shm/gobuild /root/.cache/go-build
+  mkdir -p /dev/shm/e2e && TMPDIR=/dev/shm/e2e go test -tags=integration,e2e ./cmd/bohux
+  ```
+  That lifted free space to 10.7% and the build e2e passed.
+- **Control-plane images when Docker Hub rate-limits `golang:`:** build the binary
+  locally (`CGO_ENABLED=0`, `-X …/internal/version.Version=selfdeploy`) and layer it on
+  the previous image: `FROM localhost:5000/bohux:<prev>` + `COPY bohux /bohux`.
+- **`web` dev dependencies have npm audit advisories** (vitest/tinypool, vite/esbuild,
+  tailwind's braces): fixes are major upgrades; dev and build time only, nothing in the
+  shipped bundle. Not taken on in S22.
+- **`bohux <noun> <verb> --help`** logs the usage as an `ERROR bohux failed` line
+  instead of printing it plainly.
 - **CI has not run on this branch.** `ci.yml` triggers on pushes to `main` and on
   pull requests; there is no PR for `claude/relaxed-rubin-76m7dl`, so every check so
   far ran locally in the cloud container (lint, unit, integration, Docker conformance,
@@ -1168,6 +1211,20 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   1.24–1.26). Raising the `go` directive is cheap and its own commit when wanted.
 
 ## Session log (newest first)
+
+### 2026-10-22 (S22) — branch `claude/relaxed-rubin-76m7dl`
+- The session prompt arrived with its `<O-items>` placeholder unfilled and nothing
+  answered in the tracker, so the owner was asked directly: web terminal next, over a
+  WebSocket bridge (O29); Swarm single manager with image `HEALTHCHECK`, image-only
+  (O37); Nixpacks (O32).
+- S22 done: ADR-0046 proposed (O38), bridge, Terminal page, tests; checked in Chromium
+  on the test install upgraded to this branch. The e2e build test ran here for the
+  first time and is green.
+- Full unit, race, and integration suites green; golangci-lint clean with and without
+  the integration and e2e tags. `internal/agentapi` failed once in a full integration
+  run (output not kept; the tail showed an "agent silent" stream close); it passed in
+  the next full run and in six repeated runs under load. Not touched this session.
+  Docker conformance not rerun (no provider change).
 
 ### 2026-10-21 (auto run, S17) — branch `claude/relaxed-rubin-76m7dl`
 - S15 forms and App page done (checked in Chromium).
