@@ -62,7 +62,9 @@ digest="${image#*@}"
 for tool in docker jq curl openssl; do
   command -v "$tool" >/dev/null || die "$tool is required"
 done
-[[ "$(docker info --format '{{.LiveRestoreEnabled}}')" == true ]] ||
+# A swarm manager cannot run with live-restore; it is accepted without (ADR-0045).
+swarm_manager=$(docker info --format '{{.Swarm.ControlAvailable}}')
+[[ "$(docker info --format '{{.LiveRestoreEnabled}}')" == true || "$swarm_manager" == true ]] ||
   die 'Docker live-restore is off: set "live-restore": true in /etc/docker/daemon.json and reload dockerd'
 docker buildx version >/dev/null 2>&1 || die "docker buildx is required (docker-buildx-plugin)"
 
@@ -114,7 +116,14 @@ if [[ ! -f "$state/ingress/caddy.json" ]]; then
   jq -n --arg s "unix/$socket_dir/admin.sock" '{admin: {listen: $s, origins: ["localhost"]}}' >"$state/ingress/caddy.json"
   chmod 644 "$state/ingress/caddy.json"
 fi
-docker network inspect bohux-ingress >/dev/null 2>&1 || docker network create bohux-ingress >/dev/null
+# On a swarm manager the ingress network is an attachable overlay, so Swarm services
+# can join it too (ADR-0045).
+if [[ "$swarm_manager" == true ]]; then
+  docker network inspect bohux-ingress >/dev/null 2>&1 ||
+    docker network create --driver overlay --attachable bohux-ingress >/dev/null
+else
+  docker network inspect bohux-ingress >/dev/null 2>&1 || docker network create bohux-ingress >/dev/null
+fi
 log "starting Postgres, Temporal, OpenBao, Caddy"
 "${compose[@]}" up -d --wait postgres openbao
 "${compose[@]}" up -d temporal caddy

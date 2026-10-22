@@ -28,6 +28,7 @@ import (
 	backupwf "github.com/bohumix/bohux/internal/workflow/backup"
 	"github.com/bohumix/bohux/internal/workflow/deploy"
 	"github.com/bohumix/bohux/providers/docker"
+	"github.com/bohumix/bohux/providers/swarm"
 )
 
 var errUsage = errors.New(`usage: bohux <command>
@@ -112,8 +113,9 @@ var defaultDeps = deps{
 	agentRegister: agent.Register, agentRun: runAgent, stdin: os.Stdin,
 }
 
-// nodeProvider is the provider this agent runs: one agent, one target (ADR-0007). v0.1
-// is Docker only (ADR-0011); its target is the local daemon, or DOCKER_HOST if set.
+// nodeProvider is the provider this agent always runs: one agent, one target, the
+// node's dockerd (ADR-0007), the local daemon or DOCKER_HOST if set. On a swarm
+// manager the agent also runs the Swarm provider against the same daemon (ADR-0045).
 const nodeProvider = docker.Name
 
 // agentProviders registers the providers compiled into this binary. Each keeps its
@@ -122,6 +124,11 @@ func agentProviders(root string) (*provider.Registry, error) {
 	r := provider.NewRegistry()
 	if err := r.Add(docker.Name, func(target string) (provider.Provider, error) {
 		return docker.New(root, target)
+	}); err != nil {
+		return nil, err
+	}
+	if err := r.Add(swarm.Name, func(target string) (provider.Provider, error) {
+		return swarm.New(filepath.Join(root, swarm.Name), target)
 	}); err != nil {
 		return nil, err
 	}
@@ -163,6 +170,17 @@ func runAgent(ctx context.Context, cfg agentConfig) error {
 	if err != nil {
 		return fmt.Errorf("describe provider: %w", err)
 	}
+	descriptors := []*bohuxv1.ProviderDescriptor{descriptorProto(desc)}
+	// The Swarm provider joins when this daemon is a single-manager swarm (ADR-0045).
+	extra := map[string]provider.Provider{}
+	if sp, err := reg.New(swarm.Name, ""); err != nil {
+		return err
+	} else if sd, err := sp.Describe(ctx); err != nil {
+		slog.InfoContext(ctx, "swarm provider not offered", "reason", err)
+	} else {
+		extra[swarm.Name] = sp
+		descriptors = append(descriptors, descriptorProto(sd))
+	}
 
 	disk := &agent.DiskMonitor{Paths: []string{stateDir}}
 	if d, ok := p.(interface {
@@ -176,13 +194,13 @@ func runAgent(ctx context.Context, cfg agentConfig) error {
 	}
 	sampler := &agent.Sampler{Paths: disk.Paths, Provider: p}
 	link := &agent.Link{}
-	rec := &agent.Reconciler{State: st, Cache: cache, Provider: p, Usage: sampler, Link: link}
+	rec := &agent.Reconciler{State: st, Cache: cache, Provider: p, Extra: extra, Usage: sampler, Link: link}
 	if cfg.IngressSocket != "" {
 		rec.Ingress = &ingress.Caddy{AdminSocket: cfg.IngressSocket, ACMEEmail: cfg.ACMEEmail,
 			Dir: filepath.Join(stateDir, "ingress")}
 	}
 	opts := agent.RunOptions{State: st, Cache: cache, Reports: rec, Disk: disk, Link: link,
-		Providers: []*bohuxv1.ProviderDescriptor{descriptorProto(desc)},
+		Providers: descriptors,
 		Builder:   &agent.Builder{Disk: disk, WorkDir: filepath.Join(stateDir, "builds"), Secrets: st},
 		Workloads: rec}
 

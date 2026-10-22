@@ -61,7 +61,7 @@ func (r *Reconciler) switches(w *agentv1.Workload) bool {
 // endpoints the ingress should serve now, whether that is w itself, the cut-over to
 // make once the ingress serves it, and the refs it keeps.
 func (r *Reconciler) convergeSlots(ctx context.Context, base provider.ResourceRef, w *agentv1.Workload,
-	ws *agentv1.WorkloadStatus, slots map[string]slotEntry, applied map[provider.ResourceRef]bool,
+	ws *agentv1.WorkloadStatus, slots map[string]slotEntry, applied appliedSet,
 ) (st provider.Status, current bool, cut *cutover, keep []provider.ResourceRef) {
 	key := slotKey(base)
 	e := slots[key]
@@ -73,7 +73,7 @@ func (r *Reconciler) convergeSlots(ctx context.Context, base provider.ResourceRe
 		slog.ErrorContext(ctx, "build spec", "app", w.GetAppId(), "err", err)
 		return provider.Status{}, false, nil, []provider.ResourceRef{live}
 	}
-	stLive, err := r.Provider.Status(ctx, live)
+	stLive, err := r.providerNamed(w.GetProvider()).Status(ctx, live)
 	if err != nil {
 		fail(ws, "STATUS_FAILED")
 		slog.ErrorContext(ctx, "provider status", "app", w.GetAppId(), "err", err)
@@ -82,7 +82,7 @@ func (r *Reconciler) convergeSlots(ctx context.Context, base provider.ResourceRe
 	if !stLive.Exists || e.Hash == spec.Hash || (e.Hash == "" && stLive.Hash == spec.Hash) {
 		// The live slot runs w (or nothing runs): converge in place, and drop a
 		// pending slot a compensation or fallback left behind.
-		if err := r.record(applied, live); err != nil {
+		if err := r.record(applied, live, w.GetProvider()); err != nil {
 			fail(ws, "STATE_WRITE_FAILED")
 			return provider.Status{}, false, nil, []provider.ResourceRef{live, pending}
 		}
@@ -91,7 +91,7 @@ func (r *Reconciler) convergeSlots(ctx context.Context, base provider.ResourceRe
 		return st, true, nil, []provider.ResourceRef{live}
 	}
 	// A new spec: bring it up beside the live slot, which keeps serving.
-	if err := r.record(applied, pending); err != nil {
+	if err := r.record(applied, pending, w.GetProvider()); err != nil {
 		fail(ws, "STATE_WRITE_FAILED")
 		return stLive, false, nil, []provider.ResourceRef{live, pending}
 	}
@@ -110,7 +110,7 @@ func (r *Reconciler) convergeSlots(ctx context.Context, base provider.ResourceRe
 // finish makes a cut-over permanent once the ingress serves its new slot: record it
 // first, so a crash before the old slot is gone re-destroys rather than serving a
 // destroyed slot, then destroy the old slot.
-func (r *Reconciler) finish(ctx context.Context, c *cutover, slots map[string]slotEntry, applied map[provider.ResourceRef]bool) {
+func (r *Reconciler) finish(ctx context.Context, c *cutover, slots map[string]slotEntry, applied appliedSet) {
 	slots[c.key] = slotEntry{Slot: c.to.Slot, Hash: c.hash}
 	if err := r.saveSlots(slots); err != nil {
 		slog.ErrorContext(ctx, "record slot switch", "app", c.to.App, "err", err)
@@ -120,21 +120,24 @@ func (r *Reconciler) finish(ctx context.Context, c *cutover, slots map[string]sl
 	r.destroy(ctx, c.from, applied)
 }
 
-// record notes ref as applied before anything is applied to it.
-func (r *Reconciler) record(applied map[provider.ResourceRef]bool, ref provider.ResourceRef) error {
-	if applied[ref] {
+// record notes ref as applied, with the provider that owns it, before anything is
+// applied to it.
+func (r *Reconciler) record(applied appliedSet, ref provider.ResourceRef, owner string) error {
+	if cur, ok := applied[ref]; ok && cur == owner {
 		return nil
 	}
-	applied[ref] = true
+	applied[ref] = owner
 	return r.saveApplied(applied)
 }
 
-// destroy removes ref and forgets it; a failure is retried on a later pass.
-func (r *Reconciler) destroy(ctx context.Context, ref provider.ResourceRef, applied map[provider.ResourceRef]bool) {
-	if !applied[ref] {
+// destroy removes ref through the provider that applied it and forgets it; a failure
+// is retried on a later pass.
+func (r *Reconciler) destroy(ctx context.Context, ref provider.ResourceRef, applied appliedSet) {
+	owner, ok := applied[ref]
+	if !ok {
 		return
 	}
-	if err := r.Provider.Destroy(ctx, ref); err != nil {
+	if err := r.providerNamed(owner).Destroy(ctx, ref); err != nil {
 		slog.ErrorContext(ctx, "destroy workload; will retry", "app", ref.App, "slot", ref.Slot, "err", err)
 		return
 	}

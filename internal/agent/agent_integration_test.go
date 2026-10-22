@@ -30,6 +30,13 @@ func (l liveRestore) LiveRestoreEnabled(context.Context) (bool, error) { return 
 
 func (liveRestore) BuildxAvailable(context.Context) error { return nil }
 
+func (liveRestore) SwarmManager(context.Context) (bool, error) { return false, nil }
+
+// swarmManager has live-restore off, as a swarm manager must (ADR-0045).
+type swarmManager struct{ liveRestore }
+
+func (swarmManager) SwarmManager(context.Context) (bool, error) { return true, nil }
+
 // wrongPin changes the pin's first byte, whatever it is: a fixed replacement would
 // match the real pin one run in 256.
 func wrongPin(pin string) string {
@@ -244,6 +251,14 @@ func TestRegisterRefusals(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("a swarm manager registers without live-restore", func(t *testing.T) {
+		if err := Register(ctx, RegisterOptions{StateDir: t.TempDir(), ControlPlane: cp.addr,
+			Token: cp.bootstrapToken("swarm"), CACertSHA256: cp.pki.CACertSHA256(),
+			Docker: swarmManager{false}}); err != nil {
+			t.Fatal(err)
+		}
+	})
 
 	t.Run("registering twice is refused", func(t *testing.T) {
 		st := cp.register(t, "twice")

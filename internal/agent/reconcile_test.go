@@ -177,7 +177,7 @@ func TestReconcile(t *testing.T) {
 
 	t.Run("no assignment changes nothing", func(t *testing.T) {
 		// Even with a stale record of applied workloads from an earlier run.
-		if err := r.saveApplied(map[provider.ResourceRef]bool{ref("old"): true}); err != nil {
+		if err := r.saveApplied(appliedSet{ref("old"): ""}); err != nil {
 			t.Fatal(err)
 		}
 		if rep := r.Once(ctx); rep != nil {
@@ -238,7 +238,9 @@ func TestReconcile(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if applied[ref("web")] || !applied[ref("api")] {
+		_, web := applied[ref("web")]
+		_, api := applied[ref("api")]
+		if web || !api {
 			t.Errorf("applied record %v", applied)
 		}
 	})
@@ -361,5 +363,59 @@ func TestReconcilePullConfig(t *testing.T) {
 	r.Once(ctx)
 	if after, _ := fake.counts(); after != before {
 		t.Errorf("a rotated credential restarted the workload (%d applies)", after-before)
+	}
+}
+
+// TestReconcileExtraProvider runs two providers on one node (ADR-0045): each workload
+// goes to the one it names, records remember the owner, and records written before
+// owners were named belong to the primary provider.
+func TestReconcileExtraProvider(t *testing.T) {
+	ctx := context.Background()
+	signer, err := pki.LoadOrCreate(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := testState(t, signer)
+	c, err := OpenCache(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, other := newFake(), newFake()
+	r := &Reconciler{State: st, Cache: c, Provider: primary, Extra: map[string]provider.Provider{"other": other}}
+
+	// An applied.json from an agent that did not name providers.
+	legacy := `[{"Environment":"env","App":"legacy"}]`
+	if err := writeFile(st.dir, appliedFile, []byte(legacy)); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := proto.Marshal(&agentv1.AssignmentPayload{NodeId: st.NodeID(), Generation: 1,
+		Workloads: []*agentv1.Workload{{AppId: "swarm-app", EnvironmentId: "env", Provider: "other", ReleaseId: "r1",
+			Image: "img@sha256:1", Runtime: &bohuxv1.Runtime{Replicas: 1}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, keyID := signer.SignAssignment(payload)
+	if _, err := c.Accept(&agentv1.Assignment{Payload: payload, Signature: sig, KeyId: keyID}); err != nil {
+		t.Fatal(err)
+	}
+	rep := r.Once(ctx)
+	if f := rep.GetWorkloads()[0].GetFailure(); f != nil {
+		t.Fatalf("workload failed: %v", f)
+	}
+	if !other.isRunning(ref("swarm-app")) || primary.isRunning(ref("swarm-app")) {
+		t.Error("the workload did not run on the provider it names")
+	}
+	if len(primary.destroyed) != 1 || primary.destroyed[0] != ref("legacy") || len(other.destroyed) != 0 {
+		t.Errorf("legacy record destroyed by primary %v, other %v; want the primary", primary.destroyed, other.destroyed)
+	}
+	applied, err := r.loadApplied()
+	if err != nil || len(applied) != 1 || applied[ref("swarm-app")] != "other" {
+		t.Errorf("applied = %v, %v; want swarm-app owned by other", applied, err)
+	}
+
+	assign(t, signer, st, c, 2, nil)
+	r.Once(ctx)
+	if len(other.destroyed) != 1 || other.destroyed[0] != ref("swarm-app") {
+		t.Errorf("removed through %v; want the owning provider", other.destroyed)
 	}
 }

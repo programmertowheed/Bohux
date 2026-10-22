@@ -14,6 +14,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -28,10 +29,12 @@ import (
 )
 
 // DockerChecker checks the node's Docker before registration: live-restore keeps
-// containers running across dockerd restarts (ADR-0020 item 9), and buildx builds
-// Releases (ADR-0028).
+// containers running across dockerd restarts (ADR-0020 item 9), unless the daemon is
+// a swarm manager, which cannot run with it (ADR-0045); buildx builds Releases
+// (ADR-0028).
 type DockerChecker interface {
 	LiveRestoreEnabled(ctx context.Context) (bool, error)
+	SwarmManager(ctx context.Context) (bool, error)
 	BuildxAvailable(ctx context.Context) error
 }
 
@@ -55,9 +58,19 @@ func (DockerCLI) LiveRestoreEnabled(ctx context.Context) (bool, error) {
 	return strings.TrimSpace(string(out)) == "true", nil
 }
 
+// SwarmManager runs `docker info --format {{.Swarm.ControlAvailable}}`.
+func (DockerCLI) SwarmManager(ctx context.Context) (bool, error) {
+	out, err := exec.CommandContext(ctx, "docker", "info", "--format", "{{.Swarm.ControlAvailable}}").Output()
+	if err != nil {
+		return false, fmt.Errorf("docker info: %w", err)
+	}
+	return strings.TrimSpace(string(out)) == "true", nil
+}
+
 // ErrLiveRestoreOff names the Docker setting the agent requires.
 var ErrLiveRestoreOff = errors.New(`docker live-restore is off: containers would stop whenever ` +
-	`dockerd restarts. Set "live-restore": true in /etc/docker/daemon.json and reload dockerd`)
+	`dockerd restarts. Set "live-restore": true in /etc/docker/daemon.json and reload dockerd ` +
+	`(a swarm manager, which cannot have it, is accepted without it)`)
 
 // ErrNoBuildx names the Docker plugin builds need.
 var ErrNoBuildx = errors.New("docker buildx is not installed: Bohux builds Releases with it. " +
@@ -92,7 +105,15 @@ func Register(ctx context.Context, o RegisterOptions) error {
 		return fmt.Errorf("check Docker live-restore: %w", err)
 	}
 	if !ok {
-		return ErrLiveRestoreOff
+		manager, err := o.Docker.SwarmManager(ctx)
+		if err != nil {
+			return fmt.Errorf("check Docker swarm mode: %w", err)
+		}
+		if !manager {
+			return ErrLiveRestoreOff
+		}
+		slog.WarnContext(ctx, "live-restore is off on this swarm manager: a dockerd restart restarts every "+
+			"container on the node, and Swarm starts its tasks again (ADR-0045)")
 	}
 	if err := o.Docker.BuildxAvailable(ctx); err != nil {
 		return err

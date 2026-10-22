@@ -42,14 +42,24 @@ func (r *Reconciler) Ref(appID string) (provider.ResourceRef, bool) {
 	return provider.ResourceRef{}, false
 }
 
-// Logs reads log lines through the provider.
+// Logs reads log lines through the App's provider.
 func (r *Reconciler) Logs(ctx context.Context, req provider.LogRequest) (iter.Seq2[provider.LogLine, error], error) {
-	return r.Provider.Logs(ctx, req)
+	return r.providerOf(req.Ref.App).Logs(ctx, req)
 }
 
-// Exec starts a process through the provider.
+// Exec starts a process through the App's provider.
 func (r *Reconciler) Exec(ctx context.Context, req provider.ExecRequest) (provider.Session, error) {
-	return r.Provider.Exec(ctx, req)
+	return r.providerOf(req.Ref.App).Exec(ctx, req)
+}
+
+// providerOf is the provider the App's workload names in the cached assignment.
+func (r *Reconciler) providerOf(appID string) provider.Provider {
+	for _, w := range r.Cache.Current().GetWorkloads() {
+		if w.GetAppId() == appID {
+			return r.providerNamed(w.GetProvider())
+		}
+	}
+	return r.Provider
 }
 
 // execNotStarted is the exit code reported when a process could not be started, as a

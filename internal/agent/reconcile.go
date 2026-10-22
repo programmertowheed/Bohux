@@ -42,9 +42,14 @@ const (
 // plane (rule 1, ADR-0007). It is the only apply path: deploys, rollbacks, and
 // self-healing all arrive as a cached assignment.
 type Reconciler struct {
-	State    *State
-	Cache    *Cache
+	State *State
+	Cache *Cache
+	// Provider is the node's primary provider (Docker); workloads recorded before
+	// records named their provider belong to it.
 	Provider provider.Provider
+	// Extra are further providers on the same node by name, e.g. "swarm" on a swarm
+	// manager (ADR-0045). Each workload names the one it runs on.
+	Extra map[string]provider.Provider
 	// Interval between passes; zero means 10 seconds. A new assignment triggers a
 	// pass at once.
 	Interval time.Duration
@@ -176,7 +181,7 @@ func (r *Reconciler) Once(ctx context.Context) *agentv1.StatusReport {
 		w, fellBack := r.effective(ctx, w, fallbacks)
 		ws := &agentv1.WorkloadStatus{AppId: w.GetAppId(), ReleaseId: w.GetReleaseId()}
 		report.Workloads = append(report.Workloads, ws)
-		if w.GetProvider() != desc.Name {
+		if w.GetProvider() != desc.Name && r.Extra[w.GetProvider()] == nil {
 			desired[ref] = true
 			fail(ws, "PROVIDER_MISSING")
 			slog.ErrorContext(ctx, "workload needs a provider this node does not run",
@@ -198,7 +203,7 @@ func (r *Reconciler) Once(ctx context.Context) *agentv1.StatusReport {
 			// A workload that does not switch stays in the slot it lives in.
 			ref.Slot = slots[slotKey(ref)].Slot
 			desired[ref] = true
-			if err := r.record(applied, ref); err != nil {
+			if err := r.record(applied, ref, w.GetProvider()); err != nil {
 				// Recorded before Apply, so a crash mid-apply still leaves a trace to
 				// clean up if the workload is later removed.
 				fail(ws, "STATE_WRITE_FAILED")
@@ -253,7 +258,7 @@ type routedWorkload struct {
 // workload is marked ingress_loaded once the loaded config serves all its routes; a
 // refused or impossible load marks the routed workloads INGRESS_FAILED, retried next
 // pass, while the ingress keeps serving what it had.
-func (r *Reconciler) serve(ctx context.Context, routed []routedWorkload, slots map[string]slotEntry, applied map[provider.ResourceRef]bool) {
+func (r *Reconciler) serve(ctx context.Context, routed []routedWorkload, slots map[string]slotEntry, applied appliedSet) {
 	if r.Ingress == nil {
 		for _, rw := range routed {
 			failIfOK(rw.ws, "INGRESS_FAILED")
@@ -404,19 +409,20 @@ func (r *Reconciler) converge(ctx context.Context, ref provider.ResourceRef, w *
 		slog.ErrorContext(ctx, "build spec", "app", w.GetAppId(), "err", err)
 		return provider.Status{}
 	}
-	st, err := r.Provider.Status(ctx, ref)
+	p := r.providerNamed(w.GetProvider())
+	st, err := p.Status(ctx, ref)
 	if err != nil {
 		fail(ws, "STATUS_FAILED")
 		slog.ErrorContext(ctx, "provider status", "app", w.GetAppId(), "err", err)
 		return provider.Status{}
 	}
 	if !st.Exists || st.Hash != spec.Hash || !st.Running {
-		if _, err := r.Provider.Apply(ctx, provider.ApplyRequest{Spec: spec}); err != nil {
+		if _, err := p.Apply(ctx, provider.ApplyRequest{Spec: spec}); err != nil {
 			fail(ws, "APPLY_FAILED")
 			slog.ErrorContext(ctx, "provider apply; will retry", "app", w.GetAppId(), "err", err)
 			return provider.Status{}
 		}
-		if st, err = r.Provider.Status(ctx, ref); err != nil {
+		if st, err = p.Status(ctx, ref); err != nil {
 			fail(ws, "STATUS_FAILED")
 			slog.ErrorContext(ctx, "provider status", "app", w.GetAppId(), "err", err)
 			return provider.Status{}
@@ -518,8 +524,19 @@ func (r *Reconciler) secretDigest(values map[string]string) []byte {
 	return mac.Sum(nil)
 }
 
-func (r *Reconciler) loadApplied() (map[provider.ResourceRef]bool, error) {
-	out := map[provider.ResourceRef]bool{}
+// appliedSet maps every workload this agent applied and has not destroyed to the
+// name of the provider that owns it; "" is the primary provider.
+type appliedSet map[provider.ResourceRef]string
+
+// appliedEntry is one record in appliedFile. Records written before providers were
+// named have no provider and belong to the primary one.
+type appliedEntry struct {
+	provider.ResourceRef
+	Provider string `json:",omitempty"`
+}
+
+func (r *Reconciler) loadApplied() (appliedSet, error) {
+	out := appliedSet{}
 	raw, err := os.ReadFile(filepath.Join(r.State.dir, appliedFile))
 	if errors.Is(err, fs.ErrNotExist) {
 		return out, nil
@@ -527,33 +544,43 @@ func (r *Reconciler) loadApplied() (map[provider.ResourceRef]bool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", appliedFile, err)
 	}
-	var refs []provider.ResourceRef
-	if err := json.Unmarshal(raw, &refs); err != nil {
+	var entries []appliedEntry
+	if err := json.Unmarshal(raw, &entries); err != nil {
 		return nil, fmt.Errorf("decode %s: %w", appliedFile, err)
 	}
-	for _, ref := range refs {
-		out[ref] = true
+	for _, e := range entries {
+		out[e.ResourceRef] = e.Provider
 	}
 	return out, nil
 }
 
-func (r *Reconciler) saveApplied(applied map[provider.ResourceRef]bool) error {
-	refs := make([]provider.ResourceRef, 0, len(applied))
-	for ref := range applied {
-		refs = append(refs, ref)
+func (r *Reconciler) saveApplied(applied appliedSet) error {
+	entries := make([]appliedEntry, 0, len(applied))
+	for ref, name := range applied {
+		entries = append(entries, appliedEntry{ResourceRef: ref, Provider: name})
 	}
-	sort.Slice(refs, func(i, j int) bool {
-		if refs[i].Environment != refs[j].Environment {
-			return refs[i].Environment < refs[j].Environment
+	sort.Slice(entries, func(i, j int) bool {
+		a, b := entries[i].ResourceRef, entries[j].ResourceRef
+		if a.Environment != b.Environment {
+			return a.Environment < b.Environment
 		}
-		if refs[i].App != refs[j].App {
-			return refs[i].App < refs[j].App
+		if a.App != b.App {
+			return a.App < b.App
 		}
-		return refs[i].Slot < refs[j].Slot
+		return a.Slot < b.Slot
 	})
-	b, err := json.Marshal(refs)
+	b, err := json.Marshal(entries)
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", appliedFile, err)
 	}
 	return writeFile(r.State.dir, appliedFile, b)
+}
+
+// providerNamed returns the provider a workload names: an extra one, else the primary
+// (which also owns records without a name).
+func (r *Reconciler) providerNamed(name string) provider.Provider {
+	if p, ok := r.Extra[name]; ok {
+		return p
+	}
+	return r.Provider
 }
