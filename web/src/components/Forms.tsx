@@ -143,7 +143,7 @@ export function AppSettings({ app }: { app: App }) {
   };
   const save = (change: Partial<Pick<App, "routes" | "imagePullSecret" | "source">>) => run(() => update.mutateAsync({
     id: app.meta?.id, source: app.source, runtime: app.runtime, secrets: app.secrets,
-    providerOptions: app.providerOptions, routes: app.routes, imagePullSecret: app.imagePullSecret,
+    providerOptions: app.providerOptions, routes: app.routes, imagePullSecret: app.imagePullSecret, slo: app.slo,
     ...change, expectedRevisionId: app.meta?.revisionId, idempotencyKey: key(),
   }));
   const setRoutes = (routes: App["routes"]) => save({ routes });

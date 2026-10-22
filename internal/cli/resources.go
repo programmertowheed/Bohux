@@ -13,9 +13,11 @@ import (
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
+	"github.com/bohumix/bohux/internal/slo"
 )
 
 // Resource commands are `bohux <noun> <verb>` (ADR-0036).
@@ -23,10 +25,12 @@ import (
 // ResourceCommands lists the resource commands for the binary's usage text.
 const ResourceCommands = `  project list|create      projects
   env list|create          environments of a project (-p)
-  app list|show|create|pull-secret|deploy-key
+  app list|show|create|pull-secret|deploy-key|slo
                            apps of an environment (-p, -e); create --git builds the
                            Dockerfile, or Railpack without one (--build); pull-secret and
-                           deploy-key name the secret with a registry credential or an SSH key
+                           deploy-key name the secret with a registry credential or an SSH key;
+                           slo sets the objective deploys are judged by (--availability 99.9
+                           --latency 300ms@95 --watch 10m), or --clear
   route list|add|remove    an app's hosts on the node's ingress
   secret list|set          an environment's secrets; set reads the value from stdin
   node list|token          nodes, and bootstrap tokens to register one
@@ -147,6 +151,8 @@ func (c *command) runResource(ctx context.Context, noun string, args []string, s
 		return r.appPullSecret(ctx, rest)
 	case "app deploy-key":
 		return r.appDeployKey(ctx, rest)
+	case "app slo":
+		return r.appSLO(ctx, rest)
 	case "route list":
 		return r.routeList(ctx, rest)
 	case "route add":
@@ -484,6 +490,7 @@ func (r *resource) updateApp(ctx context.Context, slug string, change func(*bohu
 	_, err = r.apps.UpdateApp(ctx, call(r.token, &bohuxv1.UpdateAppRequest{Id: a.GetMeta().GetId(),
 		Source: a.GetSource(), Runtime: a.GetRuntime(), Secrets: a.GetSecrets(),
 		ProviderOptions: a.GetProviderOptions(), Routes: a.GetRoutes(), ImagePullSecret: a.GetImagePullSecret(),
+		Slo:                a.GetSlo(),
 		ExpectedRevisionId: a.GetMeta().GetRevisionId(), IdempotencyKey: r.key()}))
 	if err != nil {
 		return fmt.Errorf("update app %q: %w", slug, err)
@@ -564,8 +571,91 @@ func (r *resource) appShow(ctx context.Context, args []string) error {
 	if g := a.GetSource().GetGit(); g != nil {
 		build = buildStrategyName(g.GetStrategy())
 	}
-	return r.emit(&bohuxv1.GetAppResponse{App: a}, append(append([]string{}, appHeader...), "BUILD", "CPU", "MEMORY", "PULL SECRET"),
-		[][]string{append(appRow(a), build, cpu, mem, pull)})
+	return r.emit(&bohuxv1.GetAppResponse{App: a}, append(append([]string{}, appHeader...), "BUILD", "CPU", "MEMORY", "PULL SECRET", "SLO"),
+		[][]string{append(appRow(a), build, cpu, mem, pull, sloSummary(a.GetSlo()))})
+}
+
+// sloSummary is an App's SLO on one line: "99.9%, 95% < 300ms, burn 10, watch 10m".
+func sloSummary(o *bohuxv1.SLO) string {
+	if o == nil {
+		return "-"
+	}
+	parts := []string{percent(o.GetAvailabilityTarget())}
+	if l := o.GetLatency(); l != nil {
+		parts = append(parts, fmt.Sprintf("%s < %dms", percent(l.GetTarget()), l.GetThresholdMs()))
+	}
+	burn := o.GetMaxBurnRate()
+	if burn == 0 {
+		burn = slo.DefaultMaxBurnRate
+	}
+	watch := 10 * time.Minute
+	if o.GetWatch() != nil {
+		watch = o.GetWatch().AsDuration()
+	}
+	return strings.Join(append(parts, "burn "+strconv.FormatFloat(burn, 'g', -1, 64), "watch "+watch.String()), ", ")
+}
+
+func percent(f float64) string {
+	return strconv.FormatFloat(f*100, 'f', -1, 64) + "%"
+}
+
+// appSLO sets or clears the App's SLO (ADR-0050). Deploys after the change are judged
+// by it: during a canary's bake, or for the watch window after a deploy is healthy.
+func (r *resource) appSLO(ctx context.Context, args []string) error {
+	avail := r.fs.Float64("availability", 0, "availability target in percent, 90 to 99.999 (e.g. 99.9)")
+	latency := r.fs.String("latency", "", "latency objective THRESHOLD@PERCENT, e.g. 300ms@95; the threshold is one of "+boundsList())
+	burn := r.fs.Float64("burn", 0, "burn rate above which a deploy is rolled back, 1 to 1000 (default 10)")
+	watch := r.fs.Duration("watch", 0, "how long a deploy is watched after it is healthy, 1m to 1h (default 10m)")
+	none := r.fs.Bool("clear", false, "remove the SLO: deploys are judged by health alone")
+	pos, err := r.positional(args, 1, "an app slug")
+	if err != nil {
+		return err
+	}
+	var want *bohuxv1.SLO
+	switch {
+	case *none && (*avail != 0 || *latency != "" || *burn != 0 || *watch != 0):
+		return fmt.Errorf("app slo: --clear takes no other flag: %w", ErrUsage)
+	case !*none && *avail == 0:
+		return fmt.Errorf("app slo: give --availability PERCENT or --clear: %w", ErrUsage)
+	case !*none:
+		want = &bohuxv1.SLO{AvailabilityTarget: *avail / 100, MaxBurnRate: *burn}
+		if *latency != "" {
+			l, err := parseLatency(*latency)
+			if err != nil {
+				return err
+			}
+			want.Latency = l
+		}
+		if *watch != 0 {
+			want.Watch = durationpb.New(*watch)
+		}
+	}
+	return r.updateApp(ctx, pos[0], func(a *bohuxv1.App) bool {
+		if proto.Equal(a.GetSlo(), want) {
+			return false
+		}
+		a.Slo = want
+		return true
+	})
+}
+
+// parseLatency reads THRESHOLD@PERCENT, e.g. 300ms@95.
+func parseLatency(v string) (*bohuxv1.LatencyObjective, error) {
+	th, pct, ok := strings.Cut(v, "@")
+	d, derr := time.ParseDuration(th)
+	p, perr := strconv.ParseFloat(pct, 64)
+	if !ok || derr != nil || perr != nil || d <= 0 || d%time.Millisecond != 0 {
+		return nil, fmt.Errorf("app slo: --latency %q: want THRESHOLD@PERCENT, e.g. 300ms@95: %w", v, ErrUsage)
+	}
+	return &bohuxv1.LatencyObjective{ThresholdMs: uint32(d.Milliseconds()), Target: p / 100}, nil
+}
+
+func boundsList() string {
+	b := make([]string, len(slo.LatencyBoundsMS))
+	for i, ms := range slo.LatencyBoundsMS {
+		b[i] = strconv.Itoa(int(ms)) + "ms"
+	}
+	return strings.Join(b, ", ")
 }
 
 // buildStrategies are --build's values (ADR-0047).
