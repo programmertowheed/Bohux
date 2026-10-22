@@ -1,4 +1,4 @@
-import { buildName, bytes, canaryText, enumName, short } from "./format";
+import { buildName, bytes, canaryText, enumName, short, sloText } from "./format";
 import { BuildStrategy } from "./gen/bohux/v1/app_pb";
 
 test("enum names read like the CLI's", () => {
@@ -25,4 +25,12 @@ test("a canary reads as its share and bake", () => {
   expect(canaryText({ weightPercent: 10, bake: { seconds: 900n, nanos: 0 } } as never)).toBe("10% for 15m");
   expect(canaryText({ weightPercent: 25, bake: { seconds: 5400n, nanos: 0 } } as never)).toBe("25% for 1h30m");
   expect(canaryText(undefined)).toBe("");
+});
+
+test("an SLO reads as its targets, burn rate and watch", () => {
+  expect(sloText({ availabilityTarget: 0.999, latency: { thresholdMs: 250, target: 0.95 }, maxBurnRate: 0 } as never))
+    .toBe("99.9%, 95% < 250ms, burn 10, watch 10m");
+  expect(sloText({ availabilityTarget: 0.99, maxBurnRate: 14.4, watch: { seconds: 90n, nanos: 0 } } as never))
+    .toBe("99%, burn 14.4, watch 90s");
+  expect(sloText(undefined)).toBe("");
 });

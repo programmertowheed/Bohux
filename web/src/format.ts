@@ -1,5 +1,5 @@
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
-import { BuildStrategy } from "./gen/bohux/v1/app_pb";
+import { BuildStrategy, type SLO } from "./gen/bohux/v1/app_pb";
 import type { Canary } from "./gen/bohux/v1/deployment_pb";
 
 // enumName turns DEPLOYMENT_STATE_ROLLED_BACK into "rolled back".
@@ -51,4 +51,16 @@ export function canaryText(c: Canary | undefined): string {
     }
   }
   return `${c.weightPercent}% for ${parts.join("") || "0s"}`;
+}
+
+// sloText says what an App's deploys are judged by, like `bohux app show` (ADR-0050):
+// "99.9%, 95% < 250ms, burn 10, watch 10m".
+export function sloText(o: SLO | undefined): string {
+  if (!o) return "";
+  const pct = (f: number) => `${+(f * 100).toFixed(5)}%`;
+  const parts = [pct(o.availabilityTarget)];
+  if (o.latency) parts.push(`${pct(o.latency.target)} < ${o.latency.thresholdMs}ms`);
+  const watch = Number(o.watch?.seconds ?? 600n);
+  const w = watch % 60 === 0 ? `${watch / 60}m` : `${watch}s`;
+  return [...parts, `burn ${o.maxBurnRate || 10}`, `watch ${w}`].join(", ");
 }

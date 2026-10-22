@@ -9,7 +9,7 @@ import { ReleaseService, ReleaseState } from "../gen/bohux/v1/release_pb";
 import { DeploymentService, DeploymentState } from "../gen/bohux/v1/deployment_pb";
 import { SecretService } from "../gen/bohux/v1/secret_pb";
 import { Failed, Loading, Table } from "../components/Table";
-import { buildName, enumName, short, when } from "../format";
+import { buildName, enumName, short, sloText, when } from "../format";
 import { Webhooks } from "../components/Hooks";
 
 function key(): string {
@@ -43,6 +43,11 @@ export function AppPage() {
       {a.data.app.source?.kind.case === "git" && (
         <p className="text-sm text-muted">
           Built from {a.data.app.source.kind.value.repoUrl} with {buildName(a.data.app.source.kind.value.strategy)}
+        </p>
+      )}
+      {a.data.app.slo && (
+        <p className="text-sm text-muted">
+          Deploys are judged by its SLO: {sloText(a.data.app.slo)} (set with <code>bohux app slo</code>)
         </p>
       )}
       <div>
