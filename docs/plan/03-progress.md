@@ -1411,8 +1411,8 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   found the tailer skipping the first lines of a log created after the agent started;
   fixed. Checked live: a 5xx-returning release rolled back with `SLO_AVAILABILITY`.
 - Verified: build, vet, golangci-lint (plain, integration, integration+e2e), macOS
-  build, unit with race, full integration suite, e2e (see the result below), web
-  typecheck/tests/build. No provider changed, so no conformance run.
+  build, unit with race, full integration suite, e2e (deploy, build, restore drill)
+  green, web typecheck/tests/build. No provider changed, so no conformance run.
 
 ### 2026-10-22 (S25) — branch `claude/relaxed-rubin-76m7dl`
 - Owner picked canary deploys (auto-promote after a bake, one step, per deployment).
