@@ -16,6 +16,7 @@ import (
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/gen/bohux/v1/bohuxv1connect"
 	"github.com/bohumix/bohux/internal/auth"
+	"github.com/bohumix/bohux/internal/slo"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/workflow/deploy"
 )
@@ -106,6 +107,33 @@ func canaryOf(c *bohuxv1.Canary) (*deploy.Canary, error) {
 		return nil, invalidArgument("canary.bake", "OUT_OF_RANGE", "bake must be whole seconds from 1m to 24h")
 	}
 	return &deploy.Canary{Weight: c.GetWeightPercent(), Bake: bake}, nil
+}
+
+// defaultSLOWatch is how long a deploy is verified when the SLO names no watch.
+const defaultSLOWatch = 10 * time.Minute
+
+// appSLO returns the App's current SLO as the deploy judges it, nil when it has none
+// (ADR-0050). The deploy takes it when it starts; a later change applies to the next.
+func appSLO(ctx context.Context, tx *store.Tx, app uuid.UUID) (*deploy.SLO, error) {
+	var raw []byte
+	if err := tx.QueryRow(ctx, `SELECT r.slo FROM apps_heads a
+		JOIN apps_revisions r ON r.id = a.revision_id WHERE a.id = $1`, app).Scan(&raw); err != nil {
+		return nil, fmt.Errorf("read app slo: %w", err)
+	}
+	if raw == nil {
+		return nil, nil
+	}
+	s := &bohuxv1.SLO{}
+	if err := loadJSON.Unmarshal(raw, s); err != nil {
+		return nil, fmt.Errorf("decode app slo: %w", err)
+	}
+	out := &deploy.SLO{Watch: defaultSLOWatch, Objective: slo.Objective{
+		Availability: s.GetAvailabilityTarget(), MaxBurnRate: s.GetMaxBurnRate(),
+		LatencyThresholdMS: s.GetLatency().GetThresholdMs(), LatencyTarget: s.GetLatency().GetTarget()}}
+	if s.GetWatch() != nil {
+		out.Watch = s.GetWatch().AsDuration()
+	}
+	return out, nil
 }
 
 // switchesSlots reports whether the App's current revision deploys into its other
@@ -229,8 +257,9 @@ func (ds *deploymentService) start(ctx context.Context, r deployRequest) (*bohux
 		return nil, toConnect(ctx, err)
 	}
 	var (
-		out *bohuxv1.Deployment
-		app uuid.UUID
+		out       *bohuxv1.Deployment
+		app       uuid.UUID
+		objective *deploy.SLO
 	)
 	err = ds.s.Store.InTenant(ctx, p.Tenant, func(tx *store.Tx) error {
 		prior, err := idem.lookup(ctx, tx)
@@ -257,6 +286,9 @@ func (ds *deploymentService) start(ctx context.Context, r deployRequest) (*bohux
 		}
 		if _, problem := deploy.ValidateRelease(ctx, tx, app, r.release, r.env); problem != nil {
 			return connect.NewError(connect.CodeFailedPrecondition, problem)
+		}
+		if objective, err = appSLO(ctx, tx, app); err != nil {
+			return err
 		}
 		if r.canary != nil {
 			ok, err := switchesSlots(ctx, tx, app)
@@ -297,6 +329,7 @@ func (ds *deploymentService) start(ctx context.Context, r deployRequest) (*bohux
 		EnvironmentID: r.env.String(), ReleaseID: r.release.String(), Reason: r.reason,
 		Actor:  deploy.Actor{ID: actor.ID.String(), Kind: string(actor.Kind)},
 		Canary: r.canary,
+		SLO:    objective,
 	}
 	if r.rollbackOf != nil {
 		in.RollbackOf = r.rollbackOf.String()
@@ -625,6 +658,7 @@ var deploymentStates = map[string]bohuxv1.DeploymentState{
 	"applying":          bohuxv1.DeploymentState_DEPLOYMENT_STATE_APPLYING,
 	"health_gate":       bohuxv1.DeploymentState_DEPLOYMENT_STATE_HEALTH_GATE,
 	"canary":            bohuxv1.DeploymentState_DEPLOYMENT_STATE_CANARY,
+	"verifying":         bohuxv1.DeploymentState_DEPLOYMENT_STATE_VERIFYING,
 	"succeeded":         bohuxv1.DeploymentState_DEPLOYMENT_STATE_SUCCEEDED,
 	"failed":            bohuxv1.DeploymentState_DEPLOYMENT_STATE_FAILED,
 	"rolled_back":       bohuxv1.DeploymentState_DEPLOYMENT_STATE_ROLLED_BACK,

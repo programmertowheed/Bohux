@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -18,6 +20,7 @@ import (
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/gen/bohux/v1/bohuxv1connect"
 	"github.com/bohumix/bohux/internal/auth"
+	"github.com/bohumix/bohux/internal/slo"
 	"github.com/bohumix/bohux/internal/store"
 )
 
@@ -46,11 +49,13 @@ type appState struct {
 	routes  []*bohuxv1.Route
 	// pullSecret is the key of an environment secret (ADR-0041).
 	pullSecret string
+	// slo judges deploys besides health (ADR-0050); nil is none.
+	slo *bohuxv1.SLO
 }
 
 func stateOf(app *bohuxv1.App) appState {
 	return appState{app.GetSource(), app.GetRuntime(), app.GetSecrets(), app.GetProviderOptions(), app.GetRoutes(),
-		app.GetImagePullSecret()}
+		app.GetImagePullSecret(), app.GetSlo()}
 }
 
 // appSpec validates an App's mutable state and returns its revision columns.
@@ -72,6 +77,17 @@ func appSpec(ctx context.Context, tx *store.Tx, env uuid.UUID, st appState) ([]s
 	}
 	if err := validSecretKey(ctx, tx, env, "source.git.ssh_key_secret", st.source.GetGit().GetSshKeySecret()); err != nil {
 		return nil, err
+	}
+	if err := validSLO(st.slo); err != nil {
+		return nil, err
+	}
+	var sloJSON []byte
+	if st.slo != nil {
+		b, err := storeJSON.Marshal(st.slo)
+		if err != nil {
+			return nil, fmt.Errorf("encode slo: %w", err)
+		}
+		sloJSON = b
 	}
 	srcJSON, err := storeJSON.Marshal(st.source)
 	if err != nil {
@@ -98,8 +114,37 @@ func appSpec(ctx context.Context, tx *store.Tx, env uuid.UUID, st appState) ([]s
 	return []store.Col{
 		{Name: "source", Value: srcJSON}, {Name: "runtime", Value: rtJSON}, {Name: "secrets", Value: secJSON},
 		{Name: "provider_options", Value: optJSON}, {Name: "routes", Value: routesJSON},
-		{Name: "image_pull_secret", Value: st.pullSecret},
+		{Name: "image_pull_secret", Value: st.pullSecret}, {Name: "slo", Value: sloJSON},
 	}, nil
+}
+
+// validSLO checks an App's SLO; nil is none.
+func validSLO(s *bohuxv1.SLO) error {
+	if s == nil {
+		return nil
+	}
+	if t := s.GetAvailabilityTarget(); t < 0.9 || t > 0.99999 {
+		return invalidArgument("slo.availability_target", "OUT_OF_RANGE", "availability_target must be 0.9 to 0.99999")
+	}
+	if l := s.GetLatency(); l != nil {
+		if !slices.Contains(slo.LatencyBoundsMS, l.GetThresholdMs()) {
+			return invalidArgument("slo.latency.threshold_ms", "OUT_OF_RANGE",
+				"threshold_ms must be one of 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000")
+		}
+		if t := l.GetTarget(); t < 0.5 || t > 0.99999 {
+			return invalidArgument("slo.latency.target", "OUT_OF_RANGE", "latency target must be 0.5 to 0.99999")
+		}
+	}
+	if b := s.GetMaxBurnRate(); b != 0 && (b < 1 || b > 1000) {
+		return invalidArgument("slo.max_burn_rate", "OUT_OF_RANGE", "max_burn_rate must be 1 to 1000, or 0 for 10")
+	}
+	if w := s.GetWatch(); w != nil {
+		d := w.AsDuration()
+		if !w.IsValid() || d < time.Minute || d > time.Hour || d%time.Second != 0 {
+			return invalidArgument("slo.watch", "OUT_OF_RANGE", "watch must be whole seconds from 1m to 1h")
+		}
+	}
+	return nil
 }
 
 // jsonArray stores repeated messages as a JSON array in proto field names.
@@ -347,7 +392,7 @@ func (as *appService) CreateApp(ctx context.Context, req *connect.Request[bohuxv
 			return err
 		}
 		cols, err := appSpec(ctx, tx, env, appState{msg.GetSource(), msg.GetRuntime(), msg.GetSecrets(),
-			msg.GetProviderOptions(), msg.GetRoutes(), msg.GetImagePullSecret()})
+			msg.GetProviderOptions(), msg.GetRoutes(), msg.GetImagePullSecret(), msg.GetSlo()})
 		if err != nil {
 			return err
 		}
@@ -470,7 +515,7 @@ func (as *appService) UpdateApp(ctx context.Context, req *connect.Request[bohuxv
 		msg.GetExpectedRevisionId(), msg.GetIdempotencyKey(), msg, auth.RoleDeployer,
 		func(*bohuxv1.App) appState {
 			return appState{msg.GetSource(), msg.GetRuntime(), msg.GetSecrets(), msg.GetProviderOptions(), msg.GetRoutes(),
-				msg.GetImagePullSecret()}
+				msg.GetImagePullSecret(), msg.GetSlo()}
 		})
 	if err != nil {
 		return nil, err
@@ -643,7 +688,7 @@ func (as *appService) DeleteApp(ctx context.Context, req *connect.Request[bohuxv
 }
 
 const appSelect = `SELECT ` + metaColumns + `, h.environment_id, h.slug, r.source, r.runtime, r.secrets,
-	r.provider_options, r.routes, r.image_pull_secret FROM apps_heads h JOIN apps_revisions r ON r.id = h.revision_id`
+	r.provider_options, r.routes, r.image_pull_secret, r.slo FROM apps_heads h JOIN apps_revisions r ON r.id = h.revision_id`
 
 // getApp reads a live app by id, or by (environment, slug) if id is nil.
 func getApp(ctx context.Context, tx *store.Tx, id, env uuid.UUID, slug string) (*bohuxv1.App, error) {
@@ -669,8 +714,9 @@ func scanApp(row pgx.Row) (*bohuxv1.App, error) {
 		src, rt, secs []byte
 		opts, routes  []byte
 		pull          string
+		slo           []byte
 	)
-	if err := row.Scan(append(m.dest(), &env, &slug, &src, &rt, &secs, &opts, &routes, &pull)...); err != nil {
+	if err := row.Scan(append(m.dest(), &env, &slug, &src, &rt, &secs, &opts, &routes, &pull, &slo)...); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
 		}
@@ -683,6 +729,12 @@ func scanApp(row pgx.Row) (*bohuxv1.App, error) {
 	}
 	if err := loadJSON.Unmarshal(rt, app.Runtime); err != nil {
 		return nil, fmt.Errorf("decode app runtime: %w", err)
+	}
+	if slo != nil {
+		app.Slo = &bohuxv1.SLO{}
+		if err := loadJSON.Unmarshal(slo, app.Slo); err != nil {
+			return nil, fmt.Errorf("decode app slo: %w", err)
+		}
 	}
 	if string(opts) != "{}" {
 		app.ProviderOptions = &structpb.Struct{}

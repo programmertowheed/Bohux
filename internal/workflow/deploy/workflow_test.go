@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
+
+	"github.com/bohumix/bohux/internal/slo"
 )
 
 const (
@@ -496,6 +498,93 @@ func TestCanary(t *testing.T) {
 			}
 			if tt.promoteAt > 0 && env.Now().Sub(start) > time.Hour {
 				t.Errorf("promoted at %v, want right after the signal", env.Now().Sub(start))
+			}
+		})
+	}
+}
+
+// TestSLOGate: a deploy of an App with an SLO is watched in VERIFYING, or through its
+// canary bake, and a violation rolls back as a failed health gate does (ADR-0050).
+// The rollback paths come first (rule 5).
+func TestSLOGate(t *testing.T) {
+	objective := slo.Objective{Availability: 0.999, LatencyThresholdMS: 250, LatencyTarget: 0.95}
+	withSLO := func(canary bool) Input {
+		in := input()
+		in.SLO = &SLO{Objective: objective, Watch: 10 * time.Minute}
+		if canary {
+			in.Canary = &Canary{Weight: 10, Bake: 15 * time.Minute}
+		}
+		return in
+	}
+	tests := []struct {
+		name       string
+		canary     bool
+		s          script
+		cancelAt   time.Duration
+		want       Result
+		wantStates []string
+	}{
+		{"an availability violation rolls back", false,
+			script{last: goodRelease, holdErr: nonRetryable(ErrTypeSLOAvailability), holdDelay: 2 * time.Minute}, 0,
+			Result{State: StateRolledBack, Failure: &Failure{Reason: ReasonSLOAvailability}},
+			[]string{"applying", "health_gate", "verifying", "compensating:SLO_AVAILABILITY", "rolled_back:SLO_AVAILABILITY"}},
+		{"a latency violation rolls back", false,
+			script{last: goodRelease, holdErr: nonRetryable(ErrTypeSLOLatency), holdDelay: 2 * time.Minute}, 0,
+			Result{State: StateRolledBack, Failure: &Failure{Reason: ReasonSLOLatency}},
+			[]string{"applying", "health_gate", "verifying", "compensating:SLO_LATENCY", "rolled_back:SLO_LATENCY"}},
+		{"unhealthy while verified rolls back", false,
+			script{last: goodRelease, holdErr: nonRetryable(ErrTypeCanaryUnhealthy), holdDelay: time.Minute}, 0,
+			Result{State: StateRolledBack, Failure: &Failure{Reason: ReasonUnhealthy}},
+			[]string{"applying", "health_gate", "verifying", "compensating:UNHEALTHY", "rolled_back:UNHEALTHY"}},
+		{"cancelling while verifying rolls back", false,
+			script{last: goodRelease, holdDelay: time.Hour}, 3 * time.Minute,
+			Result{State: StateCancelled},
+			[]string{"applying", "health_gate", "verifying", "compensating:CANCELLED", "cancelled"}},
+		{"a canary that violates its SLO rolls back", true,
+			script{last: goodRelease, holdErr: nonRetryable(ErrTypeSLOAvailability), holdDelay: 4 * time.Minute}, 0,
+			Result{State: StateRolledBack, Failure: &Failure{Reason: ReasonSLOAvailability}},
+			[]string{"applying", "health_gate", "canary", "compensating:SLO_AVAILABILITY", "rolled_back:SLO_AVAILABILITY"}},
+		{"a clean watch succeeds", false,
+			script{last: goodRelease, holdDelay: 10 * time.Minute}, 0,
+			Result{State: StateSucceeded},
+			[]string{"applying", "health_gate", "verifying", "succeeded"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var ts testsuite.WorkflowTestSuite
+			env := ts.NewTestWorkflowEnvironment()
+			s := tt.s
+			s.register(env)
+			var a *Activities
+			env.OnActivity(a.NotificationChannels, mock.Anything, mock.Anything).Return([]string{}, nil)
+			if tt.cancelAt > 0 {
+				env.RegisterDelayedCallback(env.CancelWorkflow, tt.cancelAt)
+			}
+			start := env.Now()
+			env.ExecuteWorkflow(Workflow, withSLO(tt.canary))
+			if err := env.GetWorkflowError(); err != nil {
+				t.Fatal(err)
+			}
+			var res Result
+			if err := env.GetWorkflowResult(&res); err != nil {
+				t.Fatal(err)
+			}
+			if res.State != tt.want.State || (res.Failure == nil) != (tt.want.Failure == nil) ||
+				(res.Failure != nil && res.Failure.Reason != tt.want.Failure.Reason) {
+				t.Errorf("result %+v, want %+v", res, tt.want)
+			}
+			if got := stateList(s.states); !equal(got, tt.wantStates) {
+				t.Errorf("states %v, want %v", got, tt.wantStates)
+			}
+			if len(s.holds) == 1 {
+				h := s.holds[0]
+				window := 10 * time.Minute
+				if tt.canary {
+					window = 15 * time.Minute
+				}
+				if h.SLO == nil || *h.SLO != objective || h.Until.Sub(start) < window {
+					t.Errorf("hold %+v: want the SLO judged for %v", h, window)
+				}
 			}
 		})
 	}

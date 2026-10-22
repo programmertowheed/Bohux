@@ -118,6 +118,10 @@ func (d *run) deploy(ctx workflow.Context) (Result, error) {
 		if f, cancelled := d.canary(ctx, assigned); f != nil {
 			return d.compensate(ctx, f, cancelled)
 		}
+	} else if in.SLO != nil {
+		if f, cancelled := d.verify(ctx, assigned); f != nil {
+			return d.compensate(ctx, f, cancelled)
+		}
 	}
 	if err := d.set(ctx, StateSucceeded, nil); err != nil {
 		// Healthy, but cancelled before it was recorded: a cancel means undo.
@@ -211,26 +215,53 @@ func (d *run) assignWith(ctx workflow.Context, release string, fallbackAfter tim
 	return out, err
 }
 
+// hold watches the Release for d, by health and, with an SLO, by its traffic
+// (ADR-0049, ADR-0050).
+func (d *run) hold(ctx workflow.Context, assigned Assigned, dur time.Duration) workflow.Future {
+	var a *Activities
+	opts := storeOptions
+	opts.StartToCloseTimeout = dur + d.timeout + time.Minute
+	opts.ScheduleToCloseTimeout = dur + d.timeout + 2*time.Minute
+	opts.HeartbeatTimeout = 2 * healthHeartbeat
+	in := HoldInput{
+		WaitInput: WaitInput{TenantID: d.in.TenantID, NodeID: assigned.NodeID, Generation: assigned.Generation,
+			AppID: d.in.AppID, ReleaseID: d.in.ReleaseID, Replicas: assigned.Replicas, Routed: assigned.Routed},
+		Until: workflow.Now(ctx).Add(dur), Grace: canaryGrace,
+	}
+	if d.in.SLO != nil {
+		o := d.in.SLO.Objective
+		in.SLO = &o
+	}
+	return workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, opts), a.HoldHealthy, in)
+}
+
+// verify watches a healthy Release against the App's SLO for its watch window
+// (ADR-0050). It returns the failure to compensate for, if any, and whether it was a
+// cancellation.
+func (d *run) verify(ctx workflow.Context, assigned Assigned) (*Failure, bool) {
+	if err := d.set(ctx, StateVerifying, nil); err != nil {
+		return failureOf(err, ReasonAssignFailed), temporal.IsCanceledError(err)
+	}
+	if err := d.hold(ctx, assigned, d.in.SLO.Watch).Get(ctx, nil); err != nil {
+		f := failureOf(err, ReasonUnhealthy)
+		if isType(err, ErrTypeCanaryUnhealthy) {
+			f = &Failure{Reason: ReasonUnhealthy}
+		}
+		return f, temporal.IsCanceledError(err)
+	}
+	return nil, false
+}
+
 // canary runs a healthy canary's bake, then promotes it (ADR-0049): it waits for the
 // bake to end with the Release healthy throughout, or for a promote signal, then
 // assigns the Release with no weight, so the node cuts over, and waits for that. It
 // returns the failure to compensate for, if any, and whether it was a cancellation.
 func (d *run) canary(ctx workflow.Context, assigned Assigned) (*Failure, bool) {
-	var a *Activities
 	if err := d.set(ctx, StateCanary, nil); err != nil {
 		return failureOf(err, ReasonAssignFailed), temporal.IsCanceledError(err)
 	}
-	bake := d.in.Canary.Bake
 	hctx, stopHold := workflow.WithCancel(ctx)
-	opts := storeOptions
-	opts.StartToCloseTimeout = bake + d.timeout + time.Minute
-	opts.ScheduleToCloseTimeout = bake + d.timeout + 2*time.Minute
-	opts.HeartbeatTimeout = 2 * healthHeartbeat
-	hold := workflow.ExecuteActivity(workflow.WithActivityOptions(hctx, opts), a.HoldHealthy, HoldInput{
-		WaitInput: WaitInput{TenantID: d.in.TenantID, NodeID: assigned.NodeID, Generation: assigned.Generation,
-			AppID: d.in.AppID, ReleaseID: d.in.ReleaseID, Replicas: assigned.Replicas, Routed: assigned.Routed},
-		Until: workflow.Now(ctx).Add(bake), Grace: canaryGrace,
-	})
+	hold := d.hold(hctx, assigned, d.in.Canary.Bake)
 	var holdErr error
 	promoted := false
 	sel := workflow.NewSelector(ctx)
@@ -306,6 +337,10 @@ func failureOf(err error, def string) *Failure {
 		return &Failure{Reason: ReasonHealthTimeout}
 	case isType(err, ErrTypeInvalid):
 		return &Failure{Reason: ReasonInvalidRelease}
+	case isType(err, ErrTypeSLOAvailability):
+		return &Failure{Reason: ReasonSLOAvailability}
+	case isType(err, ErrTypeSLOLatency):
+		return &Failure{Reason: ReasonSLOLatency}
 	}
 	return &Failure{Reason: def}
 }

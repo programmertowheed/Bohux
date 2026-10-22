@@ -19,6 +19,7 @@ import (
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/internal/agentapi"
 	"github.com/bohumix/bohux/internal/notify"
+	"github.com/bohumix/bohux/internal/slo"
 	"github.com/bohumix/bohux/internal/store"
 )
 
@@ -519,11 +520,30 @@ func (a *Activities) HoldHealthy(ctx context.Context, in HoldInput) error {
 	if interval <= 0 {
 		interval = defaultPollInterval
 	}
-	var unhealthySince time.Time
+	var (
+		unhealthySince time.Time
+		baseline       *slo.Counts
+	)
 	for {
-		ok, err := a.healthy(ctx, ids[0], ids[1], in.WaitInput)
+		ok, traffic, err := a.healthyTraffic(ctx, ids[0], ids[1], in.WaitInput)
 		if err != nil {
 			return err
+		}
+		if in.SLO != nil && traffic != nil {
+			if baseline == nil {
+				baseline = traffic
+			} else {
+				w, reset := slo.Window(*baseline, *traffic)
+				if reset {
+					baseline = traffic
+				}
+				switch v := slo.Judge(*in.SLO, w); v.Violated {
+				case "availability":
+					return temporal.NewNonRetryableApplicationError("SLO violated: "+v.String(), ErrTypeSLOAvailability, nil)
+				case "latency":
+					return temporal.NewNonRetryableApplicationError("SLO violated: "+v.String(), ErrTypeSLOLatency, nil)
+				}
+			}
 		}
 		now := time.Now()
 		switch {
@@ -548,26 +568,38 @@ func (a *Activities) HoldHealthy(ctx context.Context, in HoldInput) error {
 
 // healthy reads the node's report once.
 func (a *Activities) healthy(ctx context.Context, tenant, node uuid.UUID, in WaitInput) (bool, error) {
+	ok, _, err := a.healthyTraffic(ctx, tenant, node, in)
+	return ok, err
+}
+
+// healthyTraffic reads the node's report once: whether the Release is healthy, and its
+// ingress counters if the report carries them (ADR-0050).
+func (a *Activities) healthyTraffic(ctx context.Context, tenant, node uuid.UUID, in WaitInput) (bool, *slo.Counts, error) {
 	var raw []byte
 	err := a.Store.InTenant(ctx, tenant, func(tx *store.Tx) error {
 		return tx.QueryRow(ctx, `SELECT report FROM nodes_heads WHERE id = $1`, node).Scan(&raw)
 	})
 	if err != nil {
-		return false, fmt.Errorf("read node report: %w", err)
+		return false, nil, fmt.Errorf("read node report: %w", err)
 	}
 	if raw == nil {
-		return false, nil
+		return false, nil, nil
 	}
 	report := &agentv1.StatusReport{}
 	if err := loadJSON.Unmarshal(raw, report); err != nil {
-		return false, fmt.Errorf("decode node report: %w", err)
+		return false, nil, fmt.Errorf("decode node report: %w", err)
 	}
 	if report.GetGeneration() < in.Generation {
-		return false, nil
+		return false, nil, nil
 	}
 	for _, w := range report.GetWorkloads() {
 		if w.GetAppId() != in.AppID || w.GetReleaseId() != in.ReleaseID {
 			continue
+		}
+		var traffic *slo.Counts
+		if t := w.GetTraffic(); t != nil {
+			traffic = &slo.Counts{Requests: t.GetRequests(), ServerErrors: t.GetServerErrors(),
+				Latency: append([]uint64(nil), t.GetLatencyBuckets()...)}
 		}
 		switch w.GetState() {
 		case agentv1.WorkloadState_WORKLOAD_STATE_FAILED:
@@ -575,14 +607,15 @@ func (a *Activities) healthy(ctx context.Context, tenant, node uuid.UUID, in Wai
 			// that failed (a port still held, a pull that timed out) is retried by the
 			// agent every pass, and the deadline decides.
 			if permanentFailure[w.GetFailure().GetReason()] {
-				return false, temporal.NewNonRetryableApplicationError(
+				return false, traffic, temporal.NewNonRetryableApplicationError(
 					"workload failed: "+w.GetFailure().GetReason(), ErrTypeWorkloadFailed, nil)
 			}
 		case agentv1.WorkloadState_WORKLOAD_STATE_HEALTHY:
-			return w.GetReadyReplicas() >= in.Replicas && (!in.Routed || w.GetIngressLoaded()), nil
+			return w.GetReadyReplicas() >= in.Replicas && (!in.Routed || w.GetIngressLoaded()), traffic, nil
 		}
+		return false, traffic, nil
 	}
-	return false, nil
+	return false, nil, nil
 }
 
 // permanentFailure are the agent's failure reasons that retrying cannot fix.

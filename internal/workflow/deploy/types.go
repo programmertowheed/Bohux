@@ -4,7 +4,11 @@
 // same workflow with an earlier Release.
 package deploy
 
-import "time"
+import (
+	"time"
+
+	"github.com/bohumix/bohux/internal/slo"
+)
 
 // TaskQueue is the task queue the control plane's worker polls.
 const TaskQueue = "bohux-deploy"
@@ -26,7 +30,9 @@ const (
 	StateApplying   State = "applying"
 	StateHealthGate State = "health_gate"
 	// StateCanary: the new Release serves its share while the bake runs (ADR-0049).
-	StateCanary       State = "canary"
+	StateCanary State = "canary"
+	// StateVerifying: healthy, and watched against the App's SLO (ADR-0050).
+	StateVerifying    State = "verifying"
 	StateSucceeded    State = "succeeded"
 	StateFailed       State = "failed"
 	StateRolledBack   State = "rolled_back"
@@ -54,6 +60,11 @@ const (
 	ReasonCompensationFailed = "COMPENSATION_FAILED"
 	ReasonBuildFailed        = "BUILD_FAILED"
 	ReasonCanaryUnhealthy    = "CANARY_UNHEALTHY"
+	ReasonSLOAvailability    = "SLO_AVAILABILITY"
+	ReasonSLOLatency         = "SLO_LATENCY"
+	// ReasonUnhealthy: healthy at first, then unhealthy for longer than the grace while
+	// verified against the SLO (ADR-0050).
+	ReasonUnhealthy = "UNHEALTHY"
 )
 
 // SignalPromote ends a canary's bake early (ADR-0049).
@@ -67,7 +78,18 @@ const (
 	ErrTypeBuildFailed    = "BuildFailed"
 	// ErrTypeCanaryUnhealthy: the canary was unhealthy for longer than its grace.
 	ErrTypeCanaryUnhealthy = "CanaryUnhealthy"
+	// ErrTypeSLOAvailability and ErrTypeSLOLatency: the Release's traffic burned the
+	// App's error budget too fast (ADR-0050).
+	ErrTypeSLOAvailability = "SLOAvailability"
+	ErrTypeSLOLatency      = "SLOLatency"
 )
+
+// SLO is the App's objective as the deploy judges it (ADR-0050), and how long a
+// non-canary deploy is watched.
+type SLO struct {
+	Objective slo.Objective
+	Watch     time.Duration
+}
 
 // Canary is one weighted step (ADR-0049): the new Release takes Weight percent of the
 // App's traffic for Bake, then all of it.
@@ -98,6 +120,9 @@ type Input struct {
 	HealthTimeout time.Duration
 	// Canary, when set, makes this a canary deploy (ADR-0049).
 	Canary *Canary `json:",omitempty"`
+	// SLO, when set, judges the Release's traffic during the bake or a watch window
+	// (ADR-0050).
+	SLO *SLO `json:",omitempty"`
 }
 
 // Failure is what went wrong, stored as the Deployment's ErrorDetail.
@@ -172,6 +197,8 @@ type HoldInput struct {
 	Until time.Time
 	// Grace is how long the Release may be unhealthy before the canary fails.
 	Grace time.Duration
+	// SLO, when set, also judges the Release's requests at the ingress (ADR-0050).
+	SLO *slo.Objective `json:",omitempty"`
 }
 
 // LastHealthyInput asks for the Release of the App's newest succeeded Deployment
