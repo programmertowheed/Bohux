@@ -4,6 +4,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,9 +15,11 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"go.temporal.io/sdk/client"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	agentv1 "github.com/bohumix/bohux/gen/bohux/agent/v1"
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
@@ -467,4 +471,192 @@ func TestBuildThenDeploy(t *testing.T) {
 	}
 	d.report(rel.GetMeta().GetId(), healthy)
 	d.waitState(dep.GetMeta().GetId(), bohuxv1.DeploymentState_DEPLOYMENT_STATE_SUCCEEDED)
+}
+
+// reportServed plays the agent for a routed App: release healthy and served by the
+// ingress, on the latest generation, which must assign it with weight.
+func (d *deployHarness) reportServed(release string, weight uint32) {
+	d.t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		gen, w := d.latestWorkload()
+		if w.GetReleaseId() == release && w.GetCanaryWeight() == weight {
+			ws := &agentv1.WorkloadStatus{AppId: d.app, ReleaseId: release, State: healthy, ReadyReplicas: 1,
+				IngressLoaded: true}
+			b, err := protojson.Marshal(&agentv1.StatusReport{Generation: gen, Workloads: []*agentv1.WorkloadStatus{ws}})
+			if err != nil {
+				d.t.Fatal(err)
+			}
+			ctx := context.Background()
+			if err := d.st.InTenant(ctx, d.tenant, func(tx *store.Tx) error {
+				return tx.Exec(ctx, `UPDATE nodes_heads SET report = $1, report_generation = $2 WHERE id = $3`,
+					b, int64(gen), d.node)
+			}); err != nil {
+				d.t.Fatal(err)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			d.t.Fatalf("release %s at weight %d was never assigned (latest %s at %d)", release, weight,
+				w.GetReleaseId(), w.GetCanaryWeight())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// latestWorkload returns the node's newest generation and the App's workload in it;
+// nil before anything is assigned.
+func (d *deployHarness) latestWorkload() (uint64, *agentv1.Workload) {
+	d.t.Helper()
+	ctx := context.Background()
+	var (
+		gen int64
+		raw []byte
+	)
+	err := d.st.InTenant(ctx, d.tenant, func(tx *store.Tx) error {
+		return tx.QueryRow(ctx, `SELECT generation, payload FROM assignments WHERE node_id = $1
+			ORDER BY generation DESC LIMIT 1`, d.node).Scan(&gen, &raw)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	p := &agentv1.AssignmentPayload{}
+	if err := proto.Unmarshal(raw, p); err != nil {
+		d.t.Fatal(err)
+	}
+	for _, w := range p.GetWorkloads() {
+		if w.GetAppId() == d.app {
+			return uint64(gen), w
+		}
+	}
+	return uint64(gen), nil
+}
+
+// TestCanaryWorkflow runs canary deploys on a real Temporal (ADR-0049): refusals, a
+// failing canary rolling back and a cancelled one aborting (rule 5), then promotion.
+func TestCanaryWorkflow(t *testing.T) {
+	ctx := context.Background()
+	d := newDeployHarness(t)
+	unrouted := d.app
+	canary := func(release, key string, weight uint32, bake time.Duration) (*bohuxv1.Deployment, error) {
+		r, err := d.deployments.CreateDeployment(ctx, req(d.token, &bohuxv1.CreateDeploymentRequest{
+			ReleaseId: release, EnvironmentId: d.env, IdempotencyKey: key,
+			Strategy: bohuxv1.DeploymentStrategy_DEPLOYMENT_STRATEGY_CANARY,
+			Canary:   &bohuxv1.Canary{WeightPercent: weight, Bake: durationpb.New(bake)}}))
+		if err != nil {
+			return nil, err
+		}
+		return r.Msg.GetDeployment(), nil
+	}
+	promote := func(id, key string) error {
+		_, err := d.deployments.PromoteDeployment(ctx, req(d.token, &bohuxv1.PromoteDeploymentRequest{
+			Id: id, IdempotencyKey: key}))
+		return err
+	}
+
+	t.Run("refusals", func(t *testing.T) {
+		r := d.release("plain")
+		_, err := canary(r, "c-unrouted", 10, time.Hour)
+		wantCode(t, err, connect.CodeFailedPrecondition)
+		for _, bad := range []struct {
+			weight uint32
+			bake   time.Duration
+		}{{0, time.Hour}, {100, time.Hour}, {10, 30 * time.Second}, {10, 25 * time.Hour}, {10, 90500 * time.Millisecond}} {
+			_, err := canary(r, fmt.Sprintf("c-bad-%d-%v", bad.weight, bad.bake), bad.weight, bad.bake)
+			wantCode(t, err, connect.CodeInvalidArgument)
+		}
+		_, err = d.deployments.CreateDeployment(ctx, req(d.token, &bohuxv1.CreateDeploymentRequest{
+			ReleaseId: r, EnvironmentId: d.env, IdempotencyKey: "c-nospec",
+			Strategy: bohuxv1.DeploymentStrategy_DEPLOYMENT_STRATEGY_CANARY}))
+		wantCode(t, err, connect.CodeInvalidArgument)
+	})
+
+	// A routed App without host ports switches slots, so it can have a canary.
+	srv := d.server()
+	apps := bohuxv1connect.NewAppServiceClient(srv.Client(), srv.URL)
+	a, err := apps.CreateApp(ctx, req(d.token, &bohuxv1.CreateAppRequest{
+		EnvironmentId: d.env, Slug: "web", IdempotencyKey: "a-web",
+		Source: &bohuxv1.Source{Kind: &bohuxv1.Source_Image{Image: &bohuxv1.ImageSource{
+			Repository: "ghcr.io/acme/web", Digest: "sha256:" + strings.Repeat("cd", 32)}}},
+		Runtime: &bohuxv1.Runtime{Replicas: 1, Ports: []*bohuxv1.Port{{ContainerPort: 8080}}},
+		Routes:  []*bohuxv1.Route{{Host: "web.example.com", Port: 8080}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.app = a.Msg.GetApp().GetMeta().GetId()
+	defer func() { d.app = unrouted }()
+	r1, r2, r3, r4 := d.release("w1"), d.release("w2"), d.release("w3"), d.release("w4")
+	first, err := d.deploy(r1, "w-d1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.reportServed(r1, 0)
+	d.waitState(first.GetMeta().GetId(), bohuxv1.DeploymentState_DEPLOYMENT_STATE_SUCCEEDED)
+	if err := promote(first.GetMeta().GetId(), "p-done"); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Errorf("promoting a finished deployment = %v, want failed_precondition", err)
+	}
+
+	t.Run("a failing canary rolls back", func(t *testing.T) {
+		dep, err := canary(r2, "w-c2", 10, time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dep.GetStrategy() != bohuxv1.DeploymentStrategy_DEPLOYMENT_STRATEGY_CANARY ||
+			dep.GetCanary().GetWeightPercent() != 10 || dep.GetCanary().GetBake().AsDuration() != time.Hour {
+			t.Errorf("recorded %v / %v", dep.GetStrategy(), dep.GetCanary())
+		}
+		d.reportServed(r2, 10)
+		d.waitState(dep.GetMeta().GetId(), bohuxv1.DeploymentState_DEPLOYMENT_STATE_CANARY)
+		d.report(r2, failed)
+		d.waitState(dep.GetMeta().GetId(), bohuxv1.DeploymentState_DEPLOYMENT_STATE_COMPENSATING)
+		d.reportServed(r1, 0)
+		got := d.waitState(dep.GetMeta().GetId(), bohuxv1.DeploymentState_DEPLOYMENT_STATE_ROLLED_BACK)
+		if got.GetFailure().GetReason() != deploy.ReasonWorkloadFailed {
+			t.Errorf("rolled back with %v", got.GetFailure())
+		}
+	})
+	t.Run("cancelling a canary aborts it", func(t *testing.T) {
+		dep, err := canary(r3, "w-c3", 25, time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.reportServed(r3, 25)
+		d.waitState(dep.GetMeta().GetId(), bohuxv1.DeploymentState_DEPLOYMENT_STATE_CANARY)
+		if _, err := d.deployments.CancelDeployment(ctx, req(d.token, &bohuxv1.CancelDeploymentRequest{
+			Id: dep.GetMeta().GetId(), IdempotencyKey: "w-x3"})); err != nil {
+			t.Fatal(err)
+		}
+		d.reportServed(r1, 0)
+		d.waitState(dep.GetMeta().GetId(), bohuxv1.DeploymentState_DEPLOYMENT_STATE_CANCELLED)
+	})
+	t.Run("promote ends the bake and the release takes all traffic", func(t *testing.T) {
+		dep, err := canary(r4, "w-c4", 10, time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.reportServed(r4, 10)
+		d.waitState(dep.GetMeta().GetId(), bohuxv1.DeploymentState_DEPLOYMENT_STATE_CANARY)
+		viewer, err := d.createToken(d.root, uuid.Nil, bohuxv1.Role_ROLE_VIEWER, "canary-viewer")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = d.deployments.PromoteDeployment(ctx, req(viewer.GetSecret(), &bohuxv1.PromoteDeploymentRequest{
+			Id: dep.GetMeta().GetId(), IdempotencyKey: "p-viewer"}))
+		wantCode(t, err, connect.CodePermissionDenied)
+		if err := promote(dep.GetMeta().GetId(), "p4"); err != nil {
+			t.Fatal(err)
+		}
+		d.reportServed(r4, 0)
+		d.waitState(dep.GetMeta().GetId(), bohuxv1.DeploymentState_DEPLOYMENT_STATE_SUCCEEDED)
+		var promoted int
+		if err := d.st.InTenant(ctx, d.tenant, func(tx *store.Tx) error {
+			return tx.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE action = $1`,
+				bohuxv1connect.DeploymentServicePromoteDeploymentProcedure).Scan(&promoted)
+		}); err != nil || promoted != 1 {
+			t.Errorf("audited promotions = %d, %v; want 1", promoted, err)
+		}
+	})
 }

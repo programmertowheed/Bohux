@@ -62,8 +62,9 @@ func (s *Server) Assign(ctx context.Context, tenant, node uuid.UUID, workloads [
 // AssignApp changes one App in the node's latest generation (ADR-0026): it replaces
 // the App's workload with w, adds it if absent, or removes it when w is nil. Other
 // workloads are kept as they are. If the latest generation already carries w's
-// Deployment and Release for the App, or, for a removal, no workload for the App, it
-// writes nothing and returns that generation, so retries are idempotent.
+// Deployment, Release, and canary weight for the App (a promotion changes only the
+// weight, ADR-0049), or, for a removal, no workload for the App, it writes nothing and
+// returns that generation, so retries are idempotent.
 //
 // With a non-zero fallbackAfter, a w that replaces another Release carries the
 // workload it replaces as its fallback, which the agent applies on its own if w is
@@ -87,7 +88,8 @@ func (s *Server) AssignApp(ctx context.Context, tenant, node, app uuid.UUID, w *
 				continue
 			}
 			found = true
-			if w != nil && c.GetDeploymentId() == w.GetDeploymentId() && c.GetReleaseId() == w.GetReleaseId() {
+			if w != nil && c.GetDeploymentId() == w.GetDeploymentId() && c.GetReleaseId() == w.GetReleaseId() &&
+				c.GetCanaryWeight() == w.GetCanaryWeight() {
 				return nil, false, nil
 			}
 			if w != nil && !fallbackAfter.IsZero() && c.GetReleaseId() != w.GetReleaseId() {

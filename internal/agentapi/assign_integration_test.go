@@ -352,6 +352,23 @@ func TestAssignApp(t *testing.T) {
 		}
 	})
 
+	t.Run("promoting a canary is a change; repeating it is not", func(t *testing.T) {
+		canary := deployed(app1, "c1", "d7")
+		canary.CanaryWeight = 10
+		gen := assign(app1, canary)
+		if again := assign(app1, canary); again != gen {
+			t.Errorf("repeat of the canary wrote generation %d, want %d", again, gen)
+		}
+		full := deployed(app1, "c1", "d7")
+		promoted := assign(app1, full)
+		if promoted != gen+1 {
+			t.Errorf("promotion (weight 10 to 0) = generation %d, want %d", promoted, gen+1)
+		}
+		if again := assign(app1, full); again != promoted {
+			t.Errorf("repeat of the promotion wrote generation %d, want %d", again, promoted)
+		}
+	})
+
 	t.Run("refusals", func(t *testing.T) {
 		if _, err := h.srv.AssignApp(ctx, h.tenant, node, app1, deployed(app2, "x", "y"), time.Time{}, system); !errors.Is(err, ErrUnknownApp) {
 			t.Errorf("mismatched app = %v, want ErrUnknownApp", err)

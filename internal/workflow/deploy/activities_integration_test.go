@@ -418,6 +418,42 @@ func TestWaitHealthy(t *testing.T) {
 	})
 }
 
+// TestHoldHealthy watches a canary's bake (ADR-0049): a healthy Release passes when
+// the bake ends; one unhealthy for longer than the grace fails it; a short dip within
+// the grace does not.
+func TestHoldHealthy(t *testing.T) {
+	h := newHarness(t)
+	app := uuid.Must(uuid.NewV7()).String()
+	report := func(state agentv1.WorkloadState) {
+		h.report(&agentv1.StatusReport{Generation: 3, Workloads: []*agentv1.WorkloadStatus{
+			{AppId: app, ReleaseId: "r2", State: state, ReadyReplicas: 1, IngressLoaded: true}}})
+	}
+	hold := func(bake, grace time.Duration) error {
+		_, err := h.env.ExecuteActivity(h.acts.HoldHealthy, HoldInput{
+			WaitInput: WaitInput{TenantID: h.tenant.String(), NodeID: h.node.String(), Generation: 3, AppID: app,
+				ReleaseID: "r2", Replicas: 1, Routed: true},
+			Until: time.Now().Add(bake), Grace: grace})
+		return err
+	}
+	healthy, unhealthy := agentv1.WorkloadState_WORKLOAD_STATE_HEALTHY, agentv1.WorkloadState_WORKLOAD_STATE_UNHEALTHY
+
+	report(healthy)
+	if err := hold(100*time.Millisecond, time.Second); err != nil {
+		t.Errorf("healthy through the bake = %v, want passed", err)
+	}
+	report(unhealthy)
+	if err := hold(10*time.Second, 100*time.Millisecond); !isType(err, ErrTypeCanaryUnhealthy) {
+		t.Errorf("unhealthy past the grace = %v, want %s", err, ErrTypeCanaryUnhealthy)
+	}
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		report(healthy)
+	}()
+	if err := hold(400*time.Millisecond, 2*time.Second); err != nil {
+		t.Errorf("a dip within the grace = %v, want passed", err)
+	}
+}
+
 // fakeDispatcher answers builds without an agent.
 type fakeDispatcher struct {
 	got  []*agentv1.BuildRequest
