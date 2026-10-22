@@ -172,18 +172,23 @@ var errMissing = errors.New("missing")
 // Every resource noun in the usage text reaches the CLI, not "unknown command": the
 // binary's dispatch and the CLI's noun list cannot drift apart.
 func TestResourceNounsDispatch(t *testing.T) {
+	seen := 0
 	for _, line := range strings.Split(cli.ResourceCommands, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 2 || !strings.Contains(fields[1], "list") {
+		if len(fields) < 2 || !cli.IsResource(fields[0]) {
 			continue
 		}
-		noun := fields[0]
+		noun, verb := fields[0], strings.Split(fields[1], "|")[0]
+		seen++
 		t.Run(noun, func(t *testing.T) {
 			// No token set: the CLI itself refuses, which proves the command reached it.
-			err := run(context.Background(), []string{noun, "list"}, io.Discard, func(string) string { return "" })
+			err := run(context.Background(), []string{noun, verb}, io.Discard, func(string) string { return "" })
 			if err == nil || strings.Contains(err.Error(), "unknown command") {
-				t.Errorf("%s list: %v", noun, err)
+				t.Errorf("%s %s: %v", noun, verb, err)
 			}
 		})
+	}
+	if seen < 11 {
+		t.Errorf("checked %d nouns from the usage text; it lists 11", seen)
 	}
 }

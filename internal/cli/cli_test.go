@@ -97,6 +97,11 @@ func TestRunRefusesBeforeCalling(t *testing.T) {
 		{"project", []string{"list", "-o", "yaml"}, "-o must be"},
 		{"route", []string{"add", "api"}, "an app slug and a host"},
 		{"secret", []string{"set", "A", "B", "-e", "prod"}, "the secret's key"},
+		{"deploy", []string{"api", "-e", "prod", "--bake", "5m"}, "--bake needs --canary"},
+		{"deploy", []string{"api", "-e", "prod", "--canary", "100"}, "1 to 99"},
+		{"deployment", []string{"promote"}, "a deployment ID"},
+		{"deployment", []string{"cancel", "d1", "d2"}, "a deployment ID"},
+		{"deployment", []string{"promote", "d1"}, EnvToken},
 	}
 	for _, tt := range tests {
 		var out bytes.Buffer

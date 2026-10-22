@@ -38,12 +38,15 @@ const ResourceCommands = `  project list|create      projects
                            for email, mailto:a@x,b@y) from stdin
   audit list               who changed what, newest first (-p for one project)
   token list|create|revoke API tokens; create prints the secret once; -p (not
-                           BOHUX_PROJECT) scopes it to a project`
+                           BOHUX_PROJECT) scopes it to a project
+  deployment promote|cancel
+                           end a canary's bake now, or cancel a deployment (a canary's
+                           abort): the live release takes all traffic again`
 
 // IsResource reports whether cmd is a resource noun.
 func IsResource(cmd string) bool {
 	switch cmd {
-	case "project", "env", "app", "route", "secret", "node", "webhook", "channel", "audit", "token":
+	case "project", "env", "app", "route", "secret", "node", "webhook", "channel", "audit", "token", "deployment":
 		return true
 	}
 	return false
@@ -178,6 +181,10 @@ func (c *command) runResource(ctx context.Context, noun string, args []string, s
 		return r.tokenCreate(ctx, rest)
 	case "token revoke":
 		return r.tokenRevoke(ctx, rest)
+	case "deployment promote":
+		return r.deploymentAct(ctx, rest, true)
+	case "deployment cancel":
+		return r.deploymentAct(ctx, rest, false)
 	}
 	return fmt.Errorf("unknown command %q: %w", verb, ErrUsage)
 }
@@ -1210,6 +1217,36 @@ func (r *resource) tokenRevoke(ctx context.Context, args []string) error {
 		return fmt.Errorf("revoke token %s: %w", pos[0], err)
 	}
 	return r.emit(resp.Msg, tokenHeader, [][]string{tokenRow(resp.Msg.GetApiToken(), r.projectSlugs(ctx))})
+}
+
+// --- deployment ------------------------------------------------------------------
+
+var deploymentHeader = []string{"ID", "STATE", "RELEASE"}
+
+// deploymentAct promotes a canary or cancels a deployment (ADR-0049); the run writes
+// the states that follow, which `bohux deploy` shows while it follows.
+func (r *resource) deploymentAct(ctx context.Context, args []string, promote bool) error {
+	pos, err := r.positional(args, 1, "a deployment ID")
+	if err != nil {
+		return err
+	}
+	var d *bohuxv1.Deployment
+	if promote {
+		resp, err := r.deployments.PromoteDeployment(ctx, call(r.token, &bohuxv1.PromoteDeploymentRequest{
+			Id: pos[0], IdempotencyKey: r.key()}))
+		if err != nil {
+			return fmt.Errorf("promote deployment %s: %w", pos[0], err)
+		}
+		d = resp.Msg.GetDeployment()
+	} else {
+		resp, err := r.deployments.CancelDeployment(ctx, call(r.token, &bohuxv1.CancelDeploymentRequest{
+			Id: pos[0], IdempotencyKey: r.key()}))
+		if err != nil {
+			return fmt.Errorf("cancel deployment %s: %w", pos[0], err)
+		}
+		d = resp.Msg.GetDeployment()
+	}
+	return r.emit(d, deploymentHeader, [][]string{{d.GetMeta().GetId(), state(d.GetState().String()), d.GetReleaseId()}})
 }
 
 // bytesHuman prints a byte count as KiB, MiB, or GiB.

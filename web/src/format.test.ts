@@ -1,4 +1,4 @@
-import { buildName, bytes, enumName, short } from "./format";
+import { buildName, bytes, canaryText, enumName, short } from "./format";
 import { BuildStrategy } from "./gen/bohux/v1/app_pb";
 
 test("enum names read like the CLI's", () => {
@@ -19,4 +19,10 @@ test("build strategies read as sentences", () => {
   expect(buildName(BuildStrategy.UNSPECIFIED)).toBe("its Dockerfile, or Railpack if it has none");
   expect(buildName(BuildStrategy.RAILPACK)).toBe("Railpack");
   expect(buildName(BuildStrategy.DOCKERFILE)).toBe("its Dockerfile");
+});
+
+test("a canary reads as its share and bake", () => {
+  expect(canaryText({ weightPercent: 10, bake: { seconds: 900n, nanos: 0 } } as never)).toBe("10% for 15m");
+  expect(canaryText({ weightPercent: 25, bake: { seconds: 5400n, nanos: 0 } } as never)).toBe("25% for 1h30m");
+  expect(canaryText(undefined)).toBe("");
 });

@@ -1,5 +1,6 @@
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { BuildStrategy } from "./gen/bohux/v1/app_pb";
+import type { Canary } from "./gen/bohux/v1/deployment_pb";
 
 // enumName turns DEPLOYMENT_STATE_ROLLED_BACK into "rolled back".
 export function enumName(prefix: string, name: string | undefined): string {
@@ -36,4 +37,18 @@ export function buildName(s: BuildStrategy): string {
     default:
       return "its Dockerfile, or Railpack if it has none";
   }
+}
+
+// canaryText says what a canary deploy does, e.g. "10% for 15m" (ADR-0049).
+export function canaryText(c: Canary | undefined): string {
+  if (!c) return "";
+  let s = Number(c.bake?.seconds ?? 0n);
+  const parts: string[] = [];
+  for (const [unit, n] of [["h", 3600], ["m", 60], ["s", 1]] as const) {
+    if (s >= n) {
+      parts.push(`${Math.floor(s / n)}${unit}`);
+      s %= n;
+    }
+  }
+  return `${c.weightPercent}% for ${parts.join("") || "0s"}`;
 }

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/protobuf/types/known/durationpb"
+
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 )
 
@@ -17,12 +19,26 @@ func (c *command) deploy(ctx context.Context, args []string) error {
 	ref := fs.String("ref", "", "git branch, tag, or commit to build")
 	image := fs.String("image", "", "prebuilt image to deploy, as repository@sha256:<digest>")
 	reason := fs.String("reason", "", "why, recorded with the deployment")
+	canary := fs.Uint("canary", 0, "percent of traffic (1-99) the new release takes first; needs an app with routes and no host port")
+	bake := fs.Duration("bake", 0, "with --canary: how long it serves that share before taking all traffic (default 10m)")
 	slug, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
 	if *ref != "" && *image != "" {
 		return fmt.Errorf("deploy: --ref and --image are exclusive: %w", ErrUsage)
+	}
+	var step *bohuxv1.Canary
+	switch {
+	case *canary == 0 && *bake != 0:
+		return fmt.Errorf("deploy: --bake needs --canary: %w", ErrUsage)
+	case *canary > 99:
+		return fmt.Errorf("deploy: --canary is a percent from 1 to 99: %w", ErrUsage)
+	case *canary > 0:
+		if *bake == 0 {
+			*bake = 10 * time.Minute
+		}
+		step = &bohuxv1.Canary{WeightPercent: uint32(*canary), Bake: durationpb.New(*bake)}
 	}
 	req := &bohuxv1.CreateReleaseRequest{IdempotencyKey: key()}
 	switch {
@@ -50,8 +66,12 @@ func (c *command) deploy(ctx context.Context, args []string) error {
 	}
 	r := rel.Msg.GetRelease()
 	c.printf("release %s %s (%s)\n", r.GetMeta().GetId(), state(r.GetState().String()), r.GetSourceRef())
-	dep, err := c.deployments.CreateDeployment(ctx, call(c.token, &bohuxv1.CreateDeploymentRequest{
-		ReleaseId: r.GetMeta().GetId(), EnvironmentId: app.GetEnvironmentId(), Reason: *reason, IdempotencyKey: key()}))
+	dreq := &bohuxv1.CreateDeploymentRequest{
+		ReleaseId: r.GetMeta().GetId(), EnvironmentId: app.GetEnvironmentId(), Reason: *reason, IdempotencyKey: key()}
+	if step != nil {
+		dreq.Strategy, dreq.Canary = bohuxv1.DeploymentStrategy_DEPLOYMENT_STRATEGY_CANARY, step
+	}
+	dep, err := c.deployments.CreateDeployment(ctx, call(c.token, dreq))
 	if err != nil {
 		return fmt.Errorf("create deployment: %w", err)
 	}
@@ -168,6 +188,11 @@ func (c *command) watch(ctx context.Context, id string, start time.Time, last *s
 		if s := state((*d).GetState().String()); s != *last {
 			*last = s
 			c.printf("  %-12s %s\n", s, time.Since(start).Round(100*time.Millisecond))
+			if (*d).GetState() == bohuxv1.DeploymentState_DEPLOYMENT_STATE_CANARY {
+				cn := (*d).GetCanary()
+				c.printf("               %d%% of traffic for %s; end it now with `bohux deployment promote %s`, "+
+					"or abort with `bohux deployment cancel %s`\n", cn.GetWeightPercent(), cn.GetBake().AsDuration(), id, id)
+			}
 		}
 	}
 	if terminal((*d).GetState()) {

@@ -4,7 +4,7 @@ import { createClient } from "@connectrpc/connect";
 import { DeploymentService, DeploymentState, type Deployment as Dep } from "../gen/bohux/v1/deployment_pb";
 import { transport } from "../api";
 import { Failed, Loading } from "../components/Table";
-import { enumName, short, when } from "../format";
+import { canaryText, enumName, short, when } from "../format";
 
 const deployments = createClient(DeploymentService, transport);
 
@@ -53,6 +53,45 @@ export function useWatch(id: string) {
   return { dep, steps, error };
 }
 
+function key(): string {
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  return "web-" + Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+}
+
+// Actions promotes a canary or cancels a running deployment, like `bohux deployment
+// promote|cancel` (ADR-0049). The run writes the states that follow; the watch shows them.
+function Actions({ dep }: { dep: Dep }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const id = dep.meta?.id ?? "";
+  const act = async (f: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await f();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex items-center gap-4 text-sm">
+      {dep.state === DeploymentState.CANARY && (
+        <button className="text-accent disabled:text-muted" disabled={busy}
+          onClick={() => act(() => deployments.promoteDeployment({ id, idempotencyKey: key() }))}>
+          Promote now
+        </button>
+      )}
+      <button className="text-danger disabled:text-muted" disabled={busy}
+        onClick={() => act(() => deployments.cancelDeployment({ id, idempotencyKey: key() }))}>
+        {dep.state === DeploymentState.CANARY ? "Abort canary" : "Cancel"}
+      </button>
+      {error && <span className="text-danger" role="alert">{error}</span>}
+    </div>
+  );
+}
+
 export function Deployment() {
   const { id } = useParams({ from: "/p/$project/e/$env/d/$id" });
   const { dep, steps, error } = useWatch(id);
@@ -68,12 +107,14 @@ export function Deployment() {
         <dt className="text-muted">Release</dt>
         <dd>{short(dep.releaseId)}</dd>
         {dep.rollbackOf && (<><dt className="text-muted">Rollback of</dt><dd>{short(dep.rollbackOf)}</dd></>)}
+        {dep.canary && (<><dt className="text-muted">Canary</dt><dd>{canaryText(dep.canary)}, then all traffic</dd></>)}
         {dep.reason && (<><dt className="text-muted">Reason</dt><dd>{dep.reason}</dd></>)}
         {dep.failure?.reason && (<><dt className="text-muted">Failure</dt><dd className="text-danger">{dep.failure.reason}</dd></>)}
         <dt className="text-muted">Started</dt>
         <dd>{when(dep.startedAt ?? dep.meta?.createdAt)}</dd>
         {dep.finishedAt && (<><dt className="text-muted">Finished</dt><dd>{when(dep.finishedAt)}</dd></>)}
       </dl>
+      {!done && <Actions dep={dep} />}
       {steps.length > 0 && (
         <div>
           <h2 className="mb-2 font-semibold">Seen here</h2>
