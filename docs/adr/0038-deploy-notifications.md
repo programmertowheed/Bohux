@@ -1,6 +1,6 @@
 # ADR-0038: Deploy notifications — project channels, posted by an activity at the end of the run
 
-- **Status:** proposed
+- **Status:** proposed; item 3 amended by ADR-0048 (notifications in a child workflow)
 - **Date:** 2026-10-21
 - **Deciders:** Towheed
 
