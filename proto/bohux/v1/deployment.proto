@@ -76,6 +76,8 @@ enum DeploymentState {
   DEPLOYMENT_STATE_CANCELLED = 10;
   // The new Release serves its canary share while the bake runs (ADR-0049).
   DEPLOYMENT_STATE_CANARY = 11;
+  // Healthy, and watched against the App's SLO before it counts as done (ADR-0050).
+  DEPLOYMENT_STATE_VERIFYING = 12;
 }
 
 service DeploymentService {

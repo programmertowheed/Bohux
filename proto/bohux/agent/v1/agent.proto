@@ -192,6 +192,20 @@ message WorkloadStatus {
   // The workload's latest resource sample (ADR-0040); unset if the provider reports
   // none.
   bohux.v1.Usage usage = 7;
+  // Requests the node's ingress sent to the slot running release_id, cumulative since
+  // the agent started (ADR-0050). Unset for a workload without routes.
+  TrafficStats traffic = 8;
+}
+
+// Counters of one slot's requests at the ingress (ADR-0050).
+message TrafficStats {
+  uint64 requests = 1;
+  // Responses with a 5xx status.
+  uint64 server_errors = 2;
+  // Requests by duration: latency_buckets[i] counts those within the i-th bound of 5,
+  // 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000 ms and above the one before;
+  // the last entry counts those above 10000 ms.
+  repeated uint64 latency_buckets = 3;
 }
 
 enum WorkloadState {
