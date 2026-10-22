@@ -38,7 +38,7 @@ rule.** Scope is fixed by ADR-0011, extended by ADR-0020.
 **Exit criterion:** Bohux deploys Bohux, and rolls itself back.
 
 ## v0.2 — Usable by someone who is not us (weeks 13–20)
-- [ ] Buildpacks + Nixpacks auto-detection
+- [x] Auto-detected builds without a Dockerfile — S23, with Railpack (Nixpacks's successor; ADR-0047)
 - [ ] Secrets: envelope encryption, per-env keys
 - [ ] Managed Postgres/Redis as Resources, with backups
 - [x] Ingress: Caddy via admin API, automatic TLS, DNS, zero-downtime deploys (ADR-0019) — S10; Bohux does not manage DNS records: users point them at the node

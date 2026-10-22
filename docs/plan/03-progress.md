@@ -38,17 +38,13 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S22 — web terminal (v0.2, ADR-0046) done. The owner answered O29, O32 and
-  O37 on 2026-10-22. v0.2 is done except Nixpacks (S23, now unblocked) and the items
-  O35 still lists (managed Postgres/Redis, envelope encryption, team invites)
+- **Slice:** S23 — Railpack builds (v0.2, ADR-0047) done. v0.2 is done except the items
+  O35 lists (managed Postgres/Redis, envelope encryption, team invites)
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** S23 — Nixpacks auto-detect builds (O32: Nixpacks). Write the ADR
-  first (it extends ADR-0011 item 7): when a Git App without a Dockerfile uses it, how
-  the agent gets and pins the `nixpacks` binary, and whether its plan goes through the
-  existing buildx builder (ADR-0028). Then S21 — the Swarm provider, single manager
-  (O37): rewrite ADR-0045 as decided, then build it to the conformance suite. Still
-  for the owner: review the proposed ADRs (O19–O38), CI via a PR (O24), O35.
+- **Exact next step:** S21 — the Swarm provider, single manager (O37): rewrite ADR-0045
+  as decided, then build it to the conformance suite. Still for the owner: review the
+  proposed ADRs (O19–O39), CI via a PR (O24), O35.
 
 ## Next session prompt
 
@@ -94,13 +90,14 @@ work is in right now*.
 | O29 | ~~Web terminal transport~~ — **answered 2026-10-22: a WebSocket bridge.** Built in S22 (ADR-0046, see O38) | — |
 | O30 | Accept or reject ADR-0041 (registry credentials and Git deploy keys are environment secrets the App names; sealed apart from its env vars; on the node only for the one command). Adds `App.image_pull_secret`, migration 00021 | S17 |
 | O31 | Git host keys for deploy-key fetches: trusted on first use per node and pinned in `<state>/builds/known_hosts` (now). Alternative: a known_hosts secret per environment, refusing unknown hosts | S17 |
-| O32 | ~~Buildpacks or Nixpacks~~ — **answered 2026-10-22: Nixpacks.** Next: an ADR for it (it extends ADR-0011 item 7, Dockerfile only), then the slice | S23 |
+| O32 | ~~Buildpacks or Nixpacks~~ — **answered 2026-10-22: Nixpacks, then Railpack** once Nixpacks turned out to be in maintenance mode upstream (Railpack is its named successor); auto when there is no Dockerfile, plus a per-App override. Built in S23 (ADR-0047, see O39) | — |
 | O33 | Accept or reject ADR-0042 (refines ADR-0031: a release healthy while the control plane *rejects* its agent does not cancel its fallback; an unreachable control plane changes nothing, rule 1; found when a new control plane refused its own agent) | S15 check |
 | O34 | Accept or reject ADR-0043 (email notifications: `EMAIL` channels with a `mailto:` list in OpenBao; one SMTP relay per install, TLS required). Adds a proto enum value, migration 00022, four control-plane settings | S19 |
 | O35 | Remaining v0.2 items need a product call before code: **managed Postgres/Redis** (needs app-to-app networking in an environment, which does not exist: each App is its own Compose network; plus image pinning, volume lifecycle, backups); **envelope encryption** (what threat beyond OpenBao's own barrier: crypto-shredding environments? its backups then need the keys); **team invites** (user accounts); **Buildpacks/Nixpacks** (O32); **web terminal** (O29) | next v0.2 items |
 | O36 | Accept or reject ADR-0044 (webhook watch paths: path prefixes, no globs; changed files from the push payload; deploys anyway when the list may be incomplete). Adds `Webhook.paths`, migration 00023 | S20 |
 | O37 | ~~Swarm questions~~ — **answered 2026-10-22: a single-manager swarm, health from the image's `HEALTHCHECK`, Swarm Apps image-only** (noted in ADR-0045). Next: rewrite ADR-0045 as decided, then the provider | S21 |
 | O38 | Accept or reject ADR-0046 (web terminal: `GET /sockets/v1/exec`, token in the first frame, binary protobuf `ExecRequest`/`ExecResponse` frames, close code 4000 + Connect code; the Connect handler's body shared, so the same permission check and audit; xterm.js with its `<style>` elements copied into adopted stylesheets so the CSP is unchanged; adds `github.com/coder/websocket` and two npm packages) | S22 |
+| O39 | Accept or reject ADR-0047 (builds without a Dockerfile: `GitSource.strategy` UNSPECIFIED now means auto — the Dockerfile if present, else Railpack; new `BUILD_STRATEGY_RAILPACK`; one frontend image pinned by digest runs `railpack prepare` in a locked-down container and is the BuildKit frontend; the App ID is Railpack's cache key; `BUILD_PLAN_FAILED`). Changes app.proto and agent.proto | S23 |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -1100,6 +1097,36 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 - [x] The build e2e test ran in the cloud container for the first time (disk freed,
       below) and caught a wrong audit count in last session's exec test (4 sessions, not 2)
 
+### S23 — Builds without a Dockerfile: Railpack (ADR-0047) ✅
+- [x] Owner chose Nixpacks (O32); upstream marks it maintenance-only and names
+      Railpack, so the owner was asked again: Railpack, auto when there is no
+      Dockerfile, plus an override. Proposed ADR-0047 (O39)
+- [x] Proto: `BUILD_STRATEGY_RAILPACK`; UNSPECIFIED documented as auto;
+      `BuildRequest.strategy`, `BuildResult.strategy` (the builder used)
+- [x] API validates the strategy; the deploy workflow passes it to the agent
+- [x] Agent: decides after the fetch (a regular `Dockerfile` at the context root);
+      `railpack prepare` in a throwaway container from
+      `ghcr.io/railwayapp/railpack-frontend:v0.43.0@sha256:355ef61f…` (checkout
+      read-only, `--cap-drop ALL`, `no-new-privileges`, 512 MB, 256 processes, the
+      agent's UID, proxy variables passed); the build on the `bohux` builder with that
+      image as `BUILDKIT_SYNTAX`, `-f` the plan, `cache-key=<app id>`; exit 1 is
+      `BUILD_PLAN_FAILED`, Railpack's error lines go to the agent log
+- [x] CLI `app create --build auto|dockerfile|railpack`, a BUILD column in
+      `app show`; the UI's App page says how a Git App builds (the UI creates image
+      Apps only, so no control there: rule 8)
+- [x] Tests: strategy choice, info-file errors, proxy variables (unit); validation
+      (unit); the workflow forwards the strategy; the CLI flag and column; the agent
+      plans for real (unplannable repo → `BUILD_PLAN_FAILED`, `dockerfile` without one
+      → `BUILD_FAILED`, auto with a Dockerfile → DOCKERFILE) and, where ghcr.io is
+      reachable (CI), builds and runs a Railpack image
+- [x] In the cloud container: ghcr.io blobs are blocked, so the integration test ran
+      with a local stand-in image (the released `railpack` binary, checksum verified,
+      on busybox with the sandbox CA), host networking, and the full build skipped
+      (`BOHUX_TEST_RAILPACK_*`, Known gaps). A full build got through Railpack's
+      frontend and stopped at pulling `ghcr.io/railwayapp/railpack-builder`. **The
+      full Railpack build has not run anywhere yet**; the first CI run will be its
+      first
+
 ## v0.3 slices
 
 ### S20 — Monorepo watch paths (ADR-0044) ✅
@@ -1114,6 +1141,24 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       signed deliveries inside and outside the paths (integration), CLI
 
 ## Known gaps and notes
+- **Railpack in the cloud container (S23):** ghcr.io blobs are blocked here. To run
+  `TestBuilderRailpack`'s planning cases: download
+  `railpack-v0.43.0-x86_64-unknown-linux-musl.tar.gz` and `checksums.txt` from the
+  GitHub release, check the SHA-256, build `FROM localhost:5000/library/busybox:1.36`
+  with `/root/.ccr/ca-bundle.crt` copied to `/etc/ssl/certs/ca-certificates.crt` and the
+  binary at `/railpack`, tag it `localhost:5000/railpack-frontend:v0.43.0-local`, then
+  set `BOHUX_TEST_RAILPACK_IMAGE` to it, `BOHUX_TEST_RAILPACK_NETWORK=host` (the proxy
+  listens on localhost) and `BOHUX_TEST_RAILPACK_OFFLINE=1`.
+- **Services die when the session's worker restarts.** Start them detached with
+  `setsid` (the scratchpad `services.sh` of 2026-10-22 does); the tmpfs Go caches go
+  with a container restart and must be recreated (`mkdir -p /dev/shm/gomod
+  /dev/shm/gobuild /dev/shm/e2e`).
+- **`TestRestoreDrill` can race the previous deploy's notifications**: a deploy
+  workflow stays open after its terminal state while it notifies (ADR-0038, up to 5
+  attempts), and Temporal refuses a new run for the App meanwhile. It failed once in a
+  full e2e run (rollback "already in progress"), passed 3/3 alone. The same race blocks
+  a user's rollback while a notification target is failing. Suggested as a separate
+  task (needs an ADR: e.g. notifications as an abandoned child workflow).
 - **Disk workaround for builds in the cloud container (2026-10-22):** with ~9% free the
   agent refuses builds. Move the Go caches to tmpfs and run e2e with `TMPDIR` there:
   ```
@@ -1211,6 +1256,14 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   1.24–1.26). Raising the `go` directive is cheap and its own commit when wanted.
 
 ## Session log (newest first)
+
+### 2026-10-22 (S23) — branch `claude/relaxed-rubin-76m7dl`
+- Nixpacks is maintenance-only upstream; the owner switched O32 to Railpack (auto
+  when there is no Dockerfile, plus an override). S23 done with ADR-0047 (O39).
+- Verified: build, vet, golangci-lint (plain and integration+e2e tags), unit with
+  race, full integration suite, e2e deploy and build green. `TestRestoreDrill` failed
+  once in the full e2e run on a notification race (Known gaps), passed 3/3 alone.
+  The full Railpack build could not run here (ghcr.io blocked).
 
 ### 2026-10-22 (S22) — branch `claude/relaxed-rubin-76m7dl`
 - The session prompt arrived with its `<O-items>` placeholder unfilled and nothing
