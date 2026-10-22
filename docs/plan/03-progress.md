@@ -38,8 +38,8 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S21 — Swarm provider (v0.3, ADR-0045) done, after S22 (web terminal) and
-  S23 (Railpack builds). v0.2 is done except the items O35 lists.
+- **Slice:** S24 — notifications no longer hold the App (ADR-0048) done, after S21
+  (Swarm), S22 (web terminal), S23 (Railpack). v0.2 is done except the items O35 lists.
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
 - **Exact next step:** every remaining roadmap item needs an owner decision. Ask the
@@ -47,8 +47,8 @@ work is in right now*.
   encryption, team invites) or a v0.3 item (preview environments, canary through
   Caddy weights, OTEL/SLO health gate and automatic rollback, migrations as a gated
   step, scheduled restore drills, cron jobs, Compose apps, volumes and S3 backups), or
-  hardening: a Swarm end-to-end test, the notification race (suggested task), CI via a
-  PR (O24). Review the proposed ADRs (O19–O40).
+  hardening: a Swarm end-to-end test, CI via a PR (O24). Review the proposed ADRs
+  (O19–O41).
 
 ## Next session prompt
 
@@ -104,6 +104,7 @@ work is in right now*.
 | O38 | Accept or reject ADR-0046 (web terminal: `GET /sockets/v1/exec`, token in the first frame, binary protobuf `ExecRequest`/`ExecResponse` frames, close code 4000 + Connect code; the Connect handler's body shared, so the same permission check and audit; xterm.js with its `<style>` elements copied into adopted stylesheets so the CSP is unchanged; adds `github.com/coder/websocket` and two npm packages) | S22 |
 | O39 | Accept or reject ADR-0047 (builds without a Dockerfile: `GitSource.strategy` UNSPECIFIED now means auto — the Dockerfile if present, else Railpack; new `BUILD_STRATEGY_RAILPACK`; one frontend image pinned by digest runs `railpack prepare` in a locked-down container and is the BuildKit frontend; the App ID is Railpack's cache key; `BUILD_PLAN_FAILED`). Changes app.proto and agent.proto | S23 |
 | O40 | Accept or reject ADR-0045 as rewritten (Swarm provider: the node's own dockerd as a one-node swarm manager; one stack per workload with `stack.yaml` + 0600 `secrets.env`; health checks inside each task's network namespace; `dnsrr` endpoints on an attachable `bohux-ingress` overlay; live-restore waived on a manager; the agent runs Swarm beside Docker and records each workload's provider) | S21 |
+| O41 | Accept or reject ADR-0048 (a Deployment's notifications run in their own `notify/<deployment id>` workflow, a child abandoned when the deploy run ends, so the App is free at once; runs from before keep notifying inline behind a version gate; recorded histories replayed in a unit test). Amends ADR-0038 item 3 | S24 |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -1133,6 +1134,27 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       full Railpack build has not run anywhere yet**; the first CI run will be its
       first
 
+### S24 — Notifications no longer hold the App (ADR-0048) ✅
+- [x] Owner chose this slice (2026-10-22). Proposed ADR-0048 (O41), amending ADR-0038
+      item 3
+- [x] Recorded first: histories of a succeeded and a rolled-back run with
+      notifications, made by the previous code on the Temporal dev server
+      (`TestRecordHistory`, kept for the next change), in `testdata/`
+- [x] `NotifyWorkflow` (`notify/<deployment id>`), started as a child with
+      `ParentClosePolicy: ABANDON` and duplicate starts refused; the deploy run waits
+      only for the child's start. Delivery unchanged. Gated with
+      `GetVersion("notify-child")`: older runs notify inline
+- [x] Tests: `TestReplay` replays the recorded histories (and fails when the gate is
+      removed: checked); `TestNotifyEnd` still sees every channel and five attempts
+      on the broken one; on the real dev server a deploy whose channel always fails
+      ends and the next deploy of the App starts at once while the notification run
+      still retries (`TestNotificationsDoNotHoldTheApp`, which fails on the old code:
+      checked)
+- [x] Found on the way: the agent's hello `Send` returned a bare `EOF` when the
+      control plane had already answered, losing its reason; the agent and the
+      agentapi test helper now read it from `Receive` (TestConnect's flake: 30/30
+      under load after)
+
 ## v0.3 slices
 
 ### S21 — Swarm provider, single manager (ADR-0045) ✅
@@ -1210,12 +1232,9 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   `setsid` (the scratchpad `services.sh` of 2026-10-22 does); the tmpfs Go caches go
   with a container restart and must be recreated (`mkdir -p /dev/shm/gomod
   /dev/shm/gobuild /dev/shm/e2e`).
-- **`TestRestoreDrill` can race the previous deploy's notifications**: a deploy
-  workflow stays open after its terminal state while it notifies (ADR-0038, up to 5
-  attempts), and Temporal refuses a new run for the App meanwhile. It failed once in a
-  full e2e run (rollback "already in progress"), passed 3/3 alone. The same race blocks
-  a user's rollback while a notification target is failing. Suggested as a separate
-  task (needs an ADR: e.g. notifications as an abandoned child workflow).
+- **Resolved 2026-10-22 (S24):** the restore drill's race with the previous deploy's
+  notifications (ADR-0048), and `TestConnect`'s occasional EOF in place of
+  "unauthenticated" (a Send-side EOF read as the error).
 - **Disk workaround for builds in the cloud container (2026-10-22):** with ~9% free the
   agent refuses builds. Move the Go caches to tmpfs and run e2e with `TMPDIR` there:
   ```
@@ -1313,6 +1332,13 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   1.24–1.26). Raising the `go` directive is cheap and its own commit when wanted.
 
 ## Session log (newest first)
+
+### 2026-10-22 (S24) — branch `claude/relaxed-rubin-76m7dl`
+- Owner picked the notification race. ADR-0048 proposed (O41); histories of the old
+  code recorded before the change and replayed after it.
+- Verified: build, vet, golangci-lint (both tag sets), unit with race, the full
+  integration suite (22 packages) twice, e2e (deploy, build, restore drill) green.
+  No provider changed, so no conformance run.
 
 ### 2026-10-22 (S21) — branch `claude/relaxed-rubin-76m7dl`
 - Swarm cannot run with live-restore; the owner chose to waive it on a manager.
