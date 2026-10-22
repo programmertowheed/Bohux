@@ -37,14 +37,15 @@ work is in right now*.
 
 ## Current focus
 
-- **Working branch:** `claude/relaxed-rubin-76m7dl`
+- **Working branch:** `claude/relaxed-rubin-76m7dl`. S13b (ADR-0048) is on
+  `claude/jolly-volta-uo98qk`, a fast-forward of it: bring it in before the next slice
 - **Slice:** S23 — Railpack builds (v0.2, ADR-0047) done. v0.2 is done except the items
   O35 lists (managed Postgres/Redis, envelope encryption, team invites)
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
 - **Exact next step:** S21 — the Swarm provider, single manager (O37): rewrite ADR-0045
   as decided, then build it to the conformance suite. Still for the owner: review the
-  proposed ADRs (O19–O39), CI via a PR (O24), O35.
+  proposed ADRs (O19–O40), CI via a PR (O24), O35.
 
 ## Next session prompt
 
@@ -98,6 +99,7 @@ work is in right now*.
 | O37 | ~~Swarm questions~~ — **answered 2026-10-22: a single-manager swarm, health from the image's `HEALTHCHECK`, Swarm Apps image-only** (noted in ADR-0045). Next: rewrite ADR-0045 as decided, then the provider | S21 |
 | O38 | Accept or reject ADR-0046 (web terminal: `GET /sockets/v1/exec`, token in the first frame, binary protobuf `ExecRequest`/`ExecResponse` frames, close code 4000 + Connect code; the Connect handler's body shared, so the same permission check and audit; xterm.js with its `<style>` elements copied into adopted stylesheets so the CSP is unchanged; adds `github.com/coder/websocket` and two npm packages) | S22 |
 | O39 | Accept or reject ADR-0047 (builds without a Dockerfile: `GitSource.strategy` UNSPECIFIED now means auto — the Dockerfile if present, else Railpack; new `BUILD_STRATEGY_RAILPACK`; one frontend image pinned by digest runs `railpack prepare` in a locked-down container and is the BuildKit frontend; the App ID is Railpack's cache key; `BUILD_PLAN_FAILED`). Changes app.proto and agent.proto | S23 |
+| O40 | Accept or reject ADR-0048 (deploy notifications move to an abandoned child workflow `notify/<deployment id>`, so a failing channel no longer blocks the App's next deploy or rollback; amends ADR-0038 item 3) | S13b |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -920,6 +922,27 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       Postgres or a response) and the activities (real TLS posts, the webhook's
       signature, other projects and states skipped)
 
+### S13b — Notifications off the deploy run (ADR-0048) ✅
+- [x] Found: a deploy run stayed open while its notifications retried (ADR-0038), so
+      the App's workflow ID `deploy/<app id>` refused the next deploy **or rollback**
+      ("already in progress") although the row was terminal; up to minutes with a
+      failing target. `TestRestoreDrill` hit it once in a full e2e run
+- [x] Proposed ADR-0048 (O40): notifications are a `NotifyWorkflow` child,
+      `notify/<deployment id>`, `ParentClosePolicy: ABANDON`, started on a
+      disconnected context; the run returns once the child has started. ADR-0038's
+      status line notes the amendment
+- [x] Gated by `workflow.GetVersion("notify-child")`: runs that already notify inline
+      replay unchanged. First replay test (`TestReplay`): recorded histories in
+      `internal/workflow/deploy/testdata` of the inline version, the new run, and its
+      child; fails when the gate is removed
+- [x] Tests: the run closes before its (24 h) notification child finishes, and the
+      child is abandoned, not terminated (unit; rolled back first); `NotifyWorkflow`
+      retries a failing channel 5 times and drops it (unit); on real Temporal and
+      Postgres a deploy whose Slack channel keeps answering 503 fails, and the App's
+      next Start is accepted ~70 ms after the terminal row while the first
+      deployment's notifications are still retrying (integration; fails, 2 s of
+      `ErrRunning`, when the run waits for its child)
+
 ### S14 — MCP server (ADR-0018, accepted) ✅
 - [x] `proto/bohux/v1/options.proto`: method option `ToolPolicy` (read-only, mutating,
       destructive, hidden), set on every RPC; credentials and streams hidden
@@ -1153,12 +1176,11 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   `setsid` (the scratchpad `services.sh` of 2026-10-22 does); the tmpfs Go caches go
   with a container restart and must be recreated (`mkdir -p /dev/shm/gomod
   /dev/shm/gobuild /dev/shm/e2e`).
-- **`TestRestoreDrill` can race the previous deploy's notifications**: a deploy
-  workflow stays open after its terminal state while it notifies (ADR-0038, up to 5
-  attempts), and Temporal refuses a new run for the App meanwhile. It failed once in a
-  full e2e run (rollback "already in progress"), passed 3/3 alone. The same race blocks
-  a user's rollback while a notification target is failing. Suggested as a separate
-  task (needs an ADR: e.g. notifications as an abandoned child workflow).
+- **Docker Hub rate-limits the cloud container (429)**, even for `registry:2` and
+  `moby/buildkit`. Pull them from Google's mirror and retag:
+  `docker pull mirror.gcr.io/library/registry:2 && docker tag mirror.gcr.io/library/registry:2 registry:2`
+  (same for `moby/buildkit:v0.18.2`), then follow *BuildKit in the cloud container*.
+  Recreate the `bohux` builder if a test run already made one on its own network.
 - **Disk workaround for builds in the cloud container (2026-10-22):** with ~9% free the
   agent refuses builds. Move the Go caches to tmpfs and run e2e with `TMPDIR` there:
   ```
@@ -1256,6 +1278,18 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   1.24–1.26). Raising the `go` directive is cheap and its own commit when wanted.
 
 ## Session log (newest first)
+
+### 2026-10-22 (S13b) — branch `claude/jolly-volta-uo98qk` (on top of `claude/relaxed-rubin-76m7dl`)
+- Fixed the notification race (S13b, ADR-0048 proposed, O40): notifications run in
+  an abandoned child workflow, so a failing channel no longer blocks the App's next
+  deploy or rollback. Version-gated, with the repo's first workflow replay test.
+- This session's designated branch was `claude/jolly-volta-uo98qk`; it is
+  `claude/relaxed-rubin-76m7dl` plus three commits, so it fast-forwards onto it.
+- Verified: build, vet, golangci-lint (plain and integration tag), unit with race,
+  integration suite (`internal/workflow/deploy` and `internal/api` on real
+  Temporal), full e2e (`go test -tags=integration,e2e ./cmd/bohux`) green 3/3 with
+  `TestRestoreDrill` in it. Still red here for environmental reasons only:
+  `TestBuilderRailpack` (ghcr.io blocked; needs the Known gaps stand-in image).
 
 ### 2026-10-22 (S23) — branch `claude/relaxed-rubin-76m7dl`
 - Nixpacks is maintenance-only upstream; the owner switched O32 to Railpack (auto
