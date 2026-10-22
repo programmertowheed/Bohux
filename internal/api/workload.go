@@ -79,9 +79,21 @@ func (ws *workloadService) StreamLogs(ctx context.Context, req *connect.Request[
 	return nil
 }
 
-// Exec runs a command in one of the App's instances. Every session is audited
-// (rule 10); its input and output are not recorded anywhere.
+// execStream is one Exec session's client side: the Connect stream, or the web
+// terminal's WebSocket (ADR-0046).
+type execStream interface {
+	Receive() (*bohuxv1.ExecRequest, error)
+	Send(*bohuxv1.ExecResponse) error
+}
+
+// Exec runs a command in one of the App's instances.
 func (ws *workloadService) Exec(ctx context.Context, stream *connect.BidiStream[bohuxv1.ExecRequest, bohuxv1.ExecResponse]) error {
+	return ws.exec(ctx, stream)
+}
+
+// exec serves one session for either transport. Every session is audited (rule 10);
+// its input and output are not recorded anywhere.
+func (ws *workloadService) exec(ctx context.Context, stream execStream) error {
 	first, err := stream.Receive()
 	if err != nil {
 		return fmt.Errorf("receive exec start: %w", err)

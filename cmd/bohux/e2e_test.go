@@ -20,10 +20,13 @@ import (
 
 	"connectrpc.com/connect"
 	"filippo.io/age"
+	"github.com/coder/websocket"
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/proto"
 
 	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/gen/bohux/v1/bohuxv1connect"
+	"github.com/bohumix/bohux/internal/api"
 	"github.com/bohumix/bohux/internal/cli"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/store/fixture"
@@ -440,13 +443,67 @@ func TestBuildEndToEnd(t *testing.T) {
 	if !errors.As(err, &exit) || exit.Code != 3 {
 		t.Errorf("exec of a failing command = %v, want exit status 3", err)
 	}
+	// The web terminal's bridge runs the same session over a WebSocket (ADR-0046).
+	if out, code := socketExec(t, s, app, "echo from-$((6*7)); exit 4\n"); !strings.Contains(out, "from-42") || code != 4 {
+		t.Errorf("exec over the socket = %q, exit %d; want from-42, exit 4", out, code)
+	}
 	// Every exec session is audited (rule 10); its input and output are not.
 	var sessions int
 	if err := s.st.InTenant(s.ctx, s.tenant, func(tx *store.Tx) error {
 		return tx.QueryRow(s.ctx, `SELECT count(*) FROM audit_events
 			WHERE action = '/bohux.v1.WorkloadService/Exec' AND resource_id = $1`, uuid.MustParse(app)).Scan(&sessions)
-	}); err != nil || sessions != 2 {
-		t.Errorf("audited exec sessions = %d, %v; want 2", sessions, err)
+	}); err != nil || sessions != 4 {
+		// cat, wc -l, exit 3, and the socket's sh; -t without a terminal never reaches it.
+		t.Errorf("audited exec sessions = %d, %v; want 4", sessions, err)
+	}
+}
+
+// socketExec runs sh with a terminal over the web terminal's WebSocket bridge, types
+// input, and returns the output and the exit code.
+func socketExec(t *testing.T, s *stack, app, input string) (string, int32) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(s.ctx, time.Minute)
+	defer cancel()
+	c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(s.base, "http")+api.ExecSocketPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.CloseNow() }()
+	send := func(m *bohuxv1.ExecRequest) {
+		b, err := proto.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Write(ctx, websocket.MessageBinary, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.Write(ctx, websocket.MessageText, []byte(s.token)); err != nil {
+		t.Fatal(err)
+	}
+	send(&bohuxv1.ExecRequest{Msg: &bohuxv1.ExecRequest_Start{Start: &bohuxv1.ExecStart{
+		AppId: app, Command: []string{"sh"}, Tty: true, Size: &bohuxv1.TerminalSize{Rows: 24, Cols: 80}}}})
+	send(&bohuxv1.ExecRequest{Msg: &bohuxv1.ExecRequest_Stdin{Stdin: []byte(input)}})
+	var out bytes.Buffer
+	for {
+		_, b, err := c.Read(ctx)
+		if err != nil {
+			t.Fatalf("socket exec: %v (output so far %q)", err, out.String())
+		}
+		m := &bohuxv1.ExecResponse{}
+		if err := proto.Unmarshal(b, m); err != nil {
+			t.Fatal(err)
+		}
+		out.Write(m.GetStdout())
+		out.Write(m.GetStderr())
+		if m.GetExit() != nil {
+			// The server closes normally after the exit.
+			_, _, err := c.Read(ctx)
+			if websocket.CloseStatus(err) != websocket.StatusNormalClosure {
+				t.Errorf("after the exit: %v, want a normal close", err)
+			}
+			return out.String(), m.GetExit().GetExitCode()
+		}
 	}
 }
 

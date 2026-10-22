@@ -5,6 +5,7 @@ go 1.23.0
 require (
 	connectrpc.com/connect v1.17.0
 	filippo.io/age v1.2.1
+	github.com/coder/websocket v1.8.14
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/modelcontextprotocol/go-sdk v1.2.0

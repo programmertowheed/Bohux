@@ -10,8 +10,9 @@ import "google/protobuf/timestamp.proto";
 option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
 
 // Live access to an App's running instances, relayed through the agent stream
-// (ADR-0007). Exec is bidirectional, so browsers cannot use it; the CLI can. That is
-// allowed: rule 8 forbids the UI having more than the CLI, not less.
+// (ADR-0007). Exec is bidirectional, which browsers cannot call over Connect; the web
+// UI reaches it through a WebSocket bridge at /sockets/v1/exec that carries these
+// same messages (ADR-0046).
 service WorkloadService {
   // The App's latest resource sample, from its node's agent (ADR-0040).
   rpc GetAppUsage(GetAppUsageRequest) returns (GetAppUsageResponse) {

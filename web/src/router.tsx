@@ -1,4 +1,4 @@
-import { createRootRoute, createRoute, createRouter, Link, Outlet } from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Link, Outlet } from "@tanstack/react-router";
 import { useQuery } from "@connectrpc/connect-query";
 import { IdentityService, PrincipalKind } from "./gen/bohux/v1/identity_pb";
 import { clearToken, getToken } from "./auth";
@@ -63,12 +63,18 @@ const deployment = createRoute({
 });
 
 const logs = createRoute({ getParentRoute: () => root, path: "/p/$project/e/$env/a/$app/logs", component: Logs });
+// xterm.js loads only with this page (ADR-0046).
+const terminal = createRoute({
+  getParentRoute: () => root,
+  path: "/p/$project/e/$env/a/$app/terminal",
+  component: lazyRouteComponent(() => import("./pages/Terminal"), "Terminal"),
+});
 
 const appPage = createRoute({ getParentRoute: () => root, path: "/p/$project/e/$env/a/$app", component: AppPage });
 const activity = createRoute({ getParentRoute: () => root, path: "/p/$project/activity", component: Activity });
 
 export const router = createRouter({
-  routeTree: root.addChildren([projects, nodes, tokens, project, environment, deployment, logs, activity, appPage]),
+  routeTree: root.addChildren([projects, nodes, tokens, project, environment, deployment, logs, terminal, activity, appPage]),
   basepath: "/ui",
 });
 

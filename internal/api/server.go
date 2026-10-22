@@ -82,6 +82,8 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.Handle(bohuxv1connect.NewNotificationServiceHandler(&notificationService{s}, opts))
 	// Git hosts post here without a token; the signature authenticates (ADR-0037).
 	mux.HandleFunc(HookPrefix, s.ServeHook)
+	// The web terminal's bridge to Exec; it authenticates in its first frame (ADR-0046).
+	mux.HandleFunc("GET "+ExecSocketPath, s.ServeExecSocket)
 	mux.Handle(bohuxv1connect.NewAuditServiceHandler(&auditService{s: s, auditReader: auditReader{s}}, opts))
 }
 

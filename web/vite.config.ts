@@ -8,7 +8,11 @@ export default defineConfig({
   plugins: [react()],
   build: { outDir: "dist", emptyOutDir: true, sourcemap: false },
   server: {
-    proxy: { "/bohux.v1.": { target: process.env.BOHUX_API_URL ?? "http://127.0.0.1:7400", changeOrigin: true } },
+    proxy: {
+      "/bohux.v1.": { target: process.env.BOHUX_API_URL ?? "http://127.0.0.1:7400", changeOrigin: true },
+      // The terminal's socket keeps the page's Host, so the Origin check passes.
+      "/sockets/": { target: process.env.BOHUX_API_URL ?? "http://127.0.0.1:7400", ws: true },
+    },
   },
   test: { environment: "jsdom", globals: true },
 });

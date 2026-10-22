@@ -58,6 +58,9 @@ export function Environment() {
               <Link to="/p/$project/e/$env/a/$app/logs" params={{ project, env, app: a.slug }} className="text-accent">
                 logs
               </Link>
+              <Link to="/p/$project/e/$env/a/$app/terminal" params={{ project, env, app: a.slug }} className="text-accent">
+                terminal
+              </Link>
               <AppActions app={a} project={project} env={env} />
               <AppSettings app={a} />
             </span>,
