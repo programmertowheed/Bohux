@@ -38,17 +38,17 @@ work is in right now*.
 ## Current focus
 
 - **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S24 — notifications no longer hold the App (ADR-0048) done, after S21
-  (Swarm), S22 (web terminal), S23 (Railpack). v0.2 is done except the items O35 lists.
+- **Slice:** S25 — canary deploys (v0.3, ADR-0049) done, after S21–S24. v0.2 is done
+  except the items O35 lists.
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
   owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
 - **Exact next step:** every remaining roadmap item needs an owner decision. Ask the
   owner to pick the next slice: v0.2's O35 (managed Postgres/Redis, envelope
-  encryption, team invites) or a v0.3 item (preview environments, canary through
-  Caddy weights, OTEL/SLO health gate and automatic rollback, migrations as a gated
-  step, scheduled restore drills, cron jobs, Compose apps, volumes and S3 backups), or
+  encryption, team invites) or a v0.3 item (preview environments, OTEL/SLO health gate
+  and automatic rollback — it would judge canaries too, migrations as a gated step,
+  scheduled restore drills, cron jobs, Compose apps, volumes and S3 backups), or
   hardening: a Swarm end-to-end test, CI via a PR (O24). Review the proposed ADRs
-  (O19–O41).
+  (O19–O42).
 
 ## Next session prompt
 
@@ -105,6 +105,7 @@ work is in right now*.
 | O39 | Accept or reject ADR-0047 (builds without a Dockerfile: `GitSource.strategy` UNSPECIFIED now means auto — the Dockerfile if present, else Railpack; new `BUILD_STRATEGY_RAILPACK`; one frontend image pinned by digest runs `railpack prepare` in a locked-down container and is the BuildKit frontend; the App ID is Railpack's cache key; `BUILD_PLAN_FAILED`). Changes app.proto and agent.proto | S23 |
 | O40 | Accept or reject ADR-0045 as rewritten (Swarm provider: the node's own dockerd as a one-node swarm manager; one stack per workload with `stack.yaml` + 0600 `secrets.env`; health checks inside each task's network namespace; `dnsrr` endpoints on an attachable `bohux-ingress` overlay; live-restore waived on a manager; the agent runs Swarm beside Docker and records each workload's provider) | S21 |
 | O41 | Accept or reject ADR-0048 (a Deployment's notifications run in their own `notify/<deployment id>` workflow, a child abandoned when the deploy run ends, so the App is free at once; runs from before keep notifying inline behind a version gate; recorded histories replayed in a unit test). Amends ADR-0038 item 3 | S24 |
+| O42 | Accept or reject ADR-0049 (canary deploys: strategy CANARY with one weight 1–99% and a bake 1m–24h per deployment; the weight rides on the workload outside the spec hash; Caddy weighted round robin across the two slots; the workflow's CANARY state watches health with a 30 s grace, then promotes by reassigning with weight 0; PromoteDeployment ends the bake, CancelDeployment aborts). Changes deployment.proto and agent.proto; migration 00024 | S25 |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -1157,6 +1158,37 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 
 ## v0.3 slices
 
+### S25 — Canary deploys through Caddy weights (ADR-0049) ✅
+- [x] Owner chose canary, promoted automatically after a bake (with promote and abort),
+      one step, per deployment. Proposed ADR-0049 (O42)
+- [x] Proto: `DEPLOYMENT_STRATEGY_CANARY`, `Canary{weight_percent, bake}`, state
+      `CANARY`, `PromoteDeployment`; `Workload.canary_weight`. Migration 00024 (strategy,
+      weight, bake on the head; the state)
+- [x] API: validation (1–99%, whole seconds 1m–24h, only Apps that switch slots),
+      the canary stored and returned, `PromoteDeployment` (deployer, audited, refused
+      outside CANARY)
+- [x] Workflow: assign with the weight, health gate, CANARY, `HoldHealthy` through the
+      bake (30 s grace) raced against the promote signal, then assign with weight 0 and
+      wait; any failure compensates. No version gate needed: only runs with a canary
+      take the new path (the replay test still passes)
+- [x] Agent: weight outside the spec hash; once the new slot is healthy both slots
+      are served weighted; an unhealthy canary leaves the live slot alone; promotion
+      cuts over without re-applying. Ingress: `Site.Weights` → Caddy
+      `weighted_round_robin`
+- [x] CLI `deploy --canary N --bake D`, `deployment promote|cancel` (cancel had no
+      CLI before); UI: canary shown, Promote now / Cancel / Abort canary
+- [x] Tests: workflow (unhealthy canary, cancel, never healthy, bake end, promote
+      signal); agent (broken, split, unhealthy, promotion); render; real Caddy splits
+      40 requests 3:1; real Temporal API test (refusals, rollback, abort, promote,
+      viewer refused, audit) — which found that `AssignApp` dropped a promotion as
+      "unchanged" (fixed); `HoldHealthy` on Postgres; CLI usage
+- [x] Live on the test install upgraded to this branch: a canary at 30% served exactly
+      70/30 of 100 requests through Caddy; abort went back to the live slot; promote
+      sent 40 of 40 to the new release and removed the old slot; no failed request
+- [ ] Not clicked in a browser: the UI's promote and abort buttons (typechecked and
+      unit-tested only)
+
+
 ### S21 — Swarm provider, single manager (ADR-0045) ✅
 - [x] Owner answered O37 (single manager, no registry push) and, when it turned out
       Swarm cannot run with live-restore, chose to waive live-restore on a manager with
@@ -1332,6 +1364,13 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   1.24–1.26). Raising the `go` directive is cheap and its own commit when wanted.
 
 ## Session log (newest first)
+
+### 2026-10-22 (S25) — branch `claude/relaxed-rubin-76m7dl`
+- Owner picked canary deploys (auto-promote after a bake, one step, per deployment).
+  ADR-0049 proposed (O42). The real-Temporal test found a promotion lost in
+  `AssignApp`; fixed. Checked live on the test install (70/30 split, abort, promote).
+- Verified: build, vet, golangci-lint (both tag sets), macOS build, unit with race,
+  integration (22 packages), e2e green. No provider changed, so no conformance run.
 
 ### 2026-10-22 (S24) — branch `claude/relaxed-rubin-76m7dl`
 - Owner picked the notification race. ADR-0048 proposed (O41); histories of the old

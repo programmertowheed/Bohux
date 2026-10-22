@@ -56,7 +56,7 @@ rule.** Scope is fixed by ADR-0011, extended by ADR-0020.
 
 ## v0.3 — The reason to choose this (weeks 21–30)
 - [ ] Preview environments per PR, with seeded data
-- [ ] Blue/green and canary via Caddy weighted upstreams (ADR-0019)
+- [x] Blue/green and canary via Caddy weighted upstreams (ADR-0019) — blue/green S10f (ADR-0035), canary S25 (ADR-0049)
 - [ ] OTEL correlation, deploy markers, SLO burn-rate health gate
 - [ ] Automatic rollback on SLO violation
 - [ ] Schema migrations as a gated workflow step

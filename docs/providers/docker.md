@@ -62,6 +62,25 @@ These run in the agent, not in `Apply` (ADR-0025).
   `degraded` with reason `DISK_PRESSURE` in every StatusReport and new builds are
   refused. Running workloads are never stopped because of it.
 
+## Routed Apps: zero-downtime deploys and canaries (ADR-0035, ADR-0049)
+
+An App with routes and no host port deploys into its other slot (`<project>-blue` or
+`-green`) and the node's ingress switches to it once it is healthy; the old slot is then
+removed. A deploy can instead start as a **canary**:
+
+```sh
+bohux deploy api -e prod --canary 10 --bake 15m   # 10% of requests for 15 minutes
+bohux deployment promote <deployment id>            # take all traffic now
+bohux deployment cancel <deployment id>             # abort: the live release takes it all back
+```
+
+Once the new slot is healthy, Caddy splits requests by weighted round robin between the
+two slots (per request, not per user) and the Deployment is in `canary`. If the new
+Release stays unhealthy for 30 seconds during the bake, the deploy rolls back as a failed
+health gate does; when the bake ends it is promoted and the old slot goes. Health is the
+only judge for now. Apps with a host port cannot have a canary (two copies cannot hold
+the port).
+
 ## Builds (ADR-0028)
 
 The agent builds Releases from Git on its own node: `git fetch --depth 1` of the ref,
