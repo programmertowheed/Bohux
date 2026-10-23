@@ -185,8 +185,12 @@ jobs:
         run: |
           docker swarm init --advertise-addr 127.0.0.1
           docker pull busybox:1.36
+      # As root: the Swarm provider's health check enters each task's network
+      # namespace, which needs privileges the runner's own user does not have
+      # (ADR-0045 item 4, docs/providers/swarm.md). The agent runs as root on a real
+      # node, so this is how the provider is actually used.
       - name: Swarm conformance
-        run: go test -count=1 -v -timeout 20m ./providers/_conformance -provider=swarm
+        run: sudo -E env "PATH=$PATH" go test -count=1 -v -timeout 20m ./providers/_conformance -provider=swarm
 
   # Control plane + agent + Docker + Temporal in one process tree: deploy, recreate,
   # roll back a broken Release (rule 5), build from Git, and the backup → wipe →
@@ -287,8 +291,9 @@ jobs:
           nohup /tmp/temporal server start-dev --headless --ip 127.0.0.1 --port 7233 > /tmp/temporal.log 2>&1 &
           for i in $(seq 60); do /tmp/temporal operator cluster health --address 127.0.0.1:7233 && exit 0; sleep 1; done
           cat /tmp/temporal.log; exit 1
+      # As root, for the same reason as the conformance job above.
       - name: End to end on Swarm
-        run: go test -tags=integration,e2e -count=1 -v -timeout 25m -run TestSwarm ./cmd/bohux
+        run: sudo -E env "PATH=$PATH" go test -tags=integration,e2e -count=1 -v -timeout 25m -run TestSwarm ./cmd/bohux
 
   # v0.1's exit criterion on a real host with systemd (ADR-0030, ADR-0031): install
   # Bohux, deploy a new version of itself, roll itself back, recover from a version of
