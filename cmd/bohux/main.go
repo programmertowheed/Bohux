@@ -42,6 +42,7 @@ commands:
   admin bootstrap create a tenant and print its first owner token
   admin backup    write an encrypted archive of Bohux's state
   admin restore   restore an archive onto an empty install
+  admin drill     prove an archive restores, into throwaway state
   agent register  enroll this node with a bootstrap token (once)
   agent run       run the node agent
   mcp             serve the API as MCP tools over stdio, for AI agents`)
@@ -66,6 +67,10 @@ const (
 	envBackupDir       = "BOHUX_BACKUP_DIR"
 	envBackupSchedule  = "BOHUX_BACKUP_SCHEDULE"
 	envBackupKeep      = "BOHUX_BACKUP_KEEP"
+	envDrillIdentity   = "BOHUX_DRILL_IDENTITY_FILE"
+	envDrillDBURL      = "BOHUX_DRILL_DATABASE_URL"
+	envDrillAdminDBURL = "BOHUX_DRILL_ADMIN_DATABASE_URL"
+	envDrillKVMount    = "BOHUX_DRILL_KV_MOUNT"
 	envIngressSocket   = "BOHUX_INGRESS_ADMIN_SOCKET"
 	envACMEEmail       = "BOHUX_ACME_EMAIL"
 	envSMTPAddr        = "BOHUX_SMTP_ADDR"
@@ -360,6 +365,8 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 			return adminBackup(ctx, args[2:], stdout, getenv)
 		case "restore":
 			return adminRestore(ctx, args[2:], stdout, getenv)
+		case "drill":
+			return adminDrill(ctx, args[2:], stdout, getenv)
 		default:
 			return fmt.Errorf("admin: unknown subcommand %q: %w", args[1], errUsage)
 		}
