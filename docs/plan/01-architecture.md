@@ -16,7 +16,7 @@
                     ┌───────────────┴──────────────────────────┐
                     │              DATA PLANE                  │
                     │  agent ──▶ container runtime             │
-                    │  agent ──▶ Envoy / Caddy (ingress)       │
+                    │  agent ──▶ Caddy (ingress)               │
                     │  agent ──▶ OTEL collector                │
                     │  BuildKit (builder nodes when >1 node)   │
                     └──────────────────────────────────────────┘
@@ -42,7 +42,8 @@ features added later. See `docs/specs/data-model.md` and ADR-0004 and ADR-0017.
 A deploy is a long-running saga: build, scan, sign, push, provision dependencies, run
 migrations, shift traffic, gate on health, finalize or compensate. Durable workflow
 execution survives control plane restarts mid-deploy and gives retries and compensation
-for free. See ADR-0002.
+for free. See ADR-0002. The worker runs in the control plane; one deploy runs per App at a
+time; compensation reassigns the last healthy Release (ADR-0026).
 
 ### Eventing: none (agent streams + Postgres)
 No message bus. Agents hold one outbound gRPC stream each: assignments go down, status and
@@ -70,14 +71,16 @@ assignment and wait for the agent to report convergence (ADR-0007).
 Content-hash-keyed remote cache. Auto-detection via Cloud Native Buildpacks and Nixpacks,
 Dockerfile passthrough, Nix/Bazel escape hatch for monorepos. With more than one node,
 builds run on dedicated builder nodes, never on a node serving traffic; a single-node
-install builds locally under CPU/memory limits (ADR-0011). Every artifact gets an SBOM, SLSA
+install builds locally under CPU/memory limits (ADR-0011), exports straight into the
+local image store with no registry, and caps its cache (ADR-0020). Every artifact gets an SBOM, SLSA
 provenance, and a cosign signature at build time — retrofitting supply chain security is
 miserable.
 
-### Ingress: Envoy via xDS
-Canary and blue/green are traffic splits at the proxy, programmed by the same workflow
-that runs the deploy. Caddy as the lightweight option for single-node installs that do
-not want Envoy's footprint.
+### Ingress: Caddy via admin API
+One proxy through v1 (ADR-0019). Canary and blue/green are traffic splits at the proxy,
+programmed through Caddy's admin API by the same workflow that runs the deploy. The
+active config is also written to disk, so it survives deleting Bohux (rule 2). v0.1 has
+no proxy and publishes host ports (ADR-0011, ADR-0020).
 
 ### Observability: OpenTelemetry, no storage of our own
 Everything emits OTLP to the user's backend. What Bohux owns is **correlation**: every
@@ -110,3 +113,7 @@ the same digest — build once, deploy everywhere.
 | Temporal down | In-flight deploys resume on recovery, never half-applied |
 | Provider API down | Deploy fails closed, compensates, previous release stays live |
 | Network partition | Agent reconciles locally; no split-brain writes to desired state |
+| Node disk full | New builds refused, node reported degraded; running workloads untouched (ADR-0020) |
+| Node reboots while control plane is down | Docker `live-restore` + agent restart from sealed cache; OpenBao auto-unseals (ADR-0020) |
+| Control plane disk lost | Restore from `bohux admin backup` onto a fresh host; agents reconnect (ADR-0020) |
+| Agent older than supported | Control plane rejects it explicitly; agent keeps reconciling last known state (ADR-0020) |

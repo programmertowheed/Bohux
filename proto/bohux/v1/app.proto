@@ -1,0 +1,262 @@
+syntax = "proto3";
+
+package bohux.v1;
+
+import "bohux/v1/common.proto";
+import "bohux/v1/options.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
+
+// A deployable unit in one environment (ADR-0014: App, not Service). Every update is a
+// new revision; a Release captures the revision it was built from.
+message App {
+  ResourceMeta meta = 1;
+  string environment_id = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+  // Unique within the environment.
+  string slug = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+  Source source = 4 [(google.api.field_behavior) = REQUIRED];
+  Runtime runtime = 5 [(google.api.field_behavior) = REQUIRED];
+  // Handles only, never values (rule 3).
+  repeated SecretRef secrets = 6;
+  // Target-specific options the environment's provider interprets (its Spec.Raw,
+  // ADR-0032), e.g. the Docker provider's external `networks` and `volumes`. Setting
+  // them requires the owner role.
+  google.protobuf.Struct provider_options = 7;
+  // HTTP(S) hosts the node's ingress serves this App on (ADR-0034). App state, not
+  // Release state: changing them takes effect without a deploy, and a rollback never
+  // moves them.
+  repeated Route routes = 8;
+  // Key of an environment secret holding a Docker config.json (`{"auths": …}`) used
+  // to pull the image from a private registry (ADR-0041). Empty for public images.
+  string image_pull_secret = 9;
+  // What deploys of this App are judged by besides health (ADR-0050). Unset: health
+  // only. App state, like routes: changing it takes effect at the next deploy.
+  SLO slo = 10;
+}
+
+// A service-level objective (ADR-0050). A Release violates it when it burns error
+// budget faster than max_burn_rate, judged on the ingress's view of its requests.
+message SLO {
+  // Share of requests that must not fail with a 5xx, from 0.9 to 0.99999.
+  double availability_target = 1 [(google.api.field_behavior) = REQUIRED];
+  // Optional: a share of requests that must answer within a threshold.
+  LatencyObjective latency = 2;
+  // Burn rate above which a Release fails; 0 means 10.
+  double max_burn_rate = 3;
+  // How long a deploy is watched after it turns healthy, from one minute to one hour;
+  // unset means ten minutes. A canary's bake replaces it.
+  google.protobuf.Duration watch = 4;
+}
+
+message LatencyObjective {
+  // One of 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000: the bounds of the
+  // ingress's latency histogram.
+  uint32 threshold_ms = 1 [(google.api.field_behavior) = REQUIRED];
+  // Share of requests that must answer within threshold_ms, from 0.5 to 0.99999.
+  double target = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+// One host served by the node's ingress (Caddy, ADR-0019) with automatic HTTPS.
+message Route {
+  // Lowercase DNS name, e.g. "api.example.com". No wildcard, port, or path. Unique
+  // across all tenants.
+  string host = 1 [(google.api.field_behavior) = REQUIRED];
+  // The container port requests go to; must be one of the App's runtime ports.
+  int32 port = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+// Where a Release's artifact comes from.
+message Source {
+  oneof kind {
+    GitSource git = 1;
+    ImageSource image = 2;
+  }
+}
+
+// Built by BuildKit on CreateRelease (ADR-0011 item 7).
+message GitSource {
+  string repo_url = 1 [(google.api.field_behavior) = REQUIRED];
+  // Branch, tag, or commit used when CreateRelease names no ref.
+  string ref = 2;
+  // Build context within the repository. Empty means the repository root.
+  string subpath = 3;
+  BuildStrategy strategy = 4;
+  // Key of an environment secret holding a private SSH deploy key, for ssh:// or
+  // user@host:path repository URLs (ADR-0041). Empty: a public repository.
+  string ssh_key_secret = 5;
+}
+
+// A prebuilt image, pinned by digest, never by tag.
+message ImageSource {
+  // e.g. "ghcr.io/acme/api".
+  string repository = 1 [(google.api.field_behavior) = REQUIRED];
+  // e.g. "sha256:…".
+  string digest = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+// How a Git source is built (ADR-0011 item 7, ADR-0047).
+enum BuildStrategy {
+  // Auto: the Dockerfile at the build context's root if there is one, otherwise
+  // Railpack.
+  BUILD_STRATEGY_UNSPECIFIED = 0;
+  // Always the Dockerfile; a missing one fails the build.
+  BUILD_STRATEGY_DOCKERFILE = 1;
+  // Always Railpack, which detects the language and framework, even when a Dockerfile
+  // exists.
+  BUILD_STRATEGY_RAILPACK = 2;
+}
+
+message Runtime {
+  int32 replicas = 1 [(google.api.field_behavior) = REQUIRED];
+  // Kubernetes quantity syntax, e.g. "500m".
+  string cpu = 2;
+  // Kubernetes quantity syntax, e.g. "512Mi".
+  string memory = 3;
+  repeated Port ports = 4;
+  HealthCheck health = 5;
+}
+
+message Port {
+  int32 container_port = 1 [(google.api.field_behavior) = REQUIRED];
+  PortProtocol protocol = 2;
+  // Host port to publish on (v0.1 has no proxy, ADR-0011 item 9). 0 means not published.
+  // Publishing a host port makes deploys stop-old/start-new, with downtime (ADR-0020).
+  int32 host_port = 3;
+}
+
+enum PortProtocol {
+  // Server default: TCP.
+  PORT_PROTOCOL_UNSPECIFIED = 0;
+  PORT_PROTOCOL_TCP = 1;
+  PORT_PROTOCOL_UDP = 2;
+}
+
+// HTTP health check. A deploy finalizes only when it passes (ADR-0007).
+message HealthCheck {
+  string path = 1 [(google.api.field_behavior) = REQUIRED];
+  // Must be one of the app's container ports.
+  int32 port = 2 [(google.api.field_behavior) = REQUIRED];
+  int32 interval_seconds = 3;
+  int32 timeout_seconds = 4;
+  int32 failure_threshold = 5;
+}
+
+service AppService {
+  rpc CreateApp(CreateAppRequest) returns (CreateAppResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_MUTATING;
+  }
+  rpc GetApp(GetAppRequest) returns (GetAppResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  rpc ListApps(ListAppsRequest) returns (ListAppsResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  rpc UpdateApp(UpdateAppRequest) returns (UpdateAppResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
+  rpc DeleteApp(DeleteAppRequest) returns (DeleteAppResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
+
+  // Writes a new App revision and a new assignment. No new Release.
+  rpc ScaleApp(ScaleAppRequest) returns (ScaleAppResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
+}
+
+message CreateAppRequest {
+  string environment_id = 1 [(google.api.field_behavior) = REQUIRED];
+  string slug = 2 [(google.api.field_behavior) = REQUIRED];
+  Source source = 3 [(google.api.field_behavior) = REQUIRED];
+  Runtime runtime = 4 [(google.api.field_behavior) = REQUIRED];
+  repeated SecretRef secrets = 5;
+  string idempotency_key = 6 [(google.api.field_behavior) = REQUIRED];
+  // Owner role required when non-empty (ADR-0032).
+  google.protobuf.Struct provider_options = 7;
+  repeated Route routes = 8;
+  string image_pull_secret = 9;
+  SLO slo = 10;
+}
+
+message CreateAppResponse {
+  App app = 1;
+}
+
+message GetAppRequest {
+  oneof lookup {
+    string id = 1;
+    // Slug lookup is within an environment.
+    AppSlug slug = 2;
+  }
+}
+
+message AppSlug {
+  string environment_id = 1;
+  string slug = 2;
+}
+
+message GetAppResponse {
+  App app = 1;
+}
+
+message ListAppsRequest {
+  string environment_id = 1 [(google.api.field_behavior) = REQUIRED];
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListAppsResponse {
+  repeated App apps = 1;
+  string next_page_token = 2;
+}
+
+// Replaces source, runtime, secrets, and routes as a whole. Changed routes reach a
+// running App at once (ADR-0034); the rest waits for the next deploy.
+message UpdateAppRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+  Source source = 2 [(google.api.field_behavior) = REQUIRED];
+  Runtime runtime = 3 [(google.api.field_behavior) = REQUIRED];
+  repeated SecretRef secrets = 4;
+  string expected_revision_id = 5 [(google.api.field_behavior) = REQUIRED];
+  string idempotency_key = 6 [(google.api.field_behavior) = REQUIRED];
+  // Replaces the App's provider options; owner role required to change them (ADR-0032).
+  google.protobuf.Struct provider_options = 7;
+  repeated Route routes = 8;
+  string image_pull_secret = 9;
+  // Replaces the App's SLO; unset removes it (ADR-0050).
+  SLO slo = 10;
+}
+
+message UpdateAppResponse {
+  App app = 1;
+}
+
+message DeleteAppRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+  string expected_revision_id = 2 [(google.api.field_behavior) = REQUIRED];
+  string idempotency_key = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+message DeleteAppResponse {
+  string revision_id = 1;
+}
+
+message ScaleAppRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+  int32 replicas = 2 [(google.api.field_behavior) = REQUIRED];
+  string expected_revision_id = 3 [(google.api.field_behavior) = REQUIRED];
+  string idempotency_key = 4 [(google.api.field_behavior) = REQUIRED];
+}
+
+message ScaleAppResponse {
+  App app = 1;
+}

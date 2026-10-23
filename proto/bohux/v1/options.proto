@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package bohux.v1;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
+
+// What an RPC may do as an MCP tool (ADR-0018). Every RPC sets it: `bohux mcp`
+// generates its tools from these, and a test refuses an RPC without one.
+enum ToolPolicy {
+  TOOL_POLICY_UNSPECIFIED = 0;
+  // Reads only.
+  TOOL_POLICY_READ_ONLY = 1;
+  // Creates or changes something without touching what runs.
+  TOOL_POLICY_MUTATING = 2;
+  // Deletes, revokes, or changes what runs: clients should ask a human first.
+  TOOL_POLICY_DESTRUCTIVE = 3;
+  // Never a tool: the RPC carries a credential (a secret value, a token, a signing
+  // secret, a channel URL) that must not pass through model context, or it streams.
+  TOOL_POLICY_HIDDEN = 4;
+}
+
+extend google.protobuf.MethodOptions {
+  ToolPolicy tool = 51000;
+}

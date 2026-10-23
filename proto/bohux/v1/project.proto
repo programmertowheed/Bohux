@@ -1,0 +1,149 @@
+syntax = "proto3";
+
+package bohux.v1;
+
+import "bohux/v1/common.proto";
+import "bohux/v1/identity.proto";
+import "bohux/v1/options.proto";
+import "google/api/field_behavior.proto";
+
+option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
+
+// The unit of grouping and RBAC assignment.
+message Project {
+  ResourceMeta meta = 1;
+  // Unique within the tenant.
+  string slug = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+  string display_name = 3;
+}
+
+// Grants a principal one fixed role on one project.
+message RoleBinding {
+  ResourceMeta meta = 1;
+  string project_id = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+  string principal_id = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+  Role role = 4 [(google.api.field_behavior) = REQUIRED];
+}
+
+service ProjectService {
+  rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_MUTATING;
+  }
+  rpc GetProject(GetProjectRequest) returns (GetProjectResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  rpc UpdateProject(UpdateProjectRequest) returns (UpdateProjectResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_MUTATING;
+  }
+  rpc DeleteProject(DeleteProjectRequest) returns (DeleteProjectResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
+
+  // Creates the binding, or changes the role of an existing one for the same principal.
+  rpc SetRoleBinding(SetRoleBindingRequest) returns (SetRoleBindingResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
+  rpc DeleteRoleBinding(DeleteRoleBindingRequest) returns (DeleteRoleBindingResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
+  rpc ListRoleBindings(ListRoleBindingsRequest) returns (ListRoleBindingsResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+}
+
+message CreateProjectRequest {
+  string slug = 1 [(google.api.field_behavior) = REQUIRED];
+  string display_name = 2;
+  string idempotency_key = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+message CreateProjectResponse {
+  Project project = 1;
+}
+
+message GetProjectRequest {
+  oneof lookup {
+    string id = 1;
+    string slug = 2;
+  }
+}
+
+message GetProjectResponse {
+  Project project = 1;
+}
+
+message ListProjectsRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListProjectsResponse {
+  repeated Project projects = 1;
+  string next_page_token = 2;
+}
+
+message UpdateProjectRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+  string display_name = 2;
+  string expected_revision_id = 3 [(google.api.field_behavior) = REQUIRED];
+  string idempotency_key = 4 [(google.api.field_behavior) = REQUIRED];
+}
+
+message UpdateProjectResponse {
+  Project project = 1;
+}
+
+message DeleteProjectRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+  string expected_revision_id = 2 [(google.api.field_behavior) = REQUIRED];
+  string idempotency_key = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+message DeleteProjectResponse {
+  // The revision recording the deletion.
+  string revision_id = 1;
+}
+
+message SetRoleBindingRequest {
+  string project_id = 1 [(google.api.field_behavior) = REQUIRED];
+  string principal_id = 2 [(google.api.field_behavior) = REQUIRED];
+  Role role = 3 [(google.api.field_behavior) = REQUIRED];
+  string idempotency_key = 4 [(google.api.field_behavior) = REQUIRED];
+}
+
+message SetRoleBindingResponse {
+  RoleBinding role_binding = 1;
+}
+
+message DeleteRoleBindingRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+  string expected_revision_id = 2 [(google.api.field_behavior) = REQUIRED];
+  string idempotency_key = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+message DeleteRoleBindingResponse {
+  string revision_id = 1;
+}
+
+message ListRoleBindingsRequest {
+  string project_id = 1 [(google.api.field_behavior) = REQUIRED];
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListRoleBindingsResponse {
+  repeated RoleBinding role_bindings = 1;
+  string next_page_token = 2;
+}

@@ -51,7 +51,7 @@ ApiToken, AuditEvent, Revision (read-only views)
 | Project | slug, display_name | CRUD |
 | RoleBinding | project_id, principal_id, role | Create/delete |
 | Environment | project_id, slug, `ProviderBinding { provider, node_id \| target_ref }`, config | CRUD |
-| App | environment_id, slug, Source, Runtime, `repeated SecretRef` | CRUD; each update = revision |
+| App | environment_id, slug, Source, Runtime, `repeated SecretRef`, `provider_options` (owner-only, ADR-0032) | CRUD; each update = revision |
 | Release | app_id, artifact_digest, config_revision_id, source_ref, provenance_ref, sbom_ref | **Immutable.** No update or delete RPC; retention GC (ADR-0010) |
 | Deployment | release_id, environment_id, strategy, state, workflow_id, `rollback_of` | Created only; state is output-only |
 | Node | slug, agent_version, protocol_version, last_seen, provider descriptors, state | Registered by agent; revoke via API |
@@ -88,7 +88,8 @@ Notes:
 - **Rollback** = `CreateDeployment` of an older Release with `rollback_of` set.
   `DeploymentService.Rollback` is a convenience that picks the last healthy Release
   (ADR-0010). There is no other rollback path.
-- **ScaleApp** writes a new App revision and a new assignment; no new Release.
+- **ScaleApp** writes a new App revision and a new assignment, in one transaction; no
+  new Release. Deploys and rollbacks keep the current replicas (ADR-0027).
 - **Exec is bidirectional streaming**, which ConnectRPC cannot carry from browsers. The
   CLI gets Exec in v0.1; the UI does not. That is allowed — rule 8 forbids the UI having
   *more* than the CLI, not less.

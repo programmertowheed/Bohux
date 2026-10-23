@@ -1,0 +1,309 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  proto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.47.2
+          setup_only: true
+      # buf.lock could not be created from the cloud dev container (registry
+      # unreachable); remove this step once buf.lock is committed.
+      - name: Resolve deps if buf.lock is missing
+        run: test -f buf.lock || buf dep update
+      - name: Lint
+        run: buf lint
+      # Until the S1 contract reaches the base branch, the base holds only the
+      # pre-contract draft (never released), which S1 replaces wholesale. Skip the
+      # check in that case only; it runs on every PR once common.proto is on the base.
+      - name: Breaking
+        if: github.event_name == 'pull_request'
+        run: |
+          if ! git cat-file -e "origin/${{ github.base_ref }}:proto/bohux/v1/common.proto" 2>/dev/null; then
+            echo "Base has no S1 contract yet; skipping buf breaking."
+            exit 0
+          fi
+          buf breaking --against "${{ github.event.repository.clone_url }}#branch=${{ github.base_ref }}"
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.47.2
+          setup_only: true
+      - name: Install code generators
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6
+          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.17.0
+      - name: Generate
+        run: |
+          test -f buf.lock || buf dep update
+          buf generate
+      - name: Check go.mod is tidy
+        run: go mod tidy && git diff --exit-code go.mod go.sum
+      - name: Vet
+        run: go vet ./...
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.5.0
+      - name: Test
+        run: go test ./... -race -count=1
+      - name: Build
+        run: go build -o bin/bohux ./cmd/bohux
+      # The CLI ships for macOS too; the agent's Linux-only code must stay behind build
+      # tags or portable types.
+      - name: Build for macOS
+        run: GOOS=darwin GOARCH=arm64 go build -o /dev/null ./cmd/bohux
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      # A role that can create roles and databases; each test makes its own.
+      BOHUX_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+      # Deploy workflow tests run on a Temporal dev server (ADR-0002, ADR-0026).
+      BOHUX_TEST_TEMPORAL_ADDRESS: 127.0.0.1:7233
+      # Secret storage tests run on an OpenBao dev server (ADR-0008).
+      BOHUX_TEST_OPENBAO_ADDR: http://127.0.0.1:8200
+      BOHUX_TEST_OPENBAO_TOKEN: bohux-ci-root
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.47.2
+          setup_only: true
+      - name: Install code generators
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6
+          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.17.0
+      - name: Generate
+        run: |
+          test -f buf.lock || buf dep update
+          buf generate
+      - name: Start a Temporal dev server
+        run: |
+          curl -sSL https://github.com/temporalio/cli/releases/download/v1.4.1/temporal_cli_1.4.1_linux_amd64.tar.gz | tar xz -C /tmp temporal
+          nohup /tmp/temporal server start-dev --headless --ip 127.0.0.1 --port 7233 > /tmp/temporal.log 2>&1 &
+          for i in $(seq 60); do /tmp/temporal operator cluster health --address 127.0.0.1:7233 && exit 0; sleep 1; done
+          cat /tmp/temporal.log; exit 1
+      - name: Start an OpenBao dev server
+        run: |
+          curl -sSL https://github.com/openbao/openbao/releases/download/v2.4.1/bao_2.4.1_Linux_x86_64.tar.gz | tar xz -C /tmp bao
+          nohup /tmp/bao server -dev -dev-root-token-id=bohux-ci-root -dev-listen-address=127.0.0.1:8200 > /tmp/bao.log 2>&1 &
+          for i in $(seq 30); do curl -sf http://127.0.0.1:8200/v1/sys/health && exit 0; sleep 1; done
+          cat /tmp/bao.log; exit 1
+      - name: Pull the ingress image
+        # The real-Caddy test skips without it (ADR-0034).
+        run: docker pull caddy:2.8.4-alpine
+      - name: Integration tests
+        run: go test -tags=integration -race -count=1 ./internal/... ./cmd/... ./providers/docker/...
+
+  # Provider conformance against a real Docker daemon (CLAUDE.md rule 4, ADR-0025).
+  conformance-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.47.2
+          setup_only: true
+      - name: Install code generators
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6
+          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.17.0
+      - name: Generate
+        run: |
+          test -f buf.lock || buf dep update
+          buf generate
+      - name: Docker conformance
+        run: go test -count=1 -v -timeout 20m ./providers/_conformance -provider=docker
+
+  # Swarm provider conformance on a single-manager swarm (ADR-0045). The runner's
+  # dockerd has no live-restore, so it can become the manager itself.
+  conformance-swarm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.47.2
+          setup_only: true
+      - name: Install code generators
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6
+          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.17.0
+      - name: Generate
+        run: |
+          test -f buf.lock || buf dep update
+          buf generate
+      - name: Start a single-manager swarm
+        run: |
+          docker swarm init --advertise-addr 127.0.0.1
+          docker pull busybox:1.36
+      - name: Swarm conformance
+        run: go test -count=1 -v -timeout 20m ./providers/_conformance -provider=swarm
+
+  # Control plane + agent + Docker + Temporal in one process tree: deploy, recreate,
+  # roll back a broken Release (rule 5), build from Git, and the backup → wipe →
+  # restore → rollback drill (ADR-0020 item 7).
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      BOHUX_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+      BOHUX_TEST_TEMPORAL_ADDRESS: 127.0.0.1:7233
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.47.2
+          setup_only: true
+      - name: Install code generators
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6
+          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.17.0
+      - name: Generate
+        run: |
+          test -f buf.lock || buf dep update
+          buf generate
+      - name: Enable Docker live-restore (the agent requires it, ADR-0020)
+        run: |
+          f=/etc/docker/daemon.json
+          { sudo cat "$f" 2>/dev/null || echo '{}'; } | jq '. + {"live-restore": true}' > /tmp/daemon.json
+          sudo mv /tmp/daemon.json "$f"
+          sudo systemctl restart docker
+          test "$(docker info --format '{{.LiveRestoreEnabled}}')" = true
+      - name: Start a Temporal dev server
+        run: |
+          curl -sSL https://github.com/temporalio/cli/releases/download/v1.4.1/temporal_cli_1.4.1_linux_amd64.tar.gz | tar xz -C /tmp temporal
+          nohup /tmp/temporal server start-dev --headless --ip 127.0.0.1 --port 7233 > /tmp/temporal.log 2>&1 &
+          for i in $(seq 60); do /tmp/temporal operator cluster health --address 127.0.0.1:7233 && exit 0; sleep 1; done
+          cat /tmp/temporal.log; exit 1
+      - name: End to end (deploy, build, restore drill)
+        run: go test -tags=integration,e2e -count=1 -v -timeout 25m ./cmd/bohux
+
+  # v0.1's exit criterion on a real host with systemd (ADR-0030, ADR-0031): install
+  # Bohux, deploy a new version of itself, roll itself back, recover from a version of
+  # itself that cannot start.
+  selfdeploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable Docker live-restore (the agent requires it, ADR-0020)
+        run: |
+          f=/etc/docker/daemon.json
+          { sudo cat "$f" 2>/dev/null || echo '{}'; } | jq '. + {"live-restore": true}' > /tmp/daemon.json
+          sudo mv /tmp/daemon.json "$f"
+          sudo systemctl restart docker
+          test "$(docker info --format '{{.LiveRestoreEnabled}}')" = true
+      - name: Bohux deploys Bohux
+        run: sudo -E scripts/selfdeploy-test.sh
+        env:
+          BOHUX_DEPLOY_HEALTH_TIMEOUT: 60s
+      - name: Logs on failure
+        if: failure()
+        run: |
+          sudo journalctl -u bohux-agent --no-pager | tail -200
+          docker ps -a
+          for c in $(docker ps -aq); do echo "== $c"; docker logs --tail 50 "$c" 2>&1; done
+
+  # The web UI (ADR-0012, ADR-0039): typecheck, unit tests, production build.
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.47.2
+          setup_only: true
+      - name: Resolve deps if buf.lock is missing
+        run: test -f buf.lock || buf dep update
+      - name: Build
+        run: make web
+
+  # The control plane image (ADR-0030), with the UI embedded. A clean checkout has no
+  # gen/, so this also proves the image generates code from proto/ on its own.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.47.2
+          setup_only: true
+      - name: Resolve deps if buf.lock is missing
+        run: test -f buf.lock || buf dep update
+      - name: Web UI
+        run: make web
+      - name: Build
+        run: docker build -t bohux:ci --build-arg VERSION=ci .
+      - name: Smoke
+        run: |
+          test "$(docker run --rm bohux:ci version)" = ci
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate dev stack
+        run: docker compose -f deploy/dev/compose.yaml config --quiet

@@ -1,0 +1,210 @@
+// Package deploy is the deploy workflow (ADR-0002, ADR-0026): assign a Release to its
+// environment's node, wait for the agent to report it healthy, and compensate by
+// reassigning the last healthy Release when it does not (ADR-0010). Rollback is the
+// same workflow with an earlier Release.
+package deploy
+
+import (
+	"time"
+
+	"github.com/bohumix/bohux/internal/slo"
+)
+
+// TaskQueue is the task queue the control plane's worker polls.
+const TaskQueue = "bohux-deploy"
+
+// WorkflowID is the ID of an App's deploy workflow. One per App: Temporal refuses a
+// second deploy of the App while one runs (ADR-0026).
+func WorkflowID(appID string) string { return "deploy/" + appID }
+
+// DefaultHealthTimeout is how long a Release has to turn healthy.
+const DefaultHealthTimeout = 5 * time.Minute
+
+// State is a Deployment state as stored in deployments_revisions.state.
+type State string
+
+// Deployment states the workflow writes.
+const (
+	StatePending    State = "pending"
+	StateBuilding   State = "building"
+	StateApplying   State = "applying"
+	StateHealthGate State = "health_gate"
+	// StateCanary: the new Release serves its share while the bake runs (ADR-0049).
+	StateCanary State = "canary"
+	// StateVerifying: healthy, and watched against the App's SLO (ADR-0050).
+	StateVerifying    State = "verifying"
+	StateSucceeded    State = "succeeded"
+	StateFailed       State = "failed"
+	StateRolledBack   State = "rolled_back"
+	StateCompensating State = "compensating"
+	StateCancelled    State = "cancelled"
+)
+
+// Terminal reports whether no further transition follows s.
+func (s State) Terminal() bool {
+	switch s {
+	case StateSucceeded, StateFailed, StateRolledBack, StateCancelled:
+		return true
+	}
+	return false
+}
+
+// Failure reasons recorded on a Deployment (bohux.v1.ErrorDetail.reason). Stable
+// across releases.
+const (
+	ReasonInvalidRelease     = "INVALID_RELEASE"
+	ReasonAssignFailed       = "ASSIGN_FAILED"
+	ReasonWorkloadFailed     = "WORKLOAD_FAILED"
+	ReasonHealthTimeout      = "HEALTH_TIMEOUT"
+	ReasonCancelled          = "CANCELLED"
+	ReasonCompensationFailed = "COMPENSATION_FAILED"
+	ReasonBuildFailed        = "BUILD_FAILED"
+	ReasonCanaryUnhealthy    = "CANARY_UNHEALTHY"
+	ReasonSLOAvailability    = "SLO_AVAILABILITY"
+	ReasonSLOLatency         = "SLO_LATENCY"
+	// ReasonUnhealthy: healthy at first, then unhealthy for longer than the grace while
+	// verified against the SLO (ADR-0050).
+	ReasonUnhealthy = "UNHEALTHY"
+)
+
+// SignalPromote ends a canary's bake early (ADR-0049).
+const SignalPromote = "promote"
+
+// Error types of non-retryable activity errors, so the workflow can tell them apart.
+const (
+	ErrTypeInvalid        = "Invalid"
+	ErrTypeWorkloadFailed = "WorkloadFailed"
+	ErrTypeHealthTimeout  = "HealthTimeout"
+	ErrTypeBuildFailed    = "BuildFailed"
+	// ErrTypeCanaryUnhealthy: the canary was unhealthy for longer than its grace.
+	ErrTypeCanaryUnhealthy = "CanaryUnhealthy"
+	// ErrTypeSLOAvailability and ErrTypeSLOLatency: the Release's traffic burned the
+	// App's error budget too fast (ADR-0050).
+	ErrTypeSLOAvailability = "SLOAvailability"
+	ErrTypeSLOLatency      = "SLOLatency"
+)
+
+// SLO is the App's objective as the deploy judges it (ADR-0050), and how long a
+// non-canary deploy is watched.
+type SLO struct {
+	Objective slo.Objective
+	Watch     time.Duration
+}
+
+// Canary is one weighted step (ADR-0049): the new Release takes Weight percent of the
+// App's traffic for Bake, then all of it.
+type Canary struct {
+	Weight uint32
+	Bake   time.Duration
+}
+
+// Actor is who started the Deployment (rule 10). Kind is a store.ActorKind.
+type Actor struct {
+	ID   string
+	Kind string
+}
+
+// Input starts a deploy. Everything in it lands in workflow history, so it carries IDs
+// and never a secret value (rule 3).
+type Input struct {
+	TenantID      string
+	DeploymentID  string
+	AppID         string
+	EnvironmentID string
+	ReleaseID     string
+	// RollbackOf is the Deployment this one reverts, if it is a rollback.
+	RollbackOf string
+	Reason     string
+	Actor      Actor
+	// HealthTimeout overrides DefaultHealthTimeout when positive.
+	HealthTimeout time.Duration
+	// Canary, when set, makes this a canary deploy (ADR-0049).
+	Canary *Canary `json:",omitempty"`
+	// SLO, when set, judges the Release's traffic during the bake or a watch window
+	// (ADR-0050).
+	SLO *SLO `json:",omitempty"`
+}
+
+// Failure is what went wrong, stored as the Deployment's ErrorDetail.
+type Failure struct {
+	Reason string
+}
+
+// Result is how the workflow ended. A deploy that failed or rolled back is a
+// successful workflow: its outcome is recorded, nothing is left to retry.
+type Result struct {
+	State   State
+	Failure *Failure
+}
+
+// StateChange moves a Deployment to State, writing one revision and audit event.
+type StateChange struct {
+	TenantID     string
+	DeploymentID string
+	State        State
+	Failure      *Failure
+	Actor        Actor
+}
+
+// AssignInput sets an App's workload on its environment's node to ReleaseID, or
+// removes the workload when ReleaseID is empty.
+type AssignInput struct {
+	TenantID     string
+	AppID        string
+	ReleaseID    string
+	DeploymentID string
+	Actor        Actor
+	// FallbackAfter, when set, makes the workload carry the one it replaces as a
+	// fallback the agent applies on its own after this time (ADR-0031). Forward
+	// deploys set it; compensation does not.
+	FallbackAfter time.Time
+	// CanaryWeight, when positive, has the node serve this Release that share of the
+	// App's traffic beside the live slot (ADR-0049).
+	CanaryWeight uint32 `json:",omitempty"`
+}
+
+// Assigned names the node generation that carries the change.
+type Assigned struct {
+	NodeID     string
+	Generation uint64
+	// Replicas the Release runs with; zero for a removal.
+	Replicas int32
+	// Routed is true when the workload has routes, so health includes the node's
+	// ingress serving them (ADR-0034).
+	Routed bool
+}
+
+// WaitInput waits for Generation on NodeID to run AppID at ReleaseID, healthy.
+type WaitInput struct {
+	TenantID   string
+	NodeID     string
+	Generation uint64
+	AppID      string
+	ReleaseID  string
+	// Replicas that must be ready.
+	Replicas int32
+	// Routed workloads are healthy only once the ingress serves them (ADR-0034).
+	Routed bool
+	// Deadline is when the health gate fails with ErrTypeHealthTimeout. Set by the
+	// workflow so activity retries do not extend it.
+	Deadline time.Time
+}
+
+// HoldInput watches a canary through its bake (ADR-0049): the Release must stay
+// healthy, as WaitHealthy judges it, until Until.
+type HoldInput struct {
+	WaitInput
+	Until time.Time
+	// Grace is how long the Release may be unhealthy before the canary fails.
+	Grace time.Duration
+	// SLO, when set, also judges the Release's requests at the ingress (ADR-0050).
+	SLO *slo.Objective `json:",omitempty"`
+}
+
+// LastHealthyInput asks for the Release of the App's newest succeeded Deployment
+// other than DeploymentID.
+type LastHealthyInput struct {
+	TenantID     string
+	AppID        string
+	DeploymentID string
+}

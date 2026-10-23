@@ -1,0 +1,18 @@
+# Generated code lands in gen/ (gitignored) and is rebuilt by `make generate` and CI.
+# Never hand-edit it (CLAUDE.md rule 9).
+version: v2
+managed:
+  enabled: true
+  disable:
+    - file_option: go_package
+      module: buf.build/googleapis/googleapis
+  override:
+    - file_option: go_package_prefix
+      value: github.com/bohumix/bohux/gen
+plugins:
+  - local: protoc-gen-go
+    out: gen
+    opt: paths=source_relative
+  - local: protoc-gen-connect-go
+    out: gen
+    opt: paths=source_relative

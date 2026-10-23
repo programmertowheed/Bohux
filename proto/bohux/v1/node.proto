@@ -1,0 +1,120 @@
+syntax = "proto3";
+
+package bohux.v1;
+
+import "bohux/v1/common.proto";
+import "bohux/v1/options.proto";
+import "bohux/v1/usage.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
+
+// A registered agent (ADR-0003). Tenant-scoped; bound to Environments through their
+// ProviderBinding. Created only by the agent's Register call, never by this API.
+message Node {
+  ResourceMeta meta = 1;
+  // Unique within the tenant. Chosen when the bootstrap token is created.
+  string slug = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string agent_version = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+  uint32 protocol_version = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp last_seen_at = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+  repeated ProviderDescriptor providers = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+  NodeState state = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // Why the node is DEGRADED or REJECTED, if it is.
+  ErrorDetail state_detail = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp revoked_at = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // The latest resource sample the node reported (ADR-0040).
+  NodeUsage usage = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// What a provider's Describe returned on this node (docs/specs/provider-interface.md).
+message ProviderDescriptor {
+  // e.g. "docker".
+  string name = 1;
+  string version = 2;
+  // Verbs the provider supports. A verb missing here returns ErrUnsupported on the node,
+  // so the API rejects requests that need it up front.
+  repeated string capabilities = 3;
+}
+
+enum NodeState {
+  NODE_STATE_UNSPECIFIED = 0;
+  // Stream open, version accepted.
+  NODE_STATE_ONLINE = 1;
+  // No open stream. Its workloads keep running on the last assignment (rule 1).
+  NODE_STATE_OFFLINE = 2;
+  // Online but refusing new builds, e.g. disk pressure (ADR-0020 item 4).
+  NODE_STATE_DEGRADED = 3;
+  // Agent version outside the supported skew (ADR-0020 item 8). Keeps reconciling.
+  NODE_STATE_REJECTED = 4;
+  // Certificate revoked; the node can no longer connect (ADR-0008).
+  NODE_STATE_REVOKED = 5;
+}
+
+service NodeService {
+  // Returns a one-time token the agent installer passes to AgentService.Register.
+  rpc CreateBootstrapToken(CreateBootstrapTokenRequest) returns (CreateBootstrapTokenResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_HIDDEN;
+  }
+  rpc GetNode(GetNodeRequest) returns (GetNodeResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  // Revokes the node's certificate. Rotating the secrets it held is a separate step
+  // (ADR-0008).
+  rpc RevokeNode(RevokeNodeRequest) returns (RevokeNodeResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
+}
+
+message CreateBootstrapTokenRequest {
+  // Slug the node registers under.
+  string node_slug = 1 [(google.api.field_behavior) = REQUIRED];
+  // Empty means the server default.
+  google.protobuf.Timestamp expires_at = 2;
+  string idempotency_key = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+message CreateBootstrapTokenResponse {
+  // The token value. Returned once, stored only hashed, single use, redacted from logs
+  // and traces (rule 3).
+  string token = 1 [debug_redact = true];
+  google.protobuf.Timestamp expires_at = 2;
+  // Hex SHA-256 of the node CA certificate. The installer passes it with the token so
+  // the agent pins the CA on its first call (ADR-0024).
+  string ca_cert_sha256 = 3;
+}
+
+message GetNodeRequest {
+  oneof lookup {
+    string id = 1;
+    string slug = 2;
+  }
+}
+
+message GetNodeResponse {
+  Node node = 1;
+}
+
+message ListNodesRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListNodesResponse {
+  repeated Node nodes = 1;
+  string next_page_token = 2;
+}
+
+message RevokeNodeRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+  string expected_revision_id = 2 [(google.api.field_behavior) = REQUIRED];
+  string idempotency_key = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+message RevokeNodeResponse {
+  Node node = 1;
+}

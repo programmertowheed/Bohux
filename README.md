@@ -12,6 +12,7 @@ Website: [bohux.com](https://bohux.com) · Code: [github.com/bohumix/bohux](http
 | Understand how it works | `docs/plan/01-architecture.md` |
 | Know why a decision was made | `docs/adr/` |
 | Know what is in scope now | `docs/plan/02-roadmap.md` |
+| See where the work is right now | `docs/plan/03-progress.md` |
 | Add a deployment target | `docs/specs/provider-interface.md` |
 | See the API plan | `docs/specs/api-contract.md` |
 | Work in this repo with Claude Code | `CLAUDE.md` |

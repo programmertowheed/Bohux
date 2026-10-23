@@ -1,0 +1,10 @@
+# Keep gen/: the image build uses it when present (Dockerfile).
+.git
+bin
+dist
+web/node_modules
+*.test
+*.out
+.env
+.env.*
+data

@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+package bohux.v1;
+
+import "bohux/v1/common.proto";
+import "bohux/v1/deployment.proto";
+import "bohux/v1/options.proto";
+import "google/api/field_behavior.proto";
+
+option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
+
+// Where a project's deployment outcomes are posted (ADR-0038). The URL is a credential
+// and lives only in OpenBao; the API shows its host.
+message NotificationChannel {
+  ResourceMeta meta = 1;
+  string project_id = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+  NotificationKind kind = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+  // Terminal deployment states posted. Empty on create means FAILED, ROLLED_BACK, and
+  // CANCELLED: the ones that need a human.
+  repeated DeploymentState states = 4 [(google.api.field_behavior) = IMMUTABLE];
+  // The URL's host, e.g. "hooks.slack.com"; for EMAIL, the recipients' domains.
+  string url_host = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+enum NotificationKind {
+  NOTIFICATION_KIND_UNSPECIFIED = 0;
+  // A Slack incoming webhook.
+  NOTIFICATION_KIND_SLACK = 1;
+  // A Discord channel webhook.
+  NOTIFICATION_KIND_DISCORD = 2;
+  // Any HTTPS endpoint: a JSON summary of the outcome, signed with X-Bohux-Signature.
+  NOTIFICATION_KIND_WEBHOOK = 3;
+  // Mail through the install's SMTP relay (ADR-0043); the url is mailto:a@x,b@y.
+  NOTIFICATION_KIND_EMAIL = 4;
+}
+
+service NotificationService {
+  rpc CreateNotificationChannel(CreateNotificationChannelRequest) returns (CreateNotificationChannelResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_HIDDEN;
+  }
+  rpc ListNotificationChannels(ListNotificationChannelsRequest) returns (ListNotificationChannelsResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  rpc DeleteNotificationChannel(DeleteNotificationChannelRequest) returns (DeleteNotificationChannelResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
+}
+
+message CreateNotificationChannelRequest {
+  string project_id = 1 [(google.api.field_behavior) = REQUIRED];
+  NotificationKind kind = 2 [(google.api.field_behavior) = REQUIRED];
+  // https:// only; for EMAIL, mailto: with one to ten plain addresses. Written to
+  // OpenBao; never returned.
+  string url = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = INPUT_ONLY,
+    debug_redact = true
+  ];
+  repeated DeploymentState states = 4;
+  string idempotency_key = 5 [(google.api.field_behavior) = REQUIRED];
+}
+
+message CreateNotificationChannelResponse {
+  NotificationChannel channel = 1;
+  // For WEBHOOK channels, the signing secret, returned only by this call.
+  string signing_secret = 2 [debug_redact = true];
+}
+
+message ListNotificationChannelsRequest {
+  string project_id = 1 [(google.api.field_behavior) = REQUIRED];
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListNotificationChannelsResponse {
+  repeated NotificationChannel channels = 1;
+  string next_page_token = 2;
+}
+
+message DeleteNotificationChannelRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+  string expected_revision_id = 2 [(google.api.field_behavior) = REQUIRED];
+  string idempotency_key = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+message DeleteNotificationChannelResponse {
+  string revision_id = 1;
+}

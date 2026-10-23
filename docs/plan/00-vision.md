@@ -40,18 +40,18 @@ Reliability is invisible in a feature list, so it must be demonstrated: the laun
 kills the control plane while the app stays up, and ships a bad deploy that rolls itself
 back.
 
-## Feature parity — the goal
+## Feature parity — on demand, not the goal
 
-**Bohux covers every feature Coolify and Dokploy offer, plus Vercel's deploy workflow
-(git push, previews, rollback, domains, cron, MCP), and adds the core features above that
-none of them have.** Vercel's cloud-edge products (CDN, edge middleware, WAF, analytics,
-AI gateway) are covered by integration, not rebuilt. The schedule lives in
-`02-roadmap.md`.
+Bohux does not win by matching Coolify and Dokploy feature for feature; they have years
+of head start and we would end up a worse copy of them. The goal is the positioning
+above. Parity features (the Coolify/Dokploy basics and Vercel's deploy workflow: git
+push, previews, domains, cron, MCP) are a backlog in `02-roadmap.md`. They are pulled in
+when users ask for them and when they serve the reliability story, never to fill a
+comparison table. Vercel's cloud-edge products (CDN, edge middleware, WAF, analytics, AI
+gateway) are covered by integration, not rebuilt.
 
-Parity is staged: the everyday basics land in v0.2–v0.3, more databases and one-click
-templates (via Compose import) in v1.0, the rest in v1.x. Parity never overrides the
-non-goals below: we integrate with metrics stores, CI systems and CDNs; we do not become
-them.
+Parity never overrides the non-goals below: we integrate with metrics stores, CI systems
+and CDNs; we do not become them.
 
 ## Non-goals — read these twice
 

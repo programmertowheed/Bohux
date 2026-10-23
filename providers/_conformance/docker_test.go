@@ -1,0 +1,68 @@
+package conformance_test
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
+	"github.com/bohumix/bohux/internal/provider"
+	"github.com/bohumix/bohux/internal/provider/conformance"
+	"github.com/bohumix/bohux/providers/docker"
+)
+
+// fixtureDockerfile is a tiny HTTP workload: it logs which release started and serves
+// /healthz on 8080.
+const fixtureDockerfile = `FROM busybox:1.36
+ARG RELEASE
+ENV RELEASE=${RELEASE}
+RUN mkdir -p /www && echo ok > /www/healthz
+CMD ["sh", "-c", "echo started r${RELEASE}; exec httpd -f -p 8080 -h /www"]
+`
+
+func fixtureImage(release int) string { return fmt.Sprintf("bohux-conformance:r%d", release) }
+
+// dockerSubject builds one fixture image per release the suite uses, then returns the
+// provider with its inspector. target is DOCKER_HOST; empty means the local daemon.
+func dockerSubject(target string) (conformance.Subject, error) {
+	ctx := context.Background()
+	build, err := os.MkdirTemp("", "bohux-conformance-build")
+	if err != nil {
+		return conformance.Subject{}, err
+	}
+	defer func() { _ = os.RemoveAll(build) }()
+	if err := os.WriteFile(filepath.Join(build, "Dockerfile"), []byte(fixtureDockerfile), 0o644); err != nil {
+		return conformance.Subject{}, err
+	}
+	for release := 1; release <= 4; release++ {
+		c := exec.CommandContext(ctx, "docker", "build", "-q", "--build-arg",
+			fmt.Sprintf("RELEASE=%d", release), "-t", fixtureImage(release), build)
+		if target != "" {
+			c.Env = append(os.Environ(), "DOCKER_HOST="+target)
+		}
+		if out, err := c.CombinedOutput(); err != nil {
+			return conformance.Subject{}, fmt.Errorf("build fixture image: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+	}
+	root, err := os.MkdirTemp("", "bohux-conformance-workloads")
+	if err != nil {
+		return conformance.Subject{}, err
+	}
+	p, err := docker.New(root, target)
+	if err != nil {
+		return conformance.Subject{}, err
+	}
+	return conformance.Subject{
+		Provider: p, Inspector: p,
+		Fixture: func(ref provider.ResourceRef, release int, replicas int32) provider.Spec {
+			return provider.Spec{Ref: ref, Release: fmt.Sprintf("r%d", release), Image: fixtureImage(release),
+				Runtime: &bohuxv1.Runtime{Replicas: replicas, Cpu: "500m", Memory: "64Mi",
+					Ports:  []*bohuxv1.Port{{ContainerPort: 8080}},
+					Health: &bohuxv1.HealthCheck{Path: "/healthz", Port: 8080, TimeoutSeconds: 2}}}
+		},
+		LogMarker: func(release int) string { return fmt.Sprintf("started r%d", release) },
+	}, nil
+}

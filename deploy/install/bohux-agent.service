@@ -1,0 +1,21 @@
+# The Bohux agent (ADR-0030): on the host, outside everything it manages, so no deploy
+# can take it down. It keeps every workload running when the control plane is away
+# (rule 1).
+[Unit]
+Description=Bohux agent
+Documentation=https://bohux.com
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+ExecStart=/usr/local/bin/bohux agent run --state-dir /var/lib/bohux-agent
+# The node's ingress (ADR-0034); install.sh adds BOHUX_ACME_EMAIL when given.
+Environment=BOHUX_INGRESS_ADMIN_SOCKET=/run/bohux-caddy/admin.sock
+Restart=always
+RestartSec=5
+# The agent drives `docker compose` and buildx; it needs the Docker socket.
+User=root
+
+[Install]
+WantedBy=multi-user.target

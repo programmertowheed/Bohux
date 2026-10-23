@@ -1,0 +1,119 @@
+syntax = "proto3";
+
+package bohux.v1;
+
+import "bohux/v1/common.proto";
+import "bohux/v1/options.proto";
+import "google/api/field_behavior.proto";
+
+option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
+
+// dev, staging, prod, preview-*. Holds where its apps run and its shared config.
+message Environment {
+  ResourceMeta meta = 1;
+  string project_id = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+  // Unique within the project.
+  string slug = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+  ProviderBinding provider_binding = 4 [(google.api.field_behavior) = REQUIRED];
+  // Non-secret settings. Secrets are never here; they are SecretRefs (rule 3).
+  map<string, string> config = 5;
+}
+
+// Which provider runs this environment's apps, and on what.
+message ProviderBinding {
+  // Provider name as registered in the agent, e.g. "docker".
+  string provider = 1 [(google.api.field_behavior) = REQUIRED];
+  oneof target {
+    // Single-node providers: the node that runs the workloads.
+    string node_id = 2;
+    // Cluster providers: a provider-defined target reference.
+    string target_ref = 3;
+  }
+}
+
+service EnvironmentService {
+  rpc CreateEnvironment(CreateEnvironmentRequest) returns (CreateEnvironmentResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_MUTATING;
+  }
+  rpc GetEnvironment(GetEnvironmentRequest) returns (GetEnvironmentResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  rpc ListEnvironments(ListEnvironmentsRequest) returns (ListEnvironmentsResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+  rpc UpdateEnvironment(UpdateEnvironmentRequest) returns (UpdateEnvironmentResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
+  rpc DeleteEnvironment(DeleteEnvironmentRequest) returns (DeleteEnvironmentResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_DESTRUCTIVE;
+  }
+}
+
+message CreateEnvironmentRequest {
+  string project_id = 1 [(google.api.field_behavior) = REQUIRED];
+  string slug = 2 [(google.api.field_behavior) = REQUIRED];
+  ProviderBinding provider_binding = 3 [(google.api.field_behavior) = REQUIRED];
+  map<string, string> config = 4;
+  string idempotency_key = 5 [(google.api.field_behavior) = REQUIRED];
+}
+
+message CreateEnvironmentResponse {
+  Environment environment = 1;
+}
+
+message GetEnvironmentRequest {
+  oneof lookup {
+    string id = 1;
+    // Slug lookup is within a project.
+    EnvironmentSlug slug = 2;
+  }
+}
+
+message EnvironmentSlug {
+  string project_id = 1;
+  string slug = 2;
+}
+
+message GetEnvironmentResponse {
+  Environment environment = 1;
+}
+
+message ListEnvironmentsRequest {
+  string project_id = 1 [(google.api.field_behavior) = REQUIRED];
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListEnvironmentsResponse {
+  repeated Environment environments = 1;
+  string next_page_token = 2;
+}
+
+// Replaces provider_binding and config as a whole.
+message UpdateEnvironmentRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+  ProviderBinding provider_binding = 2 [(google.api.field_behavior) = REQUIRED];
+  map<string, string> config = 3;
+  string expected_revision_id = 4 [(google.api.field_behavior) = REQUIRED];
+  string idempotency_key = 5 [(google.api.field_behavior) = REQUIRED];
+}
+
+message UpdateEnvironmentResponse {
+  Environment environment = 1;
+}
+
+message DeleteEnvironmentRequest {
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+  string expected_revision_id = 2 [(google.api.field_behavior) = REQUIRED];
+  string idempotency_key = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+message DeleteEnvironmentResponse {
+  string revision_id = 1;
+}

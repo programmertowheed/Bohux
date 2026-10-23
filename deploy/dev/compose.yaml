@@ -1,0 +1,60 @@
+# Local development stack for Bohux. NOT a production install: OpenBao runs in dev mode
+# (in-memory, root token "dev") and every password is a fixed dev value.
+#
+#   make run-dev        start
+#   make footprint      measure memory (ADR-0020 item 1)
+#
+# Versions are pinned; bump them deliberately, one per commit.
+name: bohux-dev
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_USER: bohux
+      POSTGRES_PASSWORD: bohux-dev
+      POSTGRES_DB: bohux
+    ports: ["5432:5432"]
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      # Creates the unprivileged bohux_app role and database (first start only).
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bohux"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  temporal:
+    image: temporalio/auto-setup:1.25.2
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_SEEDS: postgres
+      POSTGRES_USER: bohux
+      POSTGRES_PWD: bohux-dev
+    ports: ["7233:7233"]
+
+  openbao:
+    image: openbao/openbao:2.1.0
+    command: ["server", "-dev", "-dev-root-token-id=dev", "-dev-listen-address=0.0.0.0:8200"]
+    cap_add: [IPC_LOCK]
+    ports: ["8200:8200"]
+
+  buildkit:
+    image: moby/buildkit:v0.18.2
+    privileged: true
+    command: ["--addr", "tcp://0.0.0.0:1234"]
+    ports: ["1234:1234"]
+    volumes: [buildkit:/var/lib/buildkit]
+
+  # Ingress arrives in v0.2 (ADR-0019). Present so the footprint test covers it.
+  caddy:
+    image: caddy:2.8.4-alpine
+    ports: ["8080:80"]
+
+volumes:
+  postgres:
+  buildkit:

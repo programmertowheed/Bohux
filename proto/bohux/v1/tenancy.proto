@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package bohux.v1;
+
+import "bohux/v1/common.proto";
+import "bohux/v1/options.proto";
+import "google/api/field_behavior.proto";
+
+option go_package = "github.com/bohumix/bohux/gen/bohux/v1;bohuxv1";
+
+// The root of every scope. Created by the bootstrap CLI step, not by an RPC.
+message Tenant {
+  ResourceMeta meta = 1;
+  string slug = 2 [(google.api.field_behavior) = IMMUTABLE];
+  string display_name = 3;
+}
+
+service TenantService {
+  // Returns the caller's tenant. There is no tenant_id in the request (rule 10).
+  rpc GetTenant(GetTenantRequest) returns (GetTenantResponse) {
+    option (bohux.v1.tool) = TOOL_POLICY_READ_ONLY;
+  }
+}
+
+message GetTenantRequest {}
+
+message GetTenantResponse {
+  Tenant tenant = 1;
+}

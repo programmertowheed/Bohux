@@ -12,6 +12,8 @@ providers. Read `docs/plan/00-vision.md` before your first task in this repo.
 3. `docs/adr/` — decisions already made, with the alternatives rejected
 4. `docs/specs/provider-interface.md` — the extension boundary
 5. `docs/plan/02-roadmap.md` — what is in scope right now
+6. `docs/plan/03-progress.md` — **where the work is right now.** Read it at the start
+   of every session and follow its session protocol; update and push it before you stop.
 
 ## Hard rules
 
