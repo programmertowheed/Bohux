@@ -40,14 +40,20 @@ work is in right now*.
 - **Working branch:** `claude/loving-shannon-rplqcg`. The session of 2026-10-23 was
   assigned this branch rather than `claude/relaxed-rubin-76m7dl`, which is merged into
   `main` (PR #1) and no longer carries unmerged work. New work starts from `main`.
-- **Slice:** S27 — scheduled restore drills (v0.3, ADR-0051) **done**: S27a the drill
-  engine and `bohux admin drill`, S27b the weekly schedule, the shared maintenance
-  worker, and the installer's two roles and drill mount. The roadmap item is ticked.
+- **Slice:** S28 — hardening **done**: the Swarm end-to-end run, the agent bug it found
+  and its fix, the conformance gap that let the bug through, the `e2e-swarm` CI job, and
+  the ADR audit. S27 (scheduled restore drills, ADR-0051) is done before it.
+- **CI has now run for the first time (O24 answered) and it is red:** five of ten jobs
+  fail on PR #2. O45 has the diagnosis. Until that is fixed, "verified" in this tracker
+  means verified in the cloud container, not by CI.
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). v0.2 is done
   except the items O35 lists. Open for the owner: O2 (footprint on a 2 GB VPS) and the
   proposed ADRs (O19–O44).
-- **Exact next step:** every remaining roadmap item needs an owner decision. Ask the
-  owner to pick: v0.2's O35 (managed Postgres/Redis, envelope encryption, team invites)
+- **Exact next step:** **get CI green (O45)** before any further feature work — nothing
+  in this repo has ever been proven outside one cloud container, and the first run says
+  the pipeline does not pass. It needs the owner for one thing only: `buf.lock`, from a
+  machine with Buf Schema Registry access. After that, every remaining roadmap item
+  needs an owner decision. Ask the owner to pick: v0.2's O35 (managed Postgres/Redis, envelope encryption, team invites)
   or a v0.3 item (the SLO gate's optional PromQL source with OTEL correlation and
   deploy markers, preview environments, migrations as a gated step, cron jobs, Compose
   apps, volumes and S3 backups), or hardening: a Swarm end-to-end test, and checking
@@ -58,17 +64,18 @@ work is in right now*.
 ## Next session prompt
 
 > Read CLAUDE.md and docs/plan/03-progress.md. Start the services with the scratchpad
-> `services.sh` pattern in *Known gaps* (Postgres, Docker, Temporal, OpenBao, plus the
-> registry mirror and buildx builder the build tests need), and regenerate `gen/`
-> through the scratch-workspace workaround — it is not committed and buf.build is
-> blocked. Then **ask me which slice to take next**, with the choices *Current focus*
-> lists, and whether you should open a PR for `claude/loving-shannon-rplqcg` so the CI
-> matrix runs on S27 (O24). Write the slice's ADR first as proposed, then the code, on
-> that branch. Test the failure path before the forward one. Verify with build, vet,
-> golangci-lint (both tag sets), unit, integration, e2e, and the conformance suites the
-> change touches. Tick boxes, update the tracker and the next session prompt, commit,
-> push, and give me the next prompt. If you hit a decision only I can make, ask me
-> before building.
+> `services.sh` pattern in *Known gaps*, and regenerate `gen/` through the
+> scratch-workspace workaround — it is not committed and buf.build is blocked here.
+> Then work **O45: get PR #2's CI green**, on branch `claude/loving-shannon-rplqcg`.
+> Read the failing jobs' logs from the runner rather than guessing (`proto`,
+> `integration`, `e2e`, `conformance-swarm`, `selfdeploy`), fix what the repo can fix,
+> and for anything needing Buf Schema Registry access tell me exactly what to run and
+> where — do not work around a missing `buf.lock` by weakening `buf breaking`, which is
+> rule 9's guard. Expect the fixes to be in `.github/workflows/ci.yml` and the
+> generation steps, not in the proto contract. Verify each fix by pushing and reading
+> the run, not only locally. Tick boxes, update the tracker and the next session prompt,
+> commit, push, and give me the next prompt. If you hit a decision only I can make, ask
+> me before building.
 
 ## Waiting on the owner
 
@@ -117,6 +124,8 @@ work is in right now*.
 | O42 | Accept or reject ADR-0049 (canary deploys: strategy CANARY with one weight 1–99% and a bake 1m–24h per deployment; the weight rides on the workload outside the spec hash; Caddy weighted round robin across the two slots; the workflow's CANARY state watches health with a 30 s grace, then promotes by reassigning with weight 0; PromoteDeployment ends the bake, CancelDeployment aborts). Changes deployment.proto and agent.proto; migration 00024 | S25 |
 | O43 | Accept or reject ADR-0050 (SLO gate: Caddy writes an access log beside its admin socket with only upstream, status and duration; the agent tails it and reports per-slot counters in memory; `App.slo` = availability 0.9–0.99999, optional latency threshold (a histogram bound) and target, max burn rate (default 10), watch 1m–1h (default 10m); burn rate over the window since the hold began, no verdict under 50 requests; judged during a canary's bake and, otherwise, in a new `VERIFYING` state; violations roll back with `SLO_AVAILABILITY`/`SLO_LATENCY`). Item 6 amended while proposed: the CLI, not a deploy log, says an unrouted App is judged by health alone. Changes app.proto, agent.proto, deployment.proto; migration 00025 | S26 |
 | O44 | Accept or reject ADR-0051 (scheduled restore drills: a weekly Temporal schedule on the backup's queue; opt-in through a drill age identity on the host whose public half becomes a second recipient on every archive; throwaway state per run — a scratch database created by a `CREATEDB` `bohux_drill` role, a `BYPASSRLS` `bohux_drill_admin` role with `GRANT SET ON PARAMETER session_replication_role` to load the rows, a temp data dir, and a KV mount of its own that the drill wipes; checks beyond restore's own; the verdict logged and written as JSON under the archives' retention; `bohux admin drill` to run one by hand). **The host holding an age private key is the trade-off to weigh** — item 2 keeps the operator's own key off the host, and drills stay off unless an identity is configured. Item 7 (the config keys) was added while proposed, and item 7 again in S27b to accept the identity as a value as well as a file (the control plane as an App gets its config as env vars). S27a and S27b are built on it | S27a, S27b |
+| O45 | **CI is red, and this is the first time it has ever run on this work (O24 answered).** PR #2's run: `go`, `web`, `compose`, `image`, `conformance-docker` pass; `proto`, `integration`, `e2e`, `conformance-swarm`, `selfdeploy` fail. Diagnosed: `proto` fails because `buf breaking --against <remote main>` cannot resolve `google/api/field_behavior.proto` — `main` has no committed `buf.lock`, the gap *Known gaps* has listed since S1. The fix needs Buf Schema Registry access, which the cloud container does not have (buf.build is blocked) but CI does. Either commit `buf.lock` from a machine with registry access, or let a CI step emit it once so it can be committed. The other four need their logs read on a runner; their Generate step shares the same `buf.lock` root cause, so fix that first and re-run before diagnosing further | Every claim that a slice is verified; nothing has been proven outside this container |
+| O46 | **Which rule decides an ADR's status?** `.claude/skills/write-adr/` says "Status starts `proposed`, becomes `accepted` on merge", which would make ADRs 0020–0051 accepted already (they merged in PR #1). This tracker instead asks you to accept each one (O1, O6–O44). S28's audit confirms all 32 are referenced from code, so the two rules disagree only on paperwork — but they do disagree. Pick one: either the skill's merge rule (and the O-items close), or per-ADR acceptance (and the skill should say so). Statuses were deliberately left untouched | 32 ADRs reading `proposed` while the code depends on them |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -1167,6 +1176,44 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       agentapi test helper now read it from `Receive` (TestConnect's flake: 30/30
       under load after)
 
+## Hardening slices
+
+### S28 — Swarm end-to-end, the gate's missing case, and the ADR audit ✅
+No new features. The owner picked hardening over a v0.3 feature, and it paid for itself:
+the first end-to-end run against Swarm found a bug that defeated rule 5 on any provider
+that updates in place.
+
+- [x] **A bug in the agent, found by the Swarm e2e and fixed.** `reconcile.go` re-read
+      Status after Apply and mapped running-and-healthy to HEALTHY without checking the
+      status described the spec it had just applied. A provider that updates in place
+      keeps the previous release running and healthy under its own hash while the new
+      one rolls out, so the agent reported the **new** release as healthy on the **old**
+      release's health. The deploy's health gate matches on release ID and generation —
+      both already correct — so it accepted that: a broken Release reported SUCCEEDED in
+      two seconds and never rolled back. Docker recreates its container, so the stale
+      status is never both running and healthy there and the bug was invisible
+- [x] **The conformance suite never checked the unhealthy direction.** It waited for
+      workloads to become healthy and never required that a failing probe reports
+      unhealthy, so a provider reporting every running workload healthy passed the gate
+      (rule 4) with the health gate turned into a no-op. That is how the bug above
+      reached `main`. New case added; the in-memory reference provider now models a
+      target that serves only `/healthz` instead of reporting healthy whenever it runs,
+      and `alwaysHealthy` joins the broken providers that prove each check bites
+- [x] `cmd/bohux/e2e_swarm_test.go`: failure path first (a Release that never turns
+      healthy leaves the previous one serving), then deploy, serve, redeploy, roll back
+      with the CLI, and the artifacts-on-disk check (rules 2 and 3). `startStack` takes
+      the provider as a parameter; swarm stacks are torn down beside Compose projects
+- [x] CI job `e2e-swarm`, its own job because a swarm manager cannot have live-restore
+      (ADR-0045) and the Docker e2e job requires it (ADR-0020)
+- [x] **ADR audit.** Every proposed ADR from 0019 to 0051 is referenced from code
+      (2–27 non-generated files each), so the tracker's "built on already" is true for
+      all of them: there is no orphan paper decision, and rejecting one now would mean
+      reverting shipped code. Statuses were **not** changed — that is O46
+- [x] **The PR's first CI run is red**, which is the whole value of O24: see O45. Five
+      of ten jobs fail, and the root cause of `proto` is the long-known missing
+      `buf.lock`. Not fixed here: it needs Buf Schema Registry access, which this
+      container does not have
+
 ## v0.3 slices
 
 ### S27 — Scheduled restore drills (ADR-0051)
@@ -1352,9 +1399,9 @@ an install's own archives.
       Compose container on the overlay reachable by alias (by hand)
 - [x] CI job `conformance-swarm` (the runner's dockerd becomes the manager);
       `docs/providers/swarm.md`
-- [ ] Not done: an end-to-end run of the control plane and agent deploying to Swarm
-      (the routing is unit-tested and the provider conformance-tested, not the two
-      together); the resource view does not sample Swarm workloads
+- [x] The end-to-end run of the control plane and agent deploying to Swarm — done in
+      S28, and it found a real agent bug on its first try
+- [ ] Not done: the resource view does not sample Swarm workloads
 
 
 ### S20 — Monorepo watch paths (ADR-0044) ✅
@@ -1369,6 +1416,21 @@ an install's own archives.
       signed deliveries inside and outside the paths (integration), CLI
 
 ## Known gaps and notes
+- **The container's Docker bridge can break beyond the documented recipe (2026-10-23,
+  S28).** After several dockerd restarts in one session, `docker0` lost its veth
+  attachments: `Failed to add veth… to bridge via netlink: Device does not exist`, so
+  `bohux-mirror` cannot start, the buildx builder cannot reach the mirror, and every
+  build test fails with `BUILD_FAILED`. Restarting dockerd did **not** fix it this time,
+  and the container has no `ip` tooling to repair the bridge by hand. It is not a code
+  problem — `TestBuildEndToEnd` fails the same way on the parent commit — so a fresh
+  session is the remedy. Restart the main dockerd as few times as possible: start it
+  once, with the swarm daemon on its own data root and socket.
+- **A second swarm daemon, for the Swarm e2e (S28).** `BOHUX_TEST_SWARM_HOST` points the
+  test at it, and `BOHUX_TEST_BUILD_NETWORK=none` is needed because that daemon runs
+  with `--bridge none`, so builds have no default network. Start it with the
+  swarm-daemon recipe below, then `docker swarm init --advertise-addr 127.0.0.1`. Do not
+  guard the start with `pgrep -f <its own command line>`: the pattern matches the
+  starting shell and silently skips the daemon.
 - **`TestRestoreDrill` still races occasionally (seen once, 2026-10-23, S27b).** The
   rollback after a restore failed with `failed_precondition: a deployment of this app is
   already in progress` — the race ADR-0048 and S24 addressed. It did not reproduce in 3
@@ -1512,6 +1574,32 @@ an install's own archives.
   1.24–1.26). Raising the `go` directive is cheap and its own commit when wanted.
 
 ## Session log (newest first)
+
+### 2026-10-23 (S28) — branch `claude/loving-shannon-rplqcg`
+- Owner picked hardening over a v0.3 feature, and said to open the PR. Both paid off.
+- **PR #2 opened: CI ran for the first time ever and five of ten jobs fail** (O45).
+  `proto`'s root cause is the missing `buf.lock` that *Known gaps* has carried since
+  S1; it needs registry access this container does not have. Every "verified" in this
+  tracker so far meant one cloud container's word for it, and now we know the pipeline
+  itself does not pass.
+- **The Swarm end-to-end run found a real bug on its first attempt**, and it was in the
+  agent, not the provider: a broken Release deployed to Swarm reported SUCCEEDED in two
+  seconds. The reconciler trusted a Status it had not checked the hash of, so a rolling
+  update let the previous release's health stand in for the new one's and the health
+  gate rule 5 arms was bypassed. Fixed, with a reconciler regression test written first.
+- **And the gate had a hole that let it through:** the conformance suite only ever waited
+  for healthy and never required unhealthy to be reported. Closed, and the in-memory
+  reference provider had to start modelling a probe instead of reporting healthy
+  whenever a workload runs.
+- ADR audit: all 32 proposed ADRs (0019–0051) are referenced from code, so "built on
+  already" is true for every one. Statuses left alone — the repo's own `write-adr` skill
+  and this tracker disagree about who marks an ADR accepted (O46).
+- Verified: gofmt, build, vet (all three tag sets), golangci-lint plain and integration
+  (0 issues), full unit suite with race, integration 25/26 (the documented
+  `TestBuilderRailpack` ghcr.io gap), **both** conformance suites green with the new
+  case, and the Swarm e2e green. The Docker e2e's `TestRestoreDrill` passed 3/3 in
+  isolation and in the final full run; `TestBuildEndToEnd` fails in this container now
+  for an environment reason that also fails on the parent commit — see *Known gaps*.
 
 ### 2026-10-23 (S27b) — branch `claude/loving-shannon-rplqcg`
 - The restore drill is on a weekly schedule. The design change the code forced: both
