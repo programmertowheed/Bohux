@@ -35,7 +35,16 @@ jobs:
             echo "Base has no S1 contract yet; skipping buf breaking."
             exit 0
           fi
-          buf breaking --against "${{ github.event.repository.clone_url }}#branch=${{ github.base_ref }}"
+          # The base has no committed buf.lock either, and buf will not resolve
+          # dependencies for a git input, so comparing against the remote branch
+          # failed on google/api/field_behavior.proto for every PR. Check the base
+          # out and resolve its deps the way the working tree's are resolved above,
+          # then compare against that directory. Remove along with the step above
+          # once buf.lock is committed.
+          base="$(mktemp -d)/base"
+          git worktree add --detach "$base" "origin/${{ github.base_ref }}"
+          test -f "$base/buf.lock" || (cd "$base" && buf dep update)
+          buf breaking --against "$base"
 
   go:
     runs-on: ubuntu-latest
