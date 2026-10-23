@@ -27,6 +27,14 @@
 #                      its private key off this host (docs/runbooks/backup-and-restore.md).
 #                      Empty: no nightly backups. Archives land in the
 #                      bohux-backups volume (/var/lib/docker/volumes/bohux-backups/_data)
+#   BOHUX_DRILL_IDENTITY
+#                      age identity (AGE-SECRET-KEY-1…) for the weekly restore drill
+#                      (ADR-0051), which proves the nightly archives restore. Unlike
+#                      BOHUX_BACKUP_RECIPIENT's key this one LIVES ON THIS HOST, so
+#                      give drills their own key (age-keygen) and keep the operator's
+#                      off the host. Its public half is added as a second recipient on
+#                      every archive from now on, so archives written before this was
+#                      set cannot be drilled. Empty: no drills
 #   BOHUX_SMTP_ADDR, BOHUX_SMTP_FROM, BOHUX_SMTP_USERNAME, BOHUX_SMTP_PASSWORD
 #                      SMTP relay for email notifications (ADR-0043): host:port (465
 #                      is TLS; others must offer STARTTLS) and the sender address.
@@ -84,6 +92,8 @@ if [[ ! -f "$env_file" ]]; then
   } >"$env_file"
 fi
 grep -q '^BOHUX_BACKUP_PASSWORD=' "$env_file" || echo "BOHUX_BACKUP_PASSWORD=$(openssl rand -hex 24)" >>"$env_file"
+grep -q '^BOHUX_DRILL_PASSWORD=' "$env_file" || echo "BOHUX_DRILL_PASSWORD=$(openssl rand -hex 24)" >>"$env_file"
+grep -q '^BOHUX_DRILL_ADMIN_PASSWORD=' "$env_file" || echo "BOHUX_DRILL_ADMIN_PASSWORD=$(openssl rand -hex 24)" >>"$env_file"
 # Paths and ports Compose needs for the ingress; rewritten on every run.
 sed -i '/^BOHUX_INGRESS_\|^BOHUX_HTTP_PORT=\|^BOHUX_HTTPS_PORT=/d' "$env_file"
 {
@@ -141,6 +151,23 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO bohux_backup;
 ALTER DEFAULT PRIVILEGES FOR ROLE bohux_app IN SCHEMA public GRANT SELECT ON TABLES TO bohux_backup;
 SQL
 
+# The restore drill's two roles (ADR-0051 item 3). They are deliberately granted
+# NOTHING in bohux_app: a drill only ever touches the scratch database it creates per
+# run, and grants itself what it needs there. bohux_drill needs CREATEDB and must not
+# have BYPASSRLS (store.MigrateTo refuses such a role); bohux_drill_admin needs
+# BYPASSRLS to COPY into tables that force row-level security, which their owner
+# cannot, plus the one GUC restore sets to load rows past triggers and foreign keys.
+"${compose[@]}" exec -T postgres psql -q -v ON_ERROR_STOP=1 -U postgres -d bohux_app \
+  -v pass="$BOHUX_DRILL_PASSWORD" -v adminpass="$BOHUX_DRILL_ADMIN_PASSWORD" >/dev/null <<'SQL'
+SELECT format('CREATE ROLE bohux_drill LOGIN CREATEDB PASSWORD %L', :'pass')
+  WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'bohux_drill') \gexec
+ALTER ROLE bohux_drill PASSWORD :'pass';
+SELECT format('CREATE ROLE bohux_drill_admin LOGIN BYPASSRLS PASSWORD %L', :'adminpass')
+  WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'bohux_drill_admin') \gexec
+ALTER ROLE bohux_drill_admin PASSWORD :'adminpass';
+GRANT SET ON PARAMETER session_replication_role TO bohux_drill_admin;
+SQL
+
 bao() { "${compose[@]}" exec -T -e BAO_ADDR=http://127.0.0.1:8200 ${BAO_TOKEN:+-e BAO_TOKEN="$BAO_TOKEN"} openbao bao "$@"; }
 until bao status -format=json >/dev/null 2>&1 || [[ $? -eq 2 ]]; do sleep 1; done
 if [[ "$(bao status -format=json | jq -r .initialized)" != true ]]; then
@@ -150,6 +177,11 @@ fi
 BAO_TOKEN="$(jq -r .root_token "$etc/openbao-init.json")"
 if ! bao secrets list -format=json | jq -e '."secret/"' >/dev/null; then
   bao secrets enable -path=secret -version=2 kv >/dev/null
+fi
+# The restore drill restores an archive's secret values into a mount of its own, which
+# it wipes before and after each run (ADR-0051 item 3). Never the live mount.
+if ! bao secrets list -format=json | jq -e '."bohux-drill/"' >/dev/null; then
+  bao secrets enable -path=bohux-drill -version=2 kv >/dev/null
 fi
 until "${compose[@]}" exec -T temporal temporal operator cluster health --address temporal:7233 >/dev/null 2>&1; do
   sleep 2
@@ -178,6 +210,15 @@ if [[ -n "$smtp_addr" && -z "${BOHUX_SMTP_FROM:-}" ]]; then
   exit 2
 fi
 backup_db_url="postgres://bohux_backup:${BOHUX_BACKUP_PASSWORD}@postgres:5432/bohux_app?sslmode=disable"
+drill_identity="${BOHUX_DRILL_IDENTITY:-}"
+if [[ -n "$drill_identity" && -z "$backup_recipient" ]]; then
+  echo "install: BOHUX_BACKUP_RECIPIENT is required with BOHUX_DRILL_IDENTITY: a drill proves the nightly archives, so there have to be some" >&2
+  exit 2
+fi
+# The drill connects to the maintenance database, not to bohux_app: it creates its own
+# scratch database per run and drops it again.
+drill_db_url="postgres://bohux_drill:${BOHUX_DRILL_PASSWORD}@postgres:5432/postgres?sslmode=disable"
+drill_admin_db_url="postgres://bohux_drill_admin:${BOHUX_DRILL_ADMIN_PASSWORD}@postgres:5432/postgres?sslmode=disable"
 
 if [[ -f "$etc/installed" ]] && curl -fsS "$api/healthz" >/dev/null 2>&1; then
   log "already installed; the control plane answers on $api"
@@ -264,6 +305,10 @@ $(secret BOHUX_OPENBAO_TOKEN "$BAO_TOKEN")
 $([[ -z "$health_timeout" ]] || secret BOHUX_DEPLOY_HEALTH_TIMEOUT "$health_timeout")
 $([[ -z "$backup_recipient" ]] || secret BOHUX_BACKUP_RECIPIENT "$backup_recipient")
 $([[ -z "$backup_recipient" ]] || secret BOHUX_BACKUP_DATABASE_URL "$backup_db_url")
+$([[ -z "$drill_identity" ]] || secret BOHUX_DRILL_IDENTITY "$drill_identity")
+$([[ -z "$drill_identity" ]] || secret BOHUX_DRILL_DATABASE_URL "$drill_db_url")
+$([[ -z "$drill_identity" ]] || secret BOHUX_DRILL_ADMIN_DATABASE_URL "$drill_admin_db_url")
+$([[ -z "$drill_identity" ]] || secret BOHUX_DRILL_KV_MOUNT bohux-drill)
 $([[ -z "$smtp_addr" ]] || secret BOHUX_SMTP_ADDR "$smtp_addr")
 $([[ -z "$smtp_addr" ]] || secret BOHUX_SMTP_FROM "$BOHUX_SMTP_FROM")
 $([[ -z "$smtp_addr" || -z "${BOHUX_SMTP_USERNAME:-}" ]] || secret BOHUX_SMTP_USERNAME "$BOHUX_SMTP_USERNAME")
