@@ -43,17 +43,17 @@ work is in right now*.
 - **Slice:** S28 — hardening **done**: the Swarm end-to-end run, the agent bug it found
   and its fix, the conformance gap that let the bug through, the `e2e-swarm` CI job, and
   the ADR audit. S27 (scheduled restore drills, ADR-0051) is done before it.
-- **CI has now run for the first time (O24 answered) and it is red:** five of ten jobs
-  fail on PR #2. O45 has the diagnosis. Until that is fixed, "verified" in this tracker
-  means verified in the cloud container, not by CI.
+- **CI runs and nearly passes, for the first time ever (O24 answered).** PR #2 went
+  from 5 of 10 jobs failing to 9 of 11 green in S28; `proto`, `conformance-swarm` and
+  `e2e` had never passed at all. What is left is in O45, including one real failure
+  (`TestBuilderRailpack`) and the `buf.lock` commit only you can make.
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). v0.2 is done
   except the items O35 lists. Open for the owner: O2 (footprint on a 2 GB VPS) and the
   proposed ADRs (O19–O44).
-- **Exact next step:** **get CI green (O45)** before any further feature work — nothing
-  in this repo has ever been proven outside one cloud container, and the first run says
-  the pipeline does not pass. It needs the owner for one thing only: `buf.lock`, from a
-  machine with Buf Schema Registry access. After that, every remaining roadmap item
-  needs an owner decision. Ask the owner to pick: v0.2's O35 (managed Postgres/Redis, envelope encryption, team invites)
+- **Exact next step:** finish O45 — trace `TestBuilderRailpack`'s empty release label
+  (the one real failure left, and possibly a defect in ADR-0047's build path), and
+  confirm `selfdeploy`. Then every remaining roadmap item needs an owner decision —
+  ask the owner to pick: v0.2's O35 (managed Postgres/Redis, envelope encryption, team invites)
   or a v0.3 item (the SLO gate's optional PromQL source with OTEL correlation and
   deploy markers, preview environments, migrations as a gated step, cron jobs, Compose
   apps, volumes and S3 backups), or hardening: a Swarm end-to-end test, and checking
@@ -66,16 +66,18 @@ work is in right now*.
 > Read CLAUDE.md and docs/plan/03-progress.md. Start the services with the scratchpad
 > `services.sh` pattern in *Known gaps*, and regenerate `gen/` through the
 > scratch-workspace workaround — it is not committed and buf.build is blocked here.
-> Then work **O45: get PR #2's CI green**, on branch `claude/loving-shannon-rplqcg`.
-> Read the failing jobs' logs from the runner rather than guessing (`proto`,
-> `integration`, `e2e`, `conformance-swarm`, `selfdeploy`), fix what the repo can fix,
-> and for anything needing Buf Schema Registry access tell me exactly what to run and
-> where — do not work around a missing `buf.lock` by weakening `buf breaking`, which is
-> rule 9's guard. Expect the fixes to be in `.github/workflows/ci.yml` and the
-> generation steps, not in the proto contract. Verify each fix by pushing and reading
-> the run, not only locally. Tick boxes, update the tracker and the next session prompt,
-> commit, push, and give me the next prompt. If you hit a decision only I can make, ask
-> me before building.
+> Then finish **O45** on branch `claude/loving-shannon-rplqcg`, reading PR #2's job logs
+> from the runner rather than guessing. In order: (1) `TestBuilderRailpack` fails with
+> `release label = "", want rel-rp-3` — decide whether the Railpack build path
+> (ADR-0047) really fails to stamp `io.bohux.release`, which image retention and
+> workload status both read, and fix it or the test accordingly; it cannot be run in
+> this container, so verify it by pushing and reading the run. (2) Check `selfdeploy`,
+> which had not finished when S28 ended. (3) `conformance-swarm` flaked once on
+> `an_interrupted_apply_converges_without_duplicates` — make that case robust under
+> Swarm or establish it is environmental, without weakening it. Do not skip, disable or
+> loosen a test to get green. When CI is green, tell me, and ask which slice to take
+> next with the choices *Current focus* lists. Tick boxes, update the tracker and the
+> next session prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -124,7 +126,7 @@ work is in right now*.
 | O42 | Accept or reject ADR-0049 (canary deploys: strategy CANARY with one weight 1–99% and a bake 1m–24h per deployment; the weight rides on the workload outside the spec hash; Caddy weighted round robin across the two slots; the workflow's CANARY state watches health with a 30 s grace, then promotes by reassigning with weight 0; PromoteDeployment ends the bake, CancelDeployment aborts). Changes deployment.proto and agent.proto; migration 00024 | S25 |
 | O43 | Accept or reject ADR-0050 (SLO gate: Caddy writes an access log beside its admin socket with only upstream, status and duration; the agent tails it and reports per-slot counters in memory; `App.slo` = availability 0.9–0.99999, optional latency threshold (a histogram bound) and target, max burn rate (default 10), watch 1m–1h (default 10m); burn rate over the window since the hold began, no verdict under 50 requests; judged during a canary's bake and, otherwise, in a new `VERIFYING` state; violations roll back with `SLO_AVAILABILITY`/`SLO_LATENCY`). Item 6 amended while proposed: the CLI, not a deploy log, says an unrouted App is judged by health alone. Changes app.proto, agent.proto, deployment.proto; migration 00025 | S26 |
 | O44 | Accept or reject ADR-0051 (scheduled restore drills: a weekly Temporal schedule on the backup's queue; opt-in through a drill age identity on the host whose public half becomes a second recipient on every archive; throwaway state per run — a scratch database created by a `CREATEDB` `bohux_drill` role, a `BYPASSRLS` `bohux_drill_admin` role with `GRANT SET ON PARAMETER session_replication_role` to load the rows, a temp data dir, and a KV mount of its own that the drill wipes; checks beyond restore's own; the verdict logged and written as JSON under the archives' retention; `bohux admin drill` to run one by hand). **The host holding an age private key is the trade-off to weigh** — item 2 keeps the operator's own key off the host, and drills stay off unless an identity is configured. Item 7 (the config keys) was added while proposed, and item 7 again in S27b to accept the identity as a value as well as a file (the control plane as an App gets its config as env vars). S27a and S27b are built on it | S27a, S27b |
-| O45 | **CI is red, and this is the first time it has ever run on this work (O24 answered).** PR #2's run: `go`, `web`, `compose`, `image`, `conformance-docker` pass; `proto`, `integration`, `e2e`, `conformance-swarm`, `selfdeploy` fail. Diagnosed: `proto` fails because `buf breaking --against <remote main>` cannot resolve `google/api/field_behavior.proto` — `main` has no committed `buf.lock`, the gap *Known gaps* has listed since S1. The fix needs Buf Schema Registry access, which the cloud container does not have (buf.build is blocked) but CI does. Either commit `buf.lock` from a machine with registry access, or let a CI step emit it once so it can be committed. The other four need their logs read on a runner; their Generate step shares the same `buf.lock` root cause, so fix that first and re-run before diagnosing further | Every claim that a slice is verified; nothing has been proven outside this container |
+| O45 | **CI now passes except one real failure.** S28 took PR #2 from 5 of 10 jobs failing to 9 of 11 green (`selfdeploy` was still running at the end of the session — check it). Three jobs had **never** passed; the causes and fixes are under S28. What is left: (1) `integration` fails only on `TestBuilderRailpack` — `release label = "", want rel-rp-3`. A real assertion, newly visible, and not reproducible in the cloud container because ghcr.io is blocked there; if the Railpack build path (ADR-0047) does not stamp `io.bohux.release`, image retention and workload status both read that label, so this is worth tracing properly. (2) `conformance-swarm` flaked once on `an_interrupted_apply_converges_without_duplicates` having passed it twice — timing-sensitive under Swarm. (3) **You**: commit `buf.lock` from a machine with Buf Schema Registry access (`buf dep update`), which removes both `buf.lock` workarounds in `ci.yml` | A green matrix; and the Railpack label, if it is a real defect |
 | O46 | **Which rule decides an ADR's status?** `.claude/skills/write-adr/` says "Status starts `proposed`, becomes `accepted` on merge", which would make ADRs 0020–0051 accepted already (they merged in PR #1). This tracker instead asks you to accept each one (O1, O6–O44). S28's audit confirms all 32 are referenced from code, so the two rules disagree only on paperwork — but they do disagree. Pick one: either the skill's merge rule (and the O-items close), or per-ADR acceptance (and the skill should say so). Statuses were deliberately left untouched | 32 ADRs reading `proposed` while the code depends on them |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
@@ -1209,10 +1211,43 @@ that updates in place.
       (2–27 non-generated files each), so the tracker's "built on already" is true for
       all of them: there is no orphan paper decision, and rejecting one now would mean
       reverting shipped code. Statuses were **not** changed — that is O46
-- [x] **The PR's first CI run is red**, which is the whole value of O24: see O45. Five
-      of ten jobs fail, and the root cause of `proto` is the long-known missing
-      `buf.lock`. Not fixed here: it needs Buf Schema Registry access, which this
-      container does not have
+- [x] **CI ran for the first time (O24) and was red: five of ten jobs failed.** Driven
+      from 5 red to 1 real failure in four pushes, each verified by reading the run.
+      Every cause was in the workflow or in an untested privilege assumption, not in the
+      product:
+      - `proto` had **never** passed. `buf breaking` compared against the base as a git
+        input, and buf will not resolve dependencies for one, so with no committed
+        `buf.lock` every PR failed on `google/api/field_behavior.proto` whatever its
+        diff. Now the base is checked out and its deps resolved the way the working
+        tree's already were. The check keeps its teeth (verified locally that
+        `--against <directory>` still catches a deleted field) rather than being
+        loosened, which rule 9 depends on. Committing `buf.lock` is still the clean fix
+        and removes both workarounds — it needs registry access (O45)
+      - `conformance-swarm` had **never** passed: the Swarm provider enters each task's
+        network namespace to probe it (ADR-0045 item 4), which needs root, and the job
+        ran as the runner's user. `docs/providers/swarm.md` already said the agent runs
+        as root; the job simply did not test the provider as it is used
+      - `e2e` had **never** passed: enabling live-restore restarts the Docker daemon,
+        which killed the Postgres **service container** the runner had already started,
+        so every run died on "connection refused" before a test body. A `services:`
+        container always starts before the first step, so Postgres is now started by a
+        step after the restart. The new `e2e-swarm` job, which does not restart the
+        daemon, passing with the same service block is what pinned this down
+      - `integration` failed on `TestCaddy`: Caddy's admin socket is created as root
+        inside its container, so the runner's user could not connect. Now run as root,
+        as the agent runs on a real node and as the suite is run locally
+      - **A false green, caught and fixed:** `sudo -E` does not survive the runner's
+        sudoers, so it dropped every `BOHUX_TEST_*` variable. The integration tests
+        reported "not set", and `e2e-swarm` went **green while skipping both its
+        tests**. The variables are passed explicitly now, and that job asserts its two
+        tests reported PASS rather than trusting the exit status
+- [ ] **Left for O45**: `integration` now fails only on `TestBuilderRailpack`
+      (`release label = "", want rel-rp-3`) — a real assertion, visible for the first
+      time because the job never got that far before, and not reproducible in this
+      container (ghcr.io is blocked). If the Railpack path really does not stamp
+      `io.bohux.release`, image retention and status both read those labels.
+      `conformance-swarm` also flaked once on `an_interrupted_apply_converges_without_duplicates`
+      after passing it twice, so that case is timing-sensitive under Swarm
 
 ## v0.3 slices
 
@@ -1576,12 +1611,22 @@ an install's own archives.
 ## Session log (newest first)
 
 ### 2026-10-23 (S28) — branch `claude/loving-shannon-rplqcg`
-- Owner picked hardening over a v0.3 feature, and said to open the PR. Both paid off.
-- **PR #2 opened: CI ran for the first time ever and five of ten jobs fail** (O45).
-  `proto`'s root cause is the missing `buf.lock` that *Known gaps* has carried since
-  S1; it needs registry access this container does not have. Every "verified" in this
-  tracker so far meant one cloud container's word for it, and now we know the pipeline
-  itself does not pass.
+- Owner picked hardening over a v0.3 feature, and said to open the PR. Both paid off,
+  and the PR paid off more than the slice did.
+- **PR #2 opened: CI ran for the first time ever, five of ten jobs failed, and four
+  pushes took it to 9 of 11 green.** `proto`, `conformance-swarm` and `e2e` had **never**
+  passed — not once, for reasons that had nothing to do with any diff: a `buf breaking`
+  base whose dependencies cannot resolve, a provider health check that needs root, and a
+  live-restore restart that killed the Postgres service container the job depended on.
+  Every "verified" in this tracker before today meant one cloud container's word for it.
+- **A false green, caught:** `sudo -E` silently dropped the test environment, and
+  `e2e-swarm` passed while skipping both of its tests. Fixed, and that job now asserts
+  its tests reported PASS instead of trusting the exit status. Worth remembering that a
+  green tick is a claim like any other.
+- An honest correction mid-session: my first PR comment said the `buf.lock` gap blocked
+  the pipeline and needed the owner's registry access. Reading the next run showed the
+  working tree resolved its deps fine and only the *base* did not, which was fixable in
+  CI without any registry access. The comment overstated the blocker.
 - **The Swarm end-to-end run found a real bug on its first attempt**, and it was in the
   agent, not the provider: a broken Release deployed to Swarm reported SUCCEEDED in two
   seconds. The reconciler trusted a Status it had not checked the hash of, so a rolling
