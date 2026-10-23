@@ -40,36 +40,35 @@ work is in right now*.
 - **Working branch:** `claude/loving-shannon-rplqcg`. The session of 2026-10-23 was
   assigned this branch rather than `claude/relaxed-rubin-76m7dl`, which is merged into
   `main` (PR #1) and no longer carries unmerged work. New work starts from `main`.
-- **Slice:** S27 — scheduled restore drills (v0.3, ADR-0051). **S27a done**: the drill
-  engine and `bohux admin drill`. **S27b is 🔄 next**: the weekly Temporal schedule,
-  the control plane's config, and the installer's two roles and drill mount.
+- **Slice:** S27 — scheduled restore drills (v0.3, ADR-0051) **done**: S27a the drill
+  engine and `bohux admin drill`, S27b the weekly schedule, the shared maintenance
+  worker, and the installer's two roles and drill mount. The roadmap item is ticked.
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). v0.2 is done
   except the items O35 lists. Open for the owner: O2 (footprint on a 2 GB VPS) and the
   proposed ADRs (O19–O44).
-- **Exact next step:** S27b, as the next session prompt below sets out. It needs no
-  owner decision — ADR-0051 already decided the schedule's shape. After S27b, every
-  remaining roadmap item does: v0.2's O35 (managed Postgres/Redis, envelope encryption,
-  team invites) or a v0.3 item (the SLO gate's optional PromQL source with OTEL
-  correlation and deploy markers, preview environments, migrations as a gated step,
-  cron jobs, Compose apps, volumes and S3 backups), or hardening: a Swarm end-to-end
-  test, and checking the CI matrix that finally ran on `main` with PR #1 (O24).
+- **Exact next step:** every remaining roadmap item needs an owner decision. Ask the
+  owner to pick: v0.2's O35 (managed Postgres/Redis, envelope encryption, team invites)
+  or a v0.3 item (the SLO gate's optional PromQL source with OTEL correlation and
+  deploy markers, preview environments, migrations as a gated step, cron jobs, Compose
+  apps, volumes and S3 backups), or hardening: a Swarm end-to-end test, and checking
+  the CI matrix that ran on `main` with PR #1 (O24). Review the proposed ADRs
+  (O19–O44); **O44 (ADR-0051) is the one with a security trade-off to weigh**, since a
+  drill-enabled install holds an age private key that decrypts its own archives.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md. Start Postgres, Docker, Temporal and
-> OpenBao (tracker *Known gaps*, including the proto-generation, disk and swarm-daemon
-> notes — `gen/` is not committed, so regenerate it before building). Then do **S27b**
-> on branch `claude/loving-shannon-rplqcg`: put the restore drill on a weekly Temporal
-> schedule as ADR-0051 decided — `internal/workflow/drill` beside
-> `internal/workflow/backup` on the same task queue and worker, the backup's recipient
-> list gaining the drill key's public half, `controlplane.DrillConfig` and its
-> `--drill-*` flags, the verdict written to `<backup dir>/drills/<time>.json` under the
-> archives' retention, and the installer creating `bohux_drill`, `bohux_drill_admin`
-> (with `GRANT SET ON PARAMETER session_replication_role`) and the `bohux-drill` KV
-> mount. Test the failure path first, as S27a did. Verify with build, vet,
-> golangci-lint (both tag sets), unit, integration and e2e. Tick boxes, update the
-> tracker and the next session prompt, commit, push, and give me the next prompt. If
-> you hit a decision only I can make, ask me before building.
+> Read CLAUDE.md and docs/plan/03-progress.md. Start the services with the scratchpad
+> `services.sh` pattern in *Known gaps* (Postgres, Docker, Temporal, OpenBao, plus the
+> registry mirror and buildx builder the build tests need), and regenerate `gen/`
+> through the scratch-workspace workaround — it is not committed and buf.build is
+> blocked. Then **ask me which slice to take next**, with the choices *Current focus*
+> lists, and whether you should open a PR for `claude/loving-shannon-rplqcg` so the CI
+> matrix runs on S27 (O24). Write the slice's ADR first as proposed, then the code, on
+> that branch. Test the failure path before the forward one. Verify with build, vet,
+> golangci-lint (both tag sets), unit, integration, e2e, and the conformance suites the
+> change touches. Tick boxes, update the tracker and the next session prompt, commit,
+> push, and give me the next prompt. If you hit a decision only I can make, ask me
+> before building.
 
 ## Waiting on the owner
 
@@ -117,7 +116,7 @@ work is in right now*.
 | O41 | Accept or reject ADR-0048 (a Deployment's notifications run in their own `notify/<deployment id>` workflow, a child abandoned when the deploy run ends, so the App is free at once; runs from before keep notifying inline behind a version gate; recorded histories replayed in a unit test). Amends ADR-0038 item 3 | S24 |
 | O42 | Accept or reject ADR-0049 (canary deploys: strategy CANARY with one weight 1–99% and a bake 1m–24h per deployment; the weight rides on the workload outside the spec hash; Caddy weighted round robin across the two slots; the workflow's CANARY state watches health with a 30 s grace, then promotes by reassigning with weight 0; PromoteDeployment ends the bake, CancelDeployment aborts). Changes deployment.proto and agent.proto; migration 00024 | S25 |
 | O43 | Accept or reject ADR-0050 (SLO gate: Caddy writes an access log beside its admin socket with only upstream, status and duration; the agent tails it and reports per-slot counters in memory; `App.slo` = availability 0.9–0.99999, optional latency threshold (a histogram bound) and target, max burn rate (default 10), watch 1m–1h (default 10m); burn rate over the window since the hold began, no verdict under 50 requests; judged during a canary's bake and, otherwise, in a new `VERIFYING` state; violations roll back with `SLO_AVAILABILITY`/`SLO_LATENCY`). Item 6 amended while proposed: the CLI, not a deploy log, says an unrouted App is judged by health alone. Changes app.proto, agent.proto, deployment.proto; migration 00025 | S26 |
-| O44 | Accept or reject ADR-0051 (scheduled restore drills: a weekly Temporal schedule on the backup's queue; opt-in through a drill age identity on the host whose public half becomes a second recipient on every archive; throwaway state per run — a scratch database created by a `CREATEDB` `bohux_drill` role, a `BYPASSRLS` `bohux_drill_admin` role with `GRANT SET ON PARAMETER session_replication_role` to load the rows, a temp data dir, and a KV mount of its own that the drill wipes; checks beyond restore's own; the verdict logged and written as JSON under the archives' retention; `bohux admin drill` to run one by hand). **The host holding an age private key is the trade-off to weigh** — item 2 keeps the operator's own key off the host, and drills stay off unless an identity is configured. Item 7 (the config keys) was added while proposed. S27a is built on it | S27a, S27b |
+| O44 | Accept or reject ADR-0051 (scheduled restore drills: a weekly Temporal schedule on the backup's queue; opt-in through a drill age identity on the host whose public half becomes a second recipient on every archive; throwaway state per run — a scratch database created by a `CREATEDB` `bohux_drill` role, a `BYPASSRLS` `bohux_drill_admin` role with `GRANT SET ON PARAMETER session_replication_role` to load the rows, a temp data dir, and a KV mount of its own that the drill wipes; checks beyond restore's own; the verdict logged and written as JSON under the archives' retention; `bohux admin drill` to run one by hand). **The host holding an age private key is the trade-off to weigh** — item 2 keeps the operator's own key off the host, and drills stay off unless an identity is configured. Item 7 (the config keys) was added while proposed, and item 7 again in S27b to accept the identity as a value as well as a file (the control plane as an App gets its config as env vars). S27a and S27b are built on it | S27a, S27b |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -1211,23 +1210,49 @@ an install's own archives.
       Section D (drill an archive, read each failure by check name, create the roles and
       mount on an upgraded install), `docs/runbooks/README.md`
 
-#### S27b — the weekly schedule and the install 🔄
-- [ ] `internal/workflow/drill`: `DrillWorkflow` and the `bohux-restore-drill-weekly`
-      schedule on the backup's task queue and worker (ADR-0051 item 1), picking the
-      newest archive in the backup directory
-- [ ] The backup activity's `Recipient` becomes a list, so the drill key's public half
-      rides on every archive (ADR-0051 item 2); note that the first drill after enabling
-      fails until the next nightly archive exists, and say so in the verdict
-- [ ] `controlplane.DrillConfig` and `--drill-*` flags, with drills off unless an
-      identity file and a backup recipient are both configured
-- [ ] The verdict written to `<backup dir>/drills/<UTC time>.json`, pruned with the
-      archives; a failed check fails the workflow
-- [ ] Installer: `bohux_drill` and `bohux_drill_admin` (with
-      `GRANT SET ON PARAMETER session_replication_role`), the `bohux-drill` KV mount,
-      and the new options in `scripts/install.sh`
-- [ ] Failure path first again: a schedule whose archive directory is empty, and a
-      failed drill that still leaves the mount clean for the next run
-- [ ] Tick the roadmap's "Scheduled automated restore drills"
+#### S27b — the weekly schedule and the install ✅
+- [x] `internal/workflow/drill`: `DrillWorkflow` and the `bohux-restore-drill-weekly`
+      schedule, drilling the newest archive `backupwf.Newest` finds. A failed check is
+      returned **non-retryable** (re-drilling reaches the same verdict and costs another
+      full restore); no verdict at all is infrastructure and gets the one retry
+- [x] **One worker, not two.** Both schedules fire onto the backup's task queue, and a
+      worker that polls a queue must know every workflow type on it — two workers each
+      knowing only their own would fail each other's tasks. So `backupwf.Run` was split
+      into `Register` + schedule calls, and the new `internal/workflow/maintenance`
+      owns the worker lifecycle, the retry-while-Temporal-is-down loop, and both
+      schedules. Its integration test triggers both to prove the shared worker serves
+      both types
+- [x] The backup activity takes `Recipients []string`, so the drill key's public half
+      rides on every archive (ADR-0051 item 2). The activity takes no arguments, so its
+      input shape in workflow history did not change and no worker versioning was
+      needed — ADR-0051's consequence about that was over-cautious
+- [x] `controlplane.DrillConfig` with `--drill-*` flags: off unless an identity is
+      configured, refused at start if it names the live KV mount or lacks a drill role,
+      and switched off (with a warning) when nothing writes archives to drill
+- [x] **ADR-0051 item 7 amended while proposed:** the identity is also accepted as a
+      value (`BOHUX_DRILL_IDENTITY`), file winning, because the control plane runs as
+      an App of itself and gets its configuration as secret env vars (ADR-0032) — the
+      same pair the OpenBao token and SMTP password use. A path alone could not reach it
+- [x] The verdict written to `<backup dir>/drills/<UTC time>.json`, 0600, pruned under
+      the archives' retention; it is recorded **before** a failure is returned, since a
+      workflow cannot return both a value and an error and the finding is the point
+- [x] Installer: `bohux_drill` (CREATEDB, no BYPASSRLS) and `bohux_drill_admin`
+      (BYPASSRLS + `GRANT SET ON PARAMETER session_replication_role`), granted nothing
+      in `bohux_app`; the `bohux-drill` KV mount; `BOHUX_DRILL_IDENTITY` documented with
+      the host-key warning, and refused without a backup recipient
+- [x] Failure path first again: a failed check recorded and not retried, an empty
+      archive directory, an infrastructure failure retried once and recording nothing,
+      and switching either schedule off removing it
+- [x] Found on the way: both schedule IDs are fixed server-wide names, so the new
+      package's tests and the backup's deleted each other's schedules when `go test` ran
+      the packages in parallel. `Schedule.ID` is now overridable for tests, and
+      `RemoveSchedule` takes the schedule it is removing
+- [x] Tick the roadmap's "Scheduled automated restore drills"
+- [ ] **Not done, deliberately:** `scripts/selfdeploy-test.sh` does not trigger a drill.
+      It would need an age **private** key at test time, and committing one to the repo
+      is not acceptable; generating one needs a keygen the binary does not have. The
+      maintenance integration test covers the schedule against a real Temporal instead.
+      Worth revisiting if `bohux` ever grows a key-generation command
 
 ### S26 — SLO gate and automatic rollback from ingress traffic (ADR-0050) ✅
 - [x] Owner chose: metrics from the node's ingress (PromQL optional, later), an SLO as
@@ -1344,6 +1369,19 @@ an install's own archives.
       signed deliveries inside and outside the paths (integration), CLI
 
 ## Known gaps and notes
+- **`TestRestoreDrill` still races occasionally (seen once, 2026-10-23, S27b).** The
+  rollback after a restore failed with `failed_precondition: a deployment of this app is
+  already in progress` — the race ADR-0048 and S24 addressed. It did not reproduce in 3
+  isolated runs, a repeat full-suite run, or on the parent commit, so it is rare and not
+  tied to the drill work. If it appears again, the in-progress deployment the restored
+  rows carry is the thing to look at: the test waits for a node report newer than the
+  restore, which proves the agent is back but not that the previous deployment has been
+  reconciled to a terminal state.
+- **Starting the services after a worker restart:** the session's services all die with
+  the worker. The scratchpad `services.sh` of 2026-10-23 brings back Postgres, Docker,
+  Temporal, OpenBao, the registry mirror and the buildx builder in one go, and prints a
+  health line for each; the Docker image steps can take several minutes on a cold
+  container, while the four core services are up within about 15 s.
 - **A swarm daemon in the cloud container (S21):** the main dockerd has live-restore,
   so swarm runs on a second one, without iptables or a default bridge so it leaves the
   main daemon alone:
@@ -1474,6 +1512,31 @@ an install's own archives.
   1.24–1.26). Raising the `go` directive is cheap and its own commit when wanted.
 
 ## Session log (newest first)
+
+### 2026-10-23 (S27b) — branch `claude/loving-shannon-rplqcg`
+- The restore drill is on a weekly schedule. The design change the code forced: both
+  schedules fire onto one task queue, and a Temporal worker that polls a queue must
+  know every workflow type on it, so two packages each starting their own worker would
+  have failed each other's tasks. `backupwf.Run` is split into `Register` plus the
+  schedule calls, and `internal/workflow/maintenance` now owns the worker. Its
+  integration test triggers both schedules to prove it.
+- ADR-0051 item 7 amended while proposed: the drill identity is also accepted as a
+  value, because the control plane runs as an App of itself and gets its config as
+  secret env vars, so a file path alone never reaches it.
+- Found on the way: the two schedule IDs are fixed server-wide names, so the new
+  package's tests and the backup's deleted each other's schedules when `go test` ran
+  the packages in parallel. `Schedule.ID` is overridable now and `RemoveSchedule` takes
+  the schedule it removes. Both suites then passed twice in a row.
+- Verified: gofmt, build, vet (both tag sets), golangci-lint (plain and integration, 0
+  issues), the full unit suite with race, the integration suite (25 of 26 packages;
+  the one failure is the documented `TestBuilderRailpack` ghcr.io gap, unchanged from
+  before this slice), and the full e2e suite.
+- **One e2e flake worth knowing about:** on the first full e2e run `TestRestoreDrill`
+  failed with `rollback: failed_precondition: a deployment of this app is already in
+  progress` — the ADR-0048 race S24 was meant to close. It did not reproduce: 3 isolated
+  runs and a repeat full-suite run on this branch all passed, and the same commit's
+  parent passed both isolated and full-suite. So it is not this slice's regression, but
+  the race is narrowed rather than gone. Recorded under *Known gaps*.
 
 ### 2026-10-23 (S27a) — branch `claude/loving-shannon-rplqcg`
 - A fresh container and a new branch: `claude/relaxed-rubin-76m7dl` is merged into

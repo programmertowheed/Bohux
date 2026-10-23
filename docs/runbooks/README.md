@@ -14,9 +14,9 @@ Each of these maps to a failure mode in `docs/plan/01-architecture.md`.
 - [ ] Agent upgrade and staged rollback
 - [ ] Node drain and cordon
 - [ ] Certificate rotation
-- [x] Database restore (and the drill that exercises it) — `backup-and-restore.md`;
-      `TestRestoreDrill` in CI proves the code, and `bohux admin drill` (Section D,
-      ADR-0051) proves an install's own archives. The weekly schedule is S27b.
+- [x] Database restore (and the scheduled drill that exercises it) — `backup-and-restore.md`;
+      `TestRestoreDrill` in CI proves the code, and the weekly drill schedule plus
+      `bohux admin drill` (Section D, ADR-0051) prove an install's own archives.
 - [ ] Break-glass production access
 - [ ] Stuck deployment — diagnosis via workflow history
 

@@ -86,6 +86,15 @@ undo once installs exist:
    and refused if it is the live mount), and `BOHUX_DRILL_SCHEDULE` (cron, UTC, default
    `47 4 * * 0`).
 
+   *Amended while proposed, during S27b:* the identity is also accepted as a value,
+   `BOHUX_DRILL_IDENTITY`, with the file winning when both are set. The control plane
+   runs as an App of itself and receives its configuration as secret env vars
+   (ADR-0032), so a path alone cannot reach it — the same pair the OpenBao token and
+   the SMTP password already use. The installer stores the identity as an environment
+   secret, so on an install it is held under OpenBao's barrier rather than as a loose
+   host file; the exposure item 2 describes is unchanged, since the control plane can
+   read it either way.
+
 ## Alternatives considered
 - **Leave the drill in CI (the status quo).** No new code, no new credentials, no
   private key on the host. Lost because it drills a stack the test built: a two-Release

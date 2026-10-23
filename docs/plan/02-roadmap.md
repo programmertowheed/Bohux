@@ -63,9 +63,10 @@ rule.** Scope is fixed by ADR-0011, extended by ADR-0020.
 - [x] Automatic rollback on SLO violation — S26 (ADR-0050), during a canary's bake or a
       watch window after the deploy
 - [ ] Schema migrations as a gated workflow step
-- [ ] **Scheduled automated restore drills** — a backup you have not restored is a feeling.
-      The drill itself and `bohux admin drill` are done (S27a, ADR-0051); the weekly
-      Temporal schedule and the installer's roles and mount are S27b
+- [x] **Scheduled automated restore drills** — a backup you have not restored is a feeling.
+      S27a/S27b, ADR-0051: the drill, `bohux admin drill`, and a weekly Temporal
+      schedule on the backup's worker that drills the newest archive and records a
+      verdict beside it
 - [x] Second provider (Swarm) — proves the boundary is real (S21, single-manager swarm; ADR-0045)
 - [ ] Scheduled jobs (cron) per app, run as Temporal schedules (rule 6) — needs workflow design
 - [ ] Docker Compose apps (multi-container) as an App source — needs an ADR (changes App)

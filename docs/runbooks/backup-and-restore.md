@@ -21,7 +21,7 @@ identity like the root password of every App.
 - First time, or rotating the key → **Section K** (key custody).
 - Checking the nightly backup → **Section N**.
 - Taking a backup by hand → **Section B**.
-- Proving an archive restores, without a restore → **Section D** (drill).
+- Checking the weekly drill, or proving an archive restores now → **Section D** (drill).
 - Control plane state lost → **Section R** (restore).
 - Archive will not decrypt → check you have the identity that matches the recipient the
   backup was made for (Section K, step K3). Without it the archive is unreadable: there
@@ -66,10 +66,35 @@ came back, and destroys all of it (ADR-0051). It never touches live state, and a
 keeps serving throughout.
 
 **This section needs the identity on the host.** Prefer a key that exists only for
-drills, so the operator's key from Section K stays off the host. Give the drill
-recipient to `--recipient` alongside the operator's, or archives written before the
-drill key existed cannot be drilled.
+drills, so the operator's key from Section K stays off the host. Install with
+`BOHUX_DRILL_IDENTITY=AGE-SECRET-KEY-1…` and its public half is added as a second
+recipient on every archive from then on; archives written before that cannot be
+drilled, and a drill of one fails to decrypt rather than passing quietly.
 
+### The weekly schedule
+Installed with a drill identity, the control plane drills the newest archive every
+Sunday at 04:47 UTC and keeps as many verdicts as there are archives (ADR-0051).
+1. Read the last verdicts, newest last:
+   ```
+   sudo ls -l /var/lib/docker/volumes/bohux-backups/_data/drills
+   sudo cat "$(sudo ls -1 /var/lib/docker/volumes/bohux-backups/_data/drills/*.json | tail -1)"
+   ```
+   Expected: `"checks"` with every `"ok": true`. A failed check names itself; read it by
+   name in step D3 below.
+2. If last Sunday's verdict is missing, see why in Temporal:
+   ```
+   sudo docker exec bohux-infra-temporal-1 temporal --address temporal:7233 workflow list --query 'WorkflowType="DrillWorkflow"' --limit 3
+   ```
+   then `workflow show --workflow-id <id>` on the failed one. `NoArchive` means there
+   was nothing to drill yet; `DrillFailed` means the archive did not pass, and the
+   verdict file says which check.
+3. Drill now rather than waiting for Sunday:
+   ```
+   sudo docker exec bohux-infra-temporal-1 temporal --address temporal:7233 schedule trigger --schedule-id bohux-restore-drill-weekly
+   ```
+   Expected: a new verdict in step 1's list within a few minutes.
+
+### By hand, against an archive you choose
 1. Check the roles and the mount exist (the installer creates them; an install upgraded
    from before ADR-0051 has neither):
    ```
