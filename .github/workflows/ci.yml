@@ -138,7 +138,13 @@ jobs:
       # as root inside its container, so TestCaddy cannot connect as the runner's own
       # user. The agent runs as root on a real node (ADR-0030).
       - name: Integration tests
-        run: sudo -E env "PATH=$PATH" go test -tags=integration -race -count=1 ./internal/... ./cmd/... ./providers/docker/...
+        run: |
+          sudo env "PATH=$PATH" \
+            BOHUX_TEST_POSTGRES_URL="$BOHUX_TEST_POSTGRES_URL" \
+            BOHUX_TEST_TEMPORAL_ADDRESS="$BOHUX_TEST_TEMPORAL_ADDRESS" \
+            BOHUX_TEST_OPENBAO_ADDR="$BOHUX_TEST_OPENBAO_ADDR" \
+            BOHUX_TEST_OPENBAO_TOKEN="$BOHUX_TEST_OPENBAO_TOKEN" \
+            go test -tags=integration -race -count=1 ./internal/... ./cmd/... ./providers/docker/...
 
   # Provider conformance against a real Docker daemon (CLAUDE.md rule 4, ADR-0025).
   conformance-docker:
@@ -193,7 +199,7 @@ jobs:
       # (ADR-0045 item 4, docs/providers/swarm.md). The agent runs as root on a real
       # node, so this is how the provider is actually used.
       - name: Swarm conformance
-        run: sudo -E env "PATH=$PATH" go test -count=1 -v -timeout 20m ./providers/_conformance -provider=swarm
+        run: sudo env "PATH=$PATH" go test -count=1 -v -timeout 20m ./providers/_conformance -provider=swarm
 
   # Control plane + agent + Docker + Temporal in one process tree: deploy, recreate,
   # roll back a broken Release (rule 5), build from Git, and the backup → wipe →
@@ -299,7 +305,19 @@ jobs:
           cat /tmp/temporal.log; exit 1
       # As root, for the same reason as the conformance job above.
       - name: End to end on Swarm
-        run: sudo -E env "PATH=$PATH" go test -tags=integration,e2e -count=1 -v -timeout 25m -run TestSwarm ./cmd/bohux
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" \
+            BOHUX_TEST_POSTGRES_URL="$BOHUX_TEST_POSTGRES_URL" \
+            BOHUX_TEST_TEMPORAL_ADDRESS="$BOHUX_TEST_TEMPORAL_ADDRESS" \
+            BOHUX_TEST_SWARM_HOST="$BOHUX_TEST_SWARM_HOST" \
+            go test -tags=integration,e2e -count=1 -v -timeout 25m -run TestSwarm ./cmd/bohux \
+            2>&1 | tee /tmp/e2e-swarm.log
+          # These tests skip themselves when their environment is missing, and a skip
+          # must not read as a pass: this job exists to run them. It caught exactly
+          # that when sudo dropped BOHUX_TEST_SWARM_HOST.
+          grep -q -- '--- PASS: TestSwarmDeployRollsBackABrokenRelease' /tmp/e2e-swarm.log
+          grep -q -- '--- PASS: TestSwarmDeployAndRollback' /tmp/e2e-swarm.log
 
   # v0.1's exit criterion on a real host with systemd (ADR-0030, ADR-0031): install
   # Bohux, deploy a new version of itself, roll itself back, recover from a version of
