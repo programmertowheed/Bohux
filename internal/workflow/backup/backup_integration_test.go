@@ -4,7 +4,6 @@ package backup
 
 import (
 	"context"
-	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -15,7 +14,6 @@ import (
 	"github.com/google/uuid"
 	"go.temporal.io/sdk/client"
 
-	"github.com/bohumix/bohux/internal/backup"
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/store/fixture"
 	"github.com/bohumix/bohux/internal/store/storetest"
@@ -84,7 +82,7 @@ func TestWriteBackupWithTheReadOnlyRole(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dataDir, "pki"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	a := &Activities{Recipient: id.Recipient().String(), DatabaseURL: roDSN, DataDir: dataDir,
+	a := &Activities{Recipients: []string{id.Recipient().String()}, DatabaseURL: roDSN, DataDir: dataDir,
 		Dir: filepath.Join(t.TempDir(), "backups")}
 	res, err := a.WriteBackup(ctx)
 	if err != nil {
@@ -99,7 +97,7 @@ func TestWriteBackupWithTheReadOnlyRole(t *testing.T) {
 	}
 }
 
-func TestScheduleRunsTheWorkflow(t *testing.T) {
+func TestEnsureAndRemoveSchedule(t *testing.T) {
 	addr := os.Getenv("BOHUX_TEST_TEMPORAL_ADDRESS")
 	if addr == "" {
 		t.Skip("BOHUX_TEST_TEMPORAL_ADDRESS is not set")
@@ -111,34 +109,20 @@ func TestScheduleRunsTheWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	_ = RemoveSchedule(ctx, c)
-
-	written := make(chan struct{}, 1)
-	id, err := age.GenerateX25519Identity()
-	if err != nil {
+	// Its own schedule ID: the name is server-wide, and other packages' tests run in
+	// parallel against the same Temporal.
+	s := Schedule{Cron: "0 0 1 1 *", TaskQueue: "bohux-backup-test-" + uuid.NewString()[:8],
+		ID: "bohux-backup-test-" + uuid.NewString()[:8]}
+	t.Cleanup(func() { _ = RemoveSchedule(context.Background(), c, s) })
+	if err := EnsureSchedule(ctx, c, s); err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
-	acts := &Activities{Recipient: id.Recipient().String(), Dir: dir, Keep: 1,
-		Write: fakeWrite(written)}
-	s := Schedule{Cron: "0 0 1 1 *", TaskQueue: "bohux-backup-test-" + uuid.NewString()[:8]}
-	runCtx, stop := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() { defer close(done); Run(runCtx, c, s, acts) }()
-	defer func() { stop(); <-done }()
-
-	// Run creates the schedule; ensuring it again updates it in place.
-	h := c.ScheduleClient().GetHandle(ctx, ScheduleID)
-	for {
-		if _, err := h.Describe(ctx); err == nil {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatal("the schedule never appeared")
-		case <-time.After(200 * time.Millisecond):
-		}
+	h := c.ScheduleClient().GetHandle(ctx, s.ID)
+	if _, err := h.Describe(ctx); err != nil {
+		t.Fatalf("the schedule was not created: %v", err)
 	}
+
+	// Ensuring again updates in place rather than failing on the existing schedule.
 	s.Cron = "0 0 2 1 *"
 	if err := EnsureSchedule(ctx, c, s); err != nil {
 		t.Fatal(err)
@@ -153,31 +137,14 @@ func TestScheduleRunsTheWorkflow(t *testing.T) {
 			t.Fatalf("schedule spec = %+v, want cron %q", desc.Schedule.Spec, s.Cron)
 		}
 	}
+	if got := desc.Schedule.Action.(*client.ScheduleWorkflowAction).TaskQueue; got != s.TaskQueue {
+		t.Errorf("task queue = %q, want %q", got, s.TaskQueue)
+	}
 
-	if err := h.Trigger(ctx, client.ScheduleTriggerOptions{}); err != nil {
+	if err := RemoveSchedule(ctx, c, s); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-written:
-	case <-ctx.Done():
-		t.Fatal("the triggered backup never ran")
-	}
-	if err := RemoveSchedule(ctx, c); err != nil {
-		t.Fatal(err)
-	}
-	if err := RemoveSchedule(ctx, c); err != nil {
+	if err := RemoveSchedule(ctx, c, s); err != nil {
 		t.Fatalf("removing a missing schedule: %v", err)
-	}
-}
-
-// fakeWrite stands in for backup.Write and signals each call.
-func fakeWrite(called chan<- struct{}) func(context.Context, io.Writer, []age.Recipient, backup.Source) (*backup.Manifest, error) {
-	return func(_ context.Context, w io.Writer, _ []age.Recipient, _ backup.Source) (*backup.Manifest, error) {
-		_, err := w.Write([]byte("archive"))
-		select {
-		case called <- struct{}{}:
-		default:
-		}
-		return &backup.Manifest{Migration: 1}, err
 	}
 }

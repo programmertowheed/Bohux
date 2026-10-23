@@ -7,11 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"filippo.io/age"
 	"github.com/stretchr/testify/mock"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 
 	"github.com/bohumix/bohux/internal/backup"
@@ -71,6 +73,55 @@ func recipient(t *testing.T) string {
 	return id.Recipient().String()
 }
 
+// An archive is encrypted to the operator's key and, when drills are on, to the
+// drill's as well (ADR-0051 item 2): any one of their private keys decrypts it. A
+// recipient that is not a key fails before anything is written, and is not retried.
+func TestWriteBackupRecipients(t *testing.T) {
+	tests := []struct {
+		name       string
+		recipients []string
+		wantTo     int
+		wantErr    string
+	}{
+		{name: "one", recipients: []string{recipient(t)}, wantTo: 1},
+		{name: "the operator's and the drill's", recipients: []string{recipient(t), recipient(t)}, wantTo: 2},
+		{name: "none", wantErr: "no recipient"},
+		{name: "one of them is not a key", recipients: []string{recipient(t), "age1-nope"}, wantErr: "age public key"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "backups")
+			gotTo := 0
+			a := &Activities{Recipients: tt.recipients, Dir: dir, Now: func() time.Time { return time.Unix(0, 0).UTC() },
+				Write: func(_ context.Context, w io.Writer, to []age.Recipient, _ backup.Source) (*backup.Manifest, error) {
+					gotTo = len(to)
+					_, _ = w.Write([]byte("archive"))
+					return &backup.Manifest{Migration: 1}, nil
+				}}
+			_, err := a.WriteBackup(context.Background())
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("WriteBackup() = %v, want %q", err, tt.wantErr)
+				}
+				var nonRetryable *temporal.ApplicationError
+				if !errors.As(err, &nonRetryable) || !nonRetryable.NonRetryable() {
+					t.Errorf("WriteBackup() = %v, want a non-retryable error: a bad key stays bad", err)
+				}
+				if entries, _ := os.ReadDir(dir); len(entries) > 0 {
+					t.Errorf("a refused recipient still wrote %d files", len(entries))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("WriteBackup() = %v", err)
+			}
+			if gotTo != tt.wantTo {
+				t.Errorf("encrypted to %d recipients, want %d", gotTo, tt.wantTo)
+			}
+		})
+	}
+}
+
 func TestWriteBackup(t *testing.T) {
 	at := time.Date(2026, 10, 21, 3, 17, 0, 0, time.UTC)
 	tests := []struct {
@@ -109,7 +160,7 @@ func TestWriteBackup(t *testing.T) {
 			if r == "" {
 				r = recipient(t)
 			}
-			a := &Activities{Recipient: r, Dir: dir, Write: tt.write, Now: func() time.Time { return at }}
+			a := &Activities{Recipients: []string{r}, Dir: dir, Write: tt.write, Now: func() time.Time { return at }}
 			res, err := a.WriteBackup(context.Background())
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err = %v, want error %v", err, tt.wantErr)
