@@ -37,29 +37,39 @@ work is in right now*.
 
 ## Current focus
 
-- **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S26 — SLO gate and automatic rollback (v0.3, ADR-0050) done, after
-  S21–S25. v0.2 is done except the items O35 lists.
-- **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
-  owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** every remaining roadmap item needs an owner decision. Ask the
-  owner to pick the next slice: v0.2's O35 (managed Postgres/Redis, envelope
-  encryption, team invites) or a v0.3 item (the SLO gate's optional PromQL source with
-  OTEL correlation and deploy markers, preview environments, migrations as a gated
-  step, scheduled restore drills, cron jobs, Compose apps, volumes and S3 backups), or
-  hardening: a Swarm end-to-end test, CI via a PR (O24). Review the proposed ADRs
-  (O19–O43).
+- **Working branch:** `claude/loving-shannon-rplqcg`. The session of 2026-10-23 was
+  assigned this branch rather than `claude/relaxed-rubin-76m7dl`, which is merged into
+  `main` (PR #1) and no longer carries unmerged work. New work starts from `main`.
+- **Slice:** S27 — scheduled restore drills (v0.3, ADR-0051). **S27a done**: the drill
+  engine and `bohux admin drill`. **S27b is 🔄 next**: the weekly Temporal schedule,
+  the control plane's config, and the installer's two roles and drill mount.
+- **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). v0.2 is done
+  except the items O35 lists. Open for the owner: O2 (footprint on a 2 GB VPS) and the
+  proposed ADRs (O19–O44).
+- **Exact next step:** S27b, as the next session prompt below sets out. It needs no
+  owner decision — ADR-0051 already decided the schedule's shape. After S27b, every
+  remaining roadmap item does: v0.2's O35 (managed Postgres/Redis, envelope encryption,
+  team invites) or a v0.3 item (the SLO gate's optional PromQL source with OTEL
+  correlation and deploy markers, preview environments, migrations as a gated step,
+  cron jobs, Compose apps, volumes and S3 backups), or hardening: a Swarm end-to-end
+  test, and checking the CI matrix that finally ran on `main` with PR #1 (O24).
 
 ## Next session prompt
 
 > Read CLAUDE.md and docs/plan/03-progress.md. Start Postgres, Docker, Temporal and
-> OpenBao (tracker *Known gaps*, including the disk and swarm-daemon notes). Then ask
-> me, with the choices *Current focus* lists, which slice to take next; write its ADR
-> first as proposed, then the code, on branch `claude/relaxed-rubin-76m7dl`. Verify
-> with build, vet, golangci-lint (also with the integration tag), unit, integration,
-> e2e, and the conformance suites the change touches. Tick boxes, update the tracker
-> and the next session prompt, commit, push, and give me the next prompt. If you hit
-> a decision only I can make, ask me before building.
+> OpenBao (tracker *Known gaps*, including the proto-generation, disk and swarm-daemon
+> notes — `gen/` is not committed, so regenerate it before building). Then do **S27b**
+> on branch `claude/loving-shannon-rplqcg`: put the restore drill on a weekly Temporal
+> schedule as ADR-0051 decided — `internal/workflow/drill` beside
+> `internal/workflow/backup` on the same task queue and worker, the backup's recipient
+> list gaining the drill key's public half, `controlplane.DrillConfig` and its
+> `--drill-*` flags, the verdict written to `<backup dir>/drills/<time>.json` under the
+> archives' retention, and the installer creating `bohux_drill`, `bohux_drill_admin`
+> (with `GRANT SET ON PARAMETER session_replication_role`) and the `bohux-drill` KV
+> mount. Test the failure path first, as S27a did. Verify with build, vet,
+> golangci-lint (both tag sets), unit, integration and e2e. Tick boxes, update the
+> tracker and the next session prompt, commit, push, and give me the next prompt. If
+> you hit a decision only I can make, ask me before building.
 
 ## Waiting on the owner
 
@@ -107,6 +117,7 @@ work is in right now*.
 | O41 | Accept or reject ADR-0048 (a Deployment's notifications run in their own `notify/<deployment id>` workflow, a child abandoned when the deploy run ends, so the App is free at once; runs from before keep notifying inline behind a version gate; recorded histories replayed in a unit test). Amends ADR-0038 item 3 | S24 |
 | O42 | Accept or reject ADR-0049 (canary deploys: strategy CANARY with one weight 1–99% and a bake 1m–24h per deployment; the weight rides on the workload outside the spec hash; Caddy weighted round robin across the two slots; the workflow's CANARY state watches health with a 30 s grace, then promotes by reassigning with weight 0; PromoteDeployment ends the bake, CancelDeployment aborts). Changes deployment.proto and agent.proto; migration 00024 | S25 |
 | O43 | Accept or reject ADR-0050 (SLO gate: Caddy writes an access log beside its admin socket with only upstream, status and duration; the agent tails it and reports per-slot counters in memory; `App.slo` = availability 0.9–0.99999, optional latency threshold (a histogram bound) and target, max burn rate (default 10), watch 1m–1h (default 10m); burn rate over the window since the hold began, no verdict under 50 requests; judged during a canary's bake and, otherwise, in a new `VERIFYING` state; violations roll back with `SLO_AVAILABILITY`/`SLO_LATENCY`). Item 6 amended while proposed: the CLI, not a deploy log, says an unrouted App is judged by health alone. Changes app.proto, agent.proto, deployment.proto; migration 00025 | S26 |
+| O44 | Accept or reject ADR-0051 (scheduled restore drills: a weekly Temporal schedule on the backup's queue; opt-in through a drill age identity on the host whose public half becomes a second recipient on every archive; throwaway state per run — a scratch database created by a `CREATEDB` `bohux_drill` role, a `BYPASSRLS` `bohux_drill_admin` role with `GRANT SET ON PARAMETER session_replication_role` to load the rows, a temp data dir, and a KV mount of its own that the drill wipes; checks beyond restore's own; the verdict logged and written as JSON under the archives' retention; `bohux admin drill` to run one by hand). **The host holding an age private key is the trade-off to weigh** — item 2 keeps the operator's own key off the host, and drills stay off unless an identity is configured. Item 7 (the config keys) was added while proposed. S27a is built on it | S27a, S27b |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -1159,6 +1170,65 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
 
 ## v0.3 slices
 
+### S27 — Scheduled restore drills (ADR-0051)
+Split in two: the drill itself, then the schedule around it. The vision's "backups are
+proven by scheduled restore drills" is only half kept until S27b ships, because
+`TestRestoreDrill` in CI proves the restore *code* against a stack the test built, not
+an install's own archives.
+
+#### S27a — the drill, and `bohux admin drill` ✅
+- [x] Proposed ADR-0051 (O44). The design was checked against a real Postgres 16 before
+      it was written down: a `CREATEDB` owner passes `MigrateTo`'s privileged-role
+      check, the owner **cannot** `COPY` into a `FORCE ROW LEVEL SECURITY` table
+      ("COPY FROM not supported with row-level security"), a `BYPASSRLS` role can once
+      the owner grants it, `SET session_replication_role` needs
+      `GRANT SET ON PARAMETER`, and a role with no grants in the live database sees
+      none of its tables. That is what fixed the two-role split in item 3
+- [x] `internal/drill`: `Run` restores an archive into a scratch database, a temp data
+      directory and its own KV mount, and tears all three down pass or fail; `Verdict`
+      and `Check` carry names, counts and times only (rule 3)
+- [x] Checks beyond restore's own: the manifest's tables all present, row counts per
+      table, a live tenant, a live **owner token** (an install nobody can administer is
+      not restored), the node CA present, loadable, unexpired and reported by pin, and
+      every live secret ref readable at the version Postgres records for it
+- [x] Failure path tested first (rule 5): a truncated archive, a wrong identity, an
+      archive with no owner token, an archive whose values were never backed up, and a
+      drill with no mount — each leaves no scratch database, no secret in the drill
+      mount and no temp directory, and the verdict comes back for the caller to record
+- [x] Found by the tests: restore refuses a secrets-bearing archive with no OpenBao
+      before any check runs, so that case is a `restore` failure, not a `secrets` one;
+      and the reachable `secrets` failure is an archive whose **metadata** is there and
+      whose values are not (a backup taken with no OpenBao configured) — now its own
+      test
+- [x] `bohux admin drill` (`--json` for the verdict the schedule will record); the
+      drill-mount guard moved ahead of opening the identity file, so being pointed at
+      the live mount is refused before anything is touched
+- [x] Checked live on a real install: a backup taken before the control plane had ever
+      started failed `node-ca` ("every agent would have to re-register"), and one taken
+      after it passed every check with a CA pin matching `openssl`'s on the live file.
+      No scratch database, mount path or temp directory left behind
+- [x] `docs/reference/config.md` (with the private-key-on-the-host warning), runbook
+      Section D (drill an archive, read each failure by check name, create the roles and
+      mount on an upgraded install), `docs/runbooks/README.md`
+
+#### S27b — the weekly schedule and the install 🔄
+- [ ] `internal/workflow/drill`: `DrillWorkflow` and the `bohux-restore-drill-weekly`
+      schedule on the backup's task queue and worker (ADR-0051 item 1), picking the
+      newest archive in the backup directory
+- [ ] The backup activity's `Recipient` becomes a list, so the drill key's public half
+      rides on every archive (ADR-0051 item 2); note that the first drill after enabling
+      fails until the next nightly archive exists, and say so in the verdict
+- [ ] `controlplane.DrillConfig` and `--drill-*` flags, with drills off unless an
+      identity file and a backup recipient are both configured
+- [ ] The verdict written to `<backup dir>/drills/<UTC time>.json`, pruned with the
+      archives; a failed check fails the workflow
+- [ ] Installer: `bohux_drill` and `bohux_drill_admin` (with
+      `GRANT SET ON PARAMETER session_replication_role`), the `bohux-drill` KV mount,
+      and the new options in `scripts/install.sh`
+- [ ] Failure path first again: a schedule whose archive directory is empty, and a
+      failed drill that still leaves the mount clean for the next run
+- [ ] Tick the roadmap's "Scheduled automated restore drills"
+
 ### S26 — SLO gate and automatic rollback from ingress traffic (ADR-0050) ✅
 - [x] Owner chose: metrics from the node's ingress (PromQL optional, later), an SLO as
       a target with a burn-rate threshold, judged during a canary's bake and a watch
@@ -1404,6 +1474,29 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   1.24–1.26). Raising the `go` directive is cheap and its own commit when wanted.
 
 ## Session log (newest first)
+
+### 2026-10-23 (S27a) — branch `claude/loving-shannon-rplqcg`
+- A fresh container and a new branch: `claude/relaxed-rubin-76m7dl` is merged into
+  `main` (PR #1), so this branch was fast-forwarded to `main` and work continues from
+  there. Full environment setup was needed again — Postgres, Docker, Temporal, OpenBao,
+  `buf` and the protoc plugins installed from scratch, and `gen/` regenerated through
+  the scratch-workspace workaround in *Known gaps* (buf.build is still blocked).
+- Owner picked scheduled restore drills. ADR-0051 proposed (O44) after checking the
+  Postgres role mechanics empirically — that is where the two-role split came from.
+  The slice was too big for one session, so it is split: S27a (the drill and the
+  command) is done, S27b (the schedule and the installer) is next.
+- The drill found a real failure on its first live run: an archive taken before the
+  control plane had ever started carries no node CA, which would force every agent to
+  re-register. Exactly the class of failure a drill exists for.
+- Verified: gofmt, build, vet, golangci-lint (plain and with the integration tag, 0
+  issues both), the full unit suite with race, and the integration suite — 23 of 24
+  packages green, including `internal/drill`. The one failure is `TestBuilderRailpack`,
+  the documented gap in *Known gaps* (ghcr.io blobs are blocked here, so the Railpack
+  frontend image has to be hand-built); it was failing before this slice and the slice
+  touches nothing near it. The other four build and image failures of the first run
+  were the missing registry mirror and buildx builder, and pass once *Known gaps*'
+  recipe is applied. Also drilled two real archives by hand on a real install. No
+  provider and no proto changed, so no conformance run; the web UI is untouched.
 
 ### 2026-10-22 (S26) — branch `claude/relaxed-rubin-76m7dl`
 - Owner picked the SLO gate (ingress metrics, target + burn rate, canary bake + watch

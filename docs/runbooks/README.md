@@ -14,14 +14,16 @@ Each of these maps to a failure mode in `docs/plan/01-architecture.md`.
 - [ ] Agent upgrade and staged rollback
 - [ ] Node drain and cordon
 - [ ] Certificate rotation
-- [x] Database restore (and the scheduled drill that exercises it) — `backup-and-restore.md`;
-      the drill is `TestRestoreDrill` in CI
+- [x] Database restore (and the drill that exercises it) — `backup-and-restore.md`;
+      `TestRestoreDrill` in CI proves the code, and `bohux admin drill` (Section D,
+      ADR-0051) proves an install's own archives. The weekly schedule is S27b.
 - [ ] Break-glass production access
 - [ ] Stuck deployment — diagnosis via workflow history
 
 ## Written
 
-- `backup-and-restore.md` — backup key custody, taking a backup, restoring onto a fresh host
+- `backup-and-restore.md` — backup key custody, taking a backup, drilling an archive,
+  restoring onto a fresh host
 - `control-plane-upgrade.md` — upgrading the control plane with itself, and recovering
   from a bad upgrade
 - `infra-upgrade.md` — upgrading Postgres, Temporal, and OpenBao

@@ -133,6 +133,34 @@ the node CA, so registered agents reconnect without re-registering. Start
 `bohux controlplane` afterwards to finish migrating. The archive holds every secret
 value: store it, and the key, accordingly.
 
+## `bohux admin drill` (ADR-0051)
+
+Proves that an archive restores, by restoring it into throwaway state and checking what
+came back. It creates a scratch database, a temporary data directory and secret paths in
+a KV mount of its own, and destroys all three before it returns, pass or fail. It never
+touches live state.
+
+| Flag | Environment | Default | Meaning |
+|---|---|---|---|
+| `--in` | | none, required | Archive to prove. It is opened read-only and never modified. |
+| `--identity` | `BOHUX_DRILL_IDENTITY_FILE` | none, required | age identity file that decrypts the archive. A drill needs the private key, unlike a backup — see the warning below. |
+| `--drill-database-url` | `BOHUX_DRILL_DATABASE_URL` | none, required | DSN of a role with `CREATEDB` and **not** `BYPASSRLS` (the installer's `bohux_drill`). It creates, owns and migrates the scratch database. |
+| `--drill-admin-database-url` | `BOHUX_DRILL_ADMIN_DATABASE_URL` | none, required | DSN of a role with `BYPASSRLS` and `GRANT SET ON PARAMETER session_replication_role` (the installer's `bohux_drill_admin`). It loads the rows, which the schema owner cannot: every table forces row-level security. |
+| `--drill-kv-mount` | `BOHUX_DRILL_KV_MOUNT` | none, required with OpenBao | The KV v2 mount the drill restores secrets into. **The drill wipes this mount** before and after each run, so it must be the drill's own. Giving it the live mount is refused. |
+| `--openbao-address`, `--openbao-token-file` | as for `bohux controlplane` | | Where the drill writes the archive's secret values. Leave the address empty only for an archive with no secrets. |
+| `--openbao-kv-mount` | `BOHUX_OPENBAO_KV_MOUNT` | `secret` | The live mount, so the drill can refuse to be pointed at it. |
+| `--json` | | off | Print the verdict as JSON instead of for a person. |
+
+Neither drill role needs a single grant in the live database, so neither can read or
+write live rows. The exit status is non-zero when a check fails, and the verdict names
+which: `restore`, `tables`, `tenants`, `owner-token`, `node-ca`, `secrets`, `cleanup`.
+
+> **Enabling drills puts an age private key on the host.** Anyone with root there can
+> then decrypt every archive that key is a recipient of. Give drills their own key
+> rather than the operator's, keep the operator's key off the host, and treat the
+> off-host copy as the disaster-recovery copy. An install that cannot accept this runs
+> `bohux admin drill` from elsewhere, against a copied archive.
+
 ## CLI: `bohux deploy | rollback | scale | logs | exec`
 
 The CLI is a client of the public API (CLAUDE.md rule 8). It has no config file in

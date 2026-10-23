@@ -21,6 +21,7 @@ identity like the root password of every App.
 - First time, or rotating the key → **Section K** (key custody).
 - Checking the nightly backup → **Section N**.
 - Taking a backup by hand → **Section B**.
+- Proving an archive restores, without a restore → **Section D** (drill).
 - Control plane state lost → **Section R** (restore).
 - Archive will not decrypt → check you have the identity that matches the recipient the
   backup was made for (Section K, step K3). Without it the archive is unreadable: there
@@ -57,6 +58,70 @@ every night at 03:17 UTC and keeps the last seven (ADR-0033).
    ```
    Expected: a new archive in step 1's list within a minute.
 4. Copy archives off the host: the volume is on the same disk as the data.
+
+## D — Drill an archive (prove it restores)
+A backup nobody has restored is a hope. A drill restores an archive into throwaway state
+— a scratch database, a temporary data directory, a KV mount of its own — checks what
+came back, and destroys all of it (ADR-0051). It never touches live state, and an App
+keeps serving throughout.
+
+**This section needs the identity on the host.** Prefer a key that exists only for
+drills, so the operator's key from Section K stays off the host. Give the drill
+recipient to `--recipient` alongside the operator's, or archives written before the
+drill key existed cannot be drilled.
+
+1. Check the roles and the mount exist (the installer creates them; an install upgraded
+   from before ADR-0051 has neither):
+   ```
+   sudo bash -c 'source /etc/bohux/infra/.env
+     PGPASSWORD=$POSTGRES_PASSWORD psql -h 127.0.0.1 -U postgres -At \
+       -c "SELECT rolname, rolcreatedb, rolbypassrls FROM pg_roles WHERE rolname LIKE '"'"'bohux_drill%'"'"'"'
+   ```
+   Expected: `bohux_drill|t|f` and `bohux_drill_admin|f|t`. If either is missing, see
+   step D4.
+2. Drill the newest archive:
+   ```
+   sudo bash -c 'source /etc/bohux/infra/.env
+     bao_ip=$(docker inspect -f "{{.NetworkSettings.Networks.bohux-infra.IPAddress}}" bohux-infra-openbao-1)
+     newest=$(ls -1 /var/lib/docker/volumes/bohux-backups/_data/bohux-*.backup | tail -1)
+     bohux admin drill --in "$newest" \
+       --identity /etc/bohux/drill.key \
+       --drill-database-url "postgres://bohux_drill:${BOHUX_DRILL_PASSWORD}@127.0.0.1:5432/postgres?sslmode=disable" \
+       --drill-admin-database-url "postgres://bohux_drill_admin:${BOHUX_DRILL_ADMIN_PASSWORD}@127.0.0.1:5432/postgres?sslmode=disable" \
+       --openbao-address "http://${bao_ip}:8200" --openbao-token-file /etc/bohux/openbao.token \
+       --drill-kv-mount bohux-drill'
+   ```
+   Expected: `Restore drill PASSED`, then one `[ok  ]` line per check and a summary.
+   The exit status is non-zero if any check failed.
+3. Read a failure by its check name:
+   - `restore` — the archive did not decrypt or did not load. Wrong identity, or a
+     truncated archive. Try the previous archive; if that also fails, escalate.
+   - `node-ca` — the archive carries no node CA, so restoring it would make every agent
+     re-register. Usually a backup taken before the control plane first started. Take a
+     fresh one (Section B) and drill that.
+   - `owner-token` — nothing in the archive could administer the restored install.
+     Create an owner token (`bohux token create`) and take a fresh backup.
+   - `secrets` — Postgres records a secret version that is not in the archive. Almost
+     always a backup taken with no OpenBao configured: check `--openbao-address` is set
+     wherever backups run, then take a fresh one.
+   - `tables`, `tenants` — the archive is incomplete. Escalate.
+   - `cleanup` — the drill could not remove its own scratch database or mount. Drop the
+     `bohux_drill_*` database by hand before the next drill; it is not live state.
+4. If the roles or the mount are missing, create them once (values from
+   `/etc/bohux/infra/.env`):
+   ```
+   sudo bash -c 'source /etc/bohux/infra/.env
+     PGPASSWORD=$POSTGRES_PASSWORD psql -h 127.0.0.1 -U postgres \
+       -c "CREATE ROLE bohux_drill LOGIN PASSWORD '"'"'$BOHUX_DRILL_PASSWORD'"'"' CREATEDB" \
+       -c "CREATE ROLE bohux_drill_admin LOGIN PASSWORD '"'"'$BOHUX_DRILL_ADMIN_PASSWORD'"'"' BYPASSRLS" \
+       -c "GRANT SET ON PARAMETER session_replication_role TO bohux_drill_admin"
+     bao_ip=$(docker inspect -f "{{.NetworkSettings.Networks.bohux-infra.IPAddress}}" bohux-infra-openbao-1)
+     curl -s -X POST -H "X-Vault-Token: $(cat /etc/bohux/openbao.token)" \
+       -d "{\"type\":\"kv\",\"options\":{\"version\":\"2\"}}" \
+       "http://${bao_ip}:8200/v1/sys/mounts/bohux-drill"'
+   ```
+   Neither role is granted anything in Bohux's own database, so neither can read or
+   write live rows.
 
 ## B — Take a backup by hand (on the Bohux host)
 1. Load the admin password:
@@ -123,6 +188,8 @@ every night at 03:17 UTC and keeps the last seven (ADR-0033).
 - `curl -s http://127.0.0.1:7400/healthz` → `ok`.
 - With the **restored** owner token (`BOHUX_TOKEN`), `bohux rollback <app> -p <project> -e <env>`
   succeeds: this is the drill CI runs (`TestRestoreDrill`, ADR-0020 item 7).
+- Without doing a restore at all: `bohux admin drill` on the newest archive reports
+  `PASSED` (Section D).
 - Agents of the old host reconnect without re-registering (the node CA is the same).
 
 ## Rollback
