@@ -172,6 +172,18 @@ func copyMap(m map[string]string) map[string]string {
 }
 
 // Status reports the observed state.
+// healthPath is the only path this fake's workloads serve, as the images the
+// conformance suite runs against real targets do. A fake that reported every workload
+// healthy would let the suite's unhealthy case pass without being exercised.
+const healthPath = "/healthz"
+
+// served reports whether the spec's health check would succeed against a workload
+// that serves healthPath and nothing else. No check declared means nothing to fail.
+func served(spec provider.Spec) bool {
+	h := spec.Runtime.GetHealth()
+	return h == nil || h.GetPath() == healthPath
+}
+
 func (p *Provider) Status(_ context.Context, ref provider.ResourceRef) (provider.Status, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -187,8 +199,11 @@ func (p *Provider) Status(_ context.Context, ref provider.ResourceRef) (provider
 	}
 	n := replicas(w.spec)
 	running := allRunning(w, n)
-	st := provider.Status{Exists: true, Hash: w.hash, Running: running, Healthy: running,
-		ReadyReplicas: ready}
+	st := provider.Status{Exists: true, Hash: w.hash, Running: running,
+		Healthy: running && served(w.spec), ReadyReplicas: ready}
+	if running && !st.Healthy {
+		st.Message = "health check returned 404 for " + w.spec.Runtime.GetHealth().GetPath()
+	}
 	if running && w.spec.Ingress {
 		st.Endpoints = map[int32]string{}
 		for _, port := range w.spec.Runtime.GetPorts() {

@@ -23,6 +23,11 @@ Adding a setting means adding it here in the same commit.
 | `--backup-dir` | `BOHUX_BACKUP_DIR` | `/var/lib/bohux-backups` | Where archives go, as `bohux-<UTC time>.backup`, mode 0600. Its own volume in the install. |
 | `--backup-schedule` | `BOHUX_BACKUP_SCHEDULE` | `17 3 * * *` | When, as a 5-field cron expression in UTC. |
 | `--backup-keep` | `BOHUX_BACKUP_KEEP` | `7` | How many archives stay; older ones are deleted after each successful backup, never after a failed one. |
+| `--drill-identity-file` | `BOHUX_DRILL_IDENTITY_FILE` (or the value in `BOHUX_DRILL_IDENTITY`) | empty | age identity the weekly restore drill decrypts archives with (ADR-0051). Empty disables drills and removes a schedule an earlier start created. Its **public** half is added as a second recipient on every archive, so archives written before this was set cannot be drilled. Give drills their own key and keep the operator's off the host — see the warning under `bohux admin drill`. |
+| `--drill-database-url` | `BOHUX_DRILL_DATABASE_URL` | none, required with an identity | DSN of a role with `CREATEDB` and **not** `BYPASSRLS` (the installer's `bohux_drill`). It creates, owns and migrates each run's scratch database. Point it at the maintenance database (`/postgres`), not at Bohux's own. |
+| `--drill-admin-database-url` | `BOHUX_DRILL_ADMIN_DATABASE_URL` | none, required with an identity | DSN of a role with `BYPASSRLS` and `GRANT SET ON PARAMETER session_replication_role` (the installer's `bohux_drill_admin`). It loads the rows, which the schema owner cannot: every table forces row-level security. Neither drill role is granted anything in Bohux's own database. |
+| `--drill-kv-mount` | `BOHUX_DRILL_KV_MOUNT` | empty | The KV v2 mount the drill restores secrets into (the installer's `bohux-drill`). **The drill wipes it** before and after each run; naming the live mount is refused at start. Empty means the drill cannot prove an archive's secrets, and says so. |
+| `--drill-schedule` | `BOHUX_DRILL_SCHEDULE` | `47 4 * * 0` | When, as a 5-field cron expression in UTC. Sunday 04:47 by default, after the nightly archive. Drills share the backup's task queue and worker. |
 | `--smtp-addr` | `BOHUX_SMTP_ADDR` | empty | SMTP relay (`host:port`) for email notification channels (ADR-0043). Port 465 is implicit TLS; any other port must offer `STARTTLS`, or nothing is sent. The certificate is checked against the system roots. Empty: `EMAIL` channels are refused. |
 | `--smtp-from` | `BOHUX_SMTP_FROM` | none, required with an address | Sender address of notification mail. |
 | `--smtp-username` | `BOHUX_SMTP_USERNAME` | empty | SMTP username (`AUTH PLAIN`, only after TLS). |
@@ -132,6 +137,34 @@ every row back, rewrites every secret version so version numbers match, and rest
 the node CA, so registered agents reconnect without re-registering. Start
 `bohux controlplane` afterwards to finish migrating. The archive holds every secret
 value: store it, and the key, accordingly.
+
+## `bohux admin drill` (ADR-0051)
+
+Proves that an archive restores, by restoring it into throwaway state and checking what
+came back. It creates a scratch database, a temporary data directory and secret paths in
+a KV mount of its own, and destroys all three before it returns, pass or fail. It never
+touches live state.
+
+| Flag | Environment | Default | Meaning |
+|---|---|---|---|
+| `--in` | | none, required | Archive to prove. It is opened read-only and never modified. |
+| `--identity` | `BOHUX_DRILL_IDENTITY_FILE` | none, required | age identity file that decrypts the archive. A drill needs the private key, unlike a backup — see the warning below. |
+| `--drill-database-url` | `BOHUX_DRILL_DATABASE_URL` | none, required | DSN of a role with `CREATEDB` and **not** `BYPASSRLS` (the installer's `bohux_drill`). It creates, owns and migrates the scratch database. |
+| `--drill-admin-database-url` | `BOHUX_DRILL_ADMIN_DATABASE_URL` | none, required | DSN of a role with `BYPASSRLS` and `GRANT SET ON PARAMETER session_replication_role` (the installer's `bohux_drill_admin`). It loads the rows, which the schema owner cannot: every table forces row-level security. |
+| `--drill-kv-mount` | `BOHUX_DRILL_KV_MOUNT` | none, required with OpenBao | The KV v2 mount the drill restores secrets into. **The drill wipes this mount** before and after each run, so it must be the drill's own. Giving it the live mount is refused. |
+| `--openbao-address`, `--openbao-token-file` | as for `bohux controlplane` | | Where the drill writes the archive's secret values. Leave the address empty only for an archive with no secrets. |
+| `--openbao-kv-mount` | `BOHUX_OPENBAO_KV_MOUNT` | `secret` | The live mount, so the drill can refuse to be pointed at it. |
+| `--json` | | off | Print the verdict as JSON instead of for a person. |
+
+Neither drill role needs a single grant in the live database, so neither can read or
+write live rows. The exit status is non-zero when a check fails, and the verdict names
+which: `restore`, `tables`, `tenants`, `owner-token`, `node-ca`, `secrets`, `cleanup`.
+
+> **Enabling drills puts an age private key on the host.** Anyone with root there can
+> then decrypt every archive that key is a recipient of. Give drills their own key
+> rather than the operator's, keep the operator's key off the host, and treat the
+> off-host copy as the disaster-recovery copy. An install that cannot accept this runs
+> `bohux admin drill` from elsewhere, against a copied archive.
 
 ## CLI: `bohux deploy | rollback | scale | logs | exec`
 

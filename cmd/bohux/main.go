@@ -27,6 +27,7 @@ import (
 	"github.com/bohumix/bohux/internal/version"
 	backupwf "github.com/bohumix/bohux/internal/workflow/backup"
 	"github.com/bohumix/bohux/internal/workflow/deploy"
+	drillwf "github.com/bohumix/bohux/internal/workflow/drill"
 	"github.com/bohumix/bohux/providers/docker"
 	"github.com/bohumix/bohux/providers/swarm"
 )
@@ -42,37 +43,44 @@ commands:
   admin bootstrap create a tenant and print its first owner token
   admin backup    write an encrypted archive of Bohux's state
   admin restore   restore an archive onto an empty install
+  admin drill     prove an archive restores, into throwaway state
   agent register  enroll this node with a bootstrap token (once)
   agent run       run the node agent
   mcp             serve the API as MCP tools over stdio, for AI agents`)
 
 // Environment fallbacks for flags. See docs/reference/config.md.
 const (
-	envListenAddr      = "BOHUX_LISTEN_ADDR"
-	envAgentListenAddr = "BOHUX_AGENT_LISTEN_ADDR"
-	envDatabaseURL     = "BOHUX_DATABASE_URL"
-	envDataDir         = "BOHUX_DATA_DIR"
-	envAgentStateDir   = "BOHUX_AGENT_STATE_DIR"
-	envBootstrapToken  = "BOHUX_BOOTSTRAP_TOKEN"
-	envTemporalAddress = "BOHUX_TEMPORAL_ADDRESS"
-	envTemporalNS      = "BOHUX_TEMPORAL_NAMESPACE"
-	envHealthTimeout   = "BOHUX_DEPLOY_HEALTH_TIMEOUT"
-	envOpenBaoAddr     = "BOHUX_OPENBAO_ADDR"
-	envOpenBaoToken    = "BOHUX_OPENBAO_TOKEN_FILE"
-	envOpenBaoMount    = "BOHUX_OPENBAO_KV_MOUNT"
-	envOpenBaoTokenVal = "BOHUX_OPENBAO_TOKEN"
-	envBackupRecipient = "BOHUX_BACKUP_RECIPIENT"
-	envBackupDBURL     = "BOHUX_BACKUP_DATABASE_URL"
-	envBackupDir       = "BOHUX_BACKUP_DIR"
-	envBackupSchedule  = "BOHUX_BACKUP_SCHEDULE"
-	envBackupKeep      = "BOHUX_BACKUP_KEEP"
-	envIngressSocket   = "BOHUX_INGRESS_ADMIN_SOCKET"
-	envACMEEmail       = "BOHUX_ACME_EMAIL"
-	envSMTPAddr        = "BOHUX_SMTP_ADDR"
-	envSMTPFrom        = "BOHUX_SMTP_FROM"
-	envSMTPUsername    = "BOHUX_SMTP_USERNAME"
-	envSMTPPassword    = "BOHUX_SMTP_PASSWORD_FILE"
-	envSMTPPasswordVal = "BOHUX_SMTP_PASSWORD"
+	envListenAddr       = "BOHUX_LISTEN_ADDR"
+	envAgentListenAddr  = "BOHUX_AGENT_LISTEN_ADDR"
+	envDatabaseURL      = "BOHUX_DATABASE_URL"
+	envDataDir          = "BOHUX_DATA_DIR"
+	envAgentStateDir    = "BOHUX_AGENT_STATE_DIR"
+	envBootstrapToken   = "BOHUX_BOOTSTRAP_TOKEN"
+	envTemporalAddress  = "BOHUX_TEMPORAL_ADDRESS"
+	envTemporalNS       = "BOHUX_TEMPORAL_NAMESPACE"
+	envHealthTimeout    = "BOHUX_DEPLOY_HEALTH_TIMEOUT"
+	envOpenBaoAddr      = "BOHUX_OPENBAO_ADDR"
+	envOpenBaoToken     = "BOHUX_OPENBAO_TOKEN_FILE"
+	envOpenBaoMount     = "BOHUX_OPENBAO_KV_MOUNT"
+	envOpenBaoTokenVal  = "BOHUX_OPENBAO_TOKEN"
+	envBackupRecipient  = "BOHUX_BACKUP_RECIPIENT"
+	envBackupDBURL      = "BOHUX_BACKUP_DATABASE_URL"
+	envBackupDir        = "BOHUX_BACKUP_DIR"
+	envBackupSchedule   = "BOHUX_BACKUP_SCHEDULE"
+	envBackupKeep       = "BOHUX_BACKUP_KEEP"
+	envDrillIdentity    = "BOHUX_DRILL_IDENTITY_FILE"
+	envDrillDBURL       = "BOHUX_DRILL_DATABASE_URL"
+	envDrillAdminDBURL  = "BOHUX_DRILL_ADMIN_DATABASE_URL"
+	envDrillKVMount     = "BOHUX_DRILL_KV_MOUNT"
+	envDrillSchedule    = "BOHUX_DRILL_SCHEDULE"
+	envDrillIdentityVal = "BOHUX_DRILL_IDENTITY"
+	envIngressSocket    = "BOHUX_INGRESS_ADMIN_SOCKET"
+	envACMEEmail        = "BOHUX_ACME_EMAIL"
+	envSMTPAddr         = "BOHUX_SMTP_ADDR"
+	envSMTPFrom         = "BOHUX_SMTP_FROM"
+	envSMTPUsername     = "BOHUX_SMTP_USERNAME"
+	envSMTPPassword     = "BOHUX_SMTP_PASSWORD_FILE"
+	envSMTPPasswordVal  = "BOHUX_SMTP_PASSWORD"
 
 	defaultListenAddr      = "127.0.0.1:7400"
 	defaultAgentListenAddr = "127.0.0.1:7443"
@@ -311,6 +319,18 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 				return fmt.Errorf("controlplane: %s: %w", envBackupKeep, err)
 			}
 		}
+		drillIdentity := fs.String("drill-identity-file", getenv(envDrillIdentity),
+			"age identity file the weekly restore drill decrypts archives with; empty disables drills, "+
+				"and its public half becomes a second recipient on every archive (env "+envDrillIdentity+
+				", or the value in "+envDrillIdentityVal+")")
+		drillDB := fs.String("drill-database-url", getenv(envDrillDBURL),
+			"Postgres DSN of the CREATEDB drill role, which owns and migrates each run's scratch database (env "+envDrillDBURL+")")
+		drillAdminDB := fs.String("drill-admin-database-url", getenv(envDrillAdminDBURL),
+			"Postgres DSN of the BYPASSRLS drill role, which loads the rows (env "+envDrillAdminDBURL+")")
+		drillMount := fs.String("drill-kv-mount", getenv(envDrillKVMount),
+			"OpenBao KV v2 mount the drill restores secrets into, and wipes; never the live mount (env "+envDrillKVMount+")")
+		drillSchedule := fs.String("drill-schedule", envOr(getenv, envDrillSchedule, drillwf.DefaultSchedule),
+			"cron expression, UTC, for the weekly restore drill (env "+envDrillSchedule+")")
 		smtpAddr := fs.String("smtp-addr", getenv(envSMTPAddr),
 			"SMTP relay host:port for email notifications; 465 is TLS, others need STARTTLS; empty disables email (env "+envSMTPAddr+")")
 		smtpFrom := fs.String("smtp-from", getenv(envSMTPFrom), "sender address of notification mail (env "+envSMTPFrom+")")
@@ -329,6 +349,9 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 		if *backupKeep < 1 {
 			return fmt.Errorf("controlplane: --backup-keep must be at least 1")
 		}
+		if (*drillIdentity != "" || getenv(envDrillIdentityVal) != "") && (*drillDB == "" || *drillAdminDB == "") {
+			return fmt.Errorf("controlplane: --drill-database-url and --drill-admin-database-url are required with --drill-identity-file")
+		}
 		if *smtpAddr != "" && *smtpFrom == "" {
 			return fmt.Errorf("controlplane: --smtp-from or %s is required with --smtp-addr", envSMTPFrom)
 		}
@@ -342,6 +365,9 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 			OpenBaoMount: *baoMount, OpenBaoToken: getenv(envOpenBaoTokenVal),
 			Backup: controlplane.BackupConfig{Recipient: *backupRecipient, DatabaseURL: *backupDB,
 				Dir: *backupDir, Schedule: *backupSchedule, Keep: *backupKeep},
+			Drill: controlplane.DrillConfig{IdentityFile: *drillIdentity, Identity: getenv(envDrillIdentityVal),
+				DatabaseURL: *drillDB, AdminDatabaseURL: *drillAdminDB, KVMount: *drillMount,
+				Schedule: *drillSchedule},
 			Mail: controlplane.MailConfig{Addr: *smtpAddr, From: *smtpFrom, Username: *smtpUser,
 				PasswordFile: *smtpPass, Password: getenv(envSMTPPasswordVal)}}
 		if err := d.runControlPlane(ctx, cfg); err != nil {
@@ -360,6 +386,8 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, getenv func(s
 			return adminBackup(ctx, args[2:], stdout, getenv)
 		case "restore":
 			return adminRestore(ctx, args[2:], stdout, getenv)
+		case "drill":
+			return adminDrill(ctx, args[2:], stdout, getenv)
 		default:
 			return fmt.Errorf("admin: unknown subcommand %q: %w", args[1], errUsage)
 		}

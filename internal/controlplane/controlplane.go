@@ -1,6 +1,7 @@
 // Package controlplane runs the Bohux control plane: the public API (bohux.v1) over
 // ConnectRPC, the agent endpoint (ADR-0006, ADR-0007), and the deploy worker
-// (ADR-0026), and the nightly backup schedule (ADR-0033).
+// (ADR-0026), and the maintenance schedules: the nightly backup (ADR-0033) and the
+// weekly restore drill (ADR-0051).
 package controlplane
 
 import (
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"filippo.io/age"
 	"go.temporal.io/sdk/client"
 	tlog "go.temporal.io/sdk/log"
 	"golang.org/x/net/http2"
@@ -24,6 +26,7 @@ import (
 	"github.com/bohumix/bohux/internal/agentapi"
 	"github.com/bohumix/bohux/internal/api"
 	"github.com/bohumix/bohux/internal/auth"
+	"github.com/bohumix/bohux/internal/drill"
 	"github.com/bohumix/bohux/internal/notify"
 	"github.com/bohumix/bohux/internal/pki"
 	"github.com/bohumix/bohux/internal/secrets/openbao"
@@ -31,6 +34,8 @@ import (
 	"github.com/bohumix/bohux/internal/webui"
 	backupwf "github.com/bohumix/bohux/internal/workflow/backup"
 	"github.com/bohumix/bohux/internal/workflow/deploy"
+	drillwf "github.com/bohumix/bohux/internal/workflow/drill"
+	"github.com/bohumix/bohux/internal/workflow/maintenance"
 )
 
 // Config is everything the control plane needs at start. See docs/reference/config.md.
@@ -67,6 +72,9 @@ type Config struct {
 	// Backup configures the nightly backup schedule (ADR-0033). An empty Recipient
 	// disables it, and removes a schedule an earlier configuration created.
 	Backup BackupConfig
+	// Drill configures the weekly restore drill (ADR-0051). An empty IdentityFile
+	// disables it, and removes a schedule an earlier configuration created.
+	Drill DrillConfig
 	// Mail is the SMTP relay for EMAIL notification channels (ADR-0043). An empty
 	// Addr disables email.
 	Mail MailConfig
@@ -124,6 +132,74 @@ type BackupConfig struct {
 	Keep int
 }
 
+// DrillConfig is the weekly restore drill's configuration (ADR-0051).
+type DrillConfig struct {
+	// IdentityFile holds the age identity the drill decrypts archives with.
+	// Identity is the identity itself, used when no file is given: the control plane
+	// running as an App receives it as a secret env var (ADR-0032), as it does the
+	// OpenBao token. Never logged. With both empty, drills are off and nothing else
+	// here is read — a drill needs a private key on the host, so it is opt-in.
+	IdentityFile string
+	Identity     string
+	// DatabaseURL is the drill role: LOGIN CREATEDB, no BYPASSRLS. It creates, owns
+	// and migrates each run's scratch database.
+	DatabaseURL string
+	// AdminDatabaseURL is the drill admin role: LOGIN BYPASSRLS, and granted
+	// SET ON PARAMETER session_replication_role. It loads the rows.
+	AdminDatabaseURL string
+	// KVMount is the drill's own OpenBao KV v2 mount, which the drill wipes. It must
+	// not be the live mount.
+	KVMount string
+	// Schedule is a cron expression in UTC; empty means Sunday 04:47.
+	Schedule string
+}
+
+// enabled reports whether drills are configured.
+func (d DrillConfig) enabled() bool { return d.IdentityFile != "" || d.Identity != "" }
+
+// identity reads the drill's age identity and returns it with its public half, which
+// becomes a recipient on every archive (ADR-0051 item 2). The file wins over the
+// value, as it does for the OpenBao token.
+func (d DrillConfig) identity() (ids []age.Identity, recipient string, err error) {
+	from, source := strings.NewReader(d.Identity), "the drill identity"
+	if d.IdentityFile != "" {
+		raw, err := os.ReadFile(d.IdentityFile)
+		if err != nil {
+			return nil, "", fmt.Errorf("read the drill identity: %w", err)
+		}
+		from, source = strings.NewReader(string(raw)), "the drill identity "+d.IdentityFile
+	}
+	ids, err = age.ParseIdentities(from)
+	if err != nil {
+		return nil, "", fmt.Errorf("parse %s: %w", source, err)
+	}
+	// The public half has to come from an X25519 identity: it is what the backup
+	// encrypts to, and age gives no way to recover a recipient from any other kind.
+	// ParseIdentities only yields X25519 keys, so the error below is a guard against
+	// that changing, not a case a file can reach today.
+	for _, id := range ids {
+		if x, ok := id.(*age.X25519Identity); ok {
+			return ids, x.Recipient().String(), nil
+		}
+	}
+	return nil, "", fmt.Errorf("%s holds no age X25519 key", source)
+}
+
+// validate refuses a drill configuration that could not run, or that would wipe live
+// secrets.
+func (d DrillConfig) validate(liveMount string) error {
+	if !d.enabled() {
+		return nil
+	}
+	if d.DatabaseURL == "" || d.AdminDatabaseURL == "" {
+		return errors.New("a restore drill needs both drill database URLs")
+	}
+	if d.KVMount != "" && d.KVMount == liveMount {
+		return fmt.Errorf("the drill KV mount is the live one (%q); a drill wipes its mount", d.KVMount)
+	}
+	return nil
+}
+
 // shutdownTimeout bounds how long in-flight requests get after the context ends.
 const shutdownTimeout = 10 * time.Second
 
@@ -141,6 +217,9 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	if cfg.Backup.Recipient != "" && (cfg.Backup.DatabaseURL == "" || cfg.Backup.Dir == "") {
 		return errors.New("controlplane: a backup recipient needs a backup database URL and directory")
+	}
+	if err := cfg.Drill.validate(cfg.OpenBaoMount); err != nil {
+		return fmt.Errorf("controlplane: %w", err)
 	}
 	ln, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
@@ -196,10 +275,46 @@ func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("controlplane: %w", err)
 	}
+	// Drills are set up before backups: their identity's public half becomes a second
+	// recipient on every archive, so an archive written from now on can be drilled
+	// (ADR-0051 item 2). Archives written before this cannot, and the drill's verdict
+	// says so rather than looking like a corrupt archive.
+	var drills *drillwf.Activities
+	var drillRecipient string
+	if cfg.Drill.enabled() {
+		ids, recipient, err := cfg.Drill.identity()
+		if err != nil {
+			return fmt.Errorf("controlplane: %w", err)
+		}
+		drillRecipient = recipient
+		var drillBao *openbao.Client
+		if bao != nil && cfg.Drill.KVMount != "" {
+			copy := *bao
+			copy.Mount = cfg.Drill.KVMount
+			drillBao = &copy
+		}
+		drills = &drillwf.Activities{
+			Config: drill.Config{
+				Identities: ids, ScratchDSN: cfg.Drill.DatabaseURL, AdminDSN: cfg.Drill.AdminDatabaseURL,
+				Bao: drillBao, LiveMount: cfg.OpenBaoMount,
+			},
+			Dir: cfg.Backup.Dir, Keep: cfg.Backup.Keep,
+		}
+	}
 	var backups *backupwf.Activities
 	if b := cfg.Backup; b.Recipient != "" {
-		backups = &backupwf.Activities{Recipient: b.Recipient, DatabaseURL: b.DatabaseURL, Bao: bao,
+		recipients := []string{b.Recipient}
+		if drillRecipient != "" && drillRecipient != b.Recipient {
+			recipients = append(recipients, drillRecipient)
+		}
+		backups = &backupwf.Activities{Recipients: recipients, DatabaseURL: b.DatabaseURL, Bao: bao,
 			DataDir: cfg.DataDir, Dir: b.Dir, Keep: b.Keep}
+	}
+	if drills != nil && backups == nil {
+		// Nothing writes archives, so there is nothing to drill. Say so rather than
+		// scheduling a drill that fails every Sunday with "no archive".
+		slog.WarnContext(ctx, "restore drills are configured but backups are not; no drill will be scheduled")
+		drills = nil
 	}
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	var workers sync.WaitGroup
@@ -215,7 +330,12 @@ func Serve(ctx context.Context, ln, agentLn net.Listener, cfg Config) error {
 	}()
 	go func() {
 		defer workers.Done()
-		backupwf.Run(workerCtx, temporal, backupwf.Schedule{Cron: cfg.Backup.Schedule}, backups)
+		maintenance.Run(workerCtx, temporal, maintenance.Config{
+			Backups:        backups,
+			BackupSchedule: backupwf.Schedule{Cron: cfg.Backup.Schedule},
+			Drills:         drills,
+			DrillSchedule:  drillwf.Schedule{Cron: cfg.Drill.Schedule},
+		})
 	}()
 	defer func() { stopWorker(); workers.Wait() }()
 

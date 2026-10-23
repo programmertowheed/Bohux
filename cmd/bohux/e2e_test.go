@@ -31,6 +31,7 @@ import (
 	"github.com/bohumix/bohux/internal/store"
 	"github.com/bohumix/bohux/internal/store/fixture"
 	"github.com/bohumix/bohux/internal/store/storetest"
+	"github.com/bohumix/bohux/providers/docker"
 )
 
 // e2eDockerfile serves /healthz on 8080 unless BROKEN is set, and says which version
@@ -70,6 +71,9 @@ func buildImage(t *testing.T, version string, broken bool) string {
 		t.Fatal(err)
 	}
 	args := []string{"build", "-q", "--build-arg", "VERSION=" + version, "--label", "io.bohux.e2e=1"}
+	if n := os.Getenv("BOHUX_TEST_BUILD_NETWORK"); n != "" {
+		args = append(args, "--network", n)
+	}
 	if broken {
 		args = append(args, "--build-arg", "BROKEN=1")
 	}
@@ -115,6 +119,8 @@ type stack struct {
 	hc     *http.Client
 
 	dsn, dataDir, apiAddr, agentAddr, temporal string
+	// stateDir is the agent's state directory, which holds each provider's artifacts.
+	stateDir string
 	// stopCP stops the running control plane and waits for it.
 	stopCP func()
 }
@@ -148,6 +154,13 @@ func (s *stack) controlPlane(dsn, dataDir string) {
 }
 
 func startStack(t *testing.T) *stack {
+	t.Helper()
+	return startStackOn(t, docker.Name)
+}
+
+// startStackOn is startStack with the environment bound to a named provider, so the
+// Swarm end-to-end test can drive the same control plane and agent (ADR-0045).
+func startStackOn(t *testing.T, providerName string) *stack {
 	t.Helper()
 	temporal := os.Getenv("BOHUX_TEST_TEMPORAL_ADDRESS")
 	if temporal == "" {
@@ -211,7 +224,7 @@ func startStack(t *testing.T) *stack {
 	envs := bohuxv1connect.NewEnvironmentServiceClient(hc, base)
 	er, err := envs.CreateEnvironment(ctx, call(token, &bohuxv1.CreateEnvironmentRequest{
 		ProjectId: pr.Msg.GetProject().GetMeta().GetId(), Slug: "prod", IdempotencyKey: "e",
-		ProviderBinding: &bohuxv1.ProviderBinding{Provider: "docker", Target: &bohuxv1.ProviderBinding_NodeId{NodeId: node.GetMeta().GetId()}}}))
+		ProviderBinding: &bohuxv1.ProviderBinding{Provider: providerName, Target: &bohuxv1.ProviderBinding_NodeId{NodeId: node.GetMeta().GetId()}}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,6 +234,7 @@ func startStack(t *testing.T) *stack {
 	}
 	t.Cleanup(st.Close)
 	s.token, s.base, s.env, s.st, s.hc = token, base, er.Msg.GetEnvironment().GetMeta().GetId(), st, hc
+	s.stateDir = stateDir
 	s.tenant = uuid.MustParse(node.GetMeta().GetTenantId())
 	return s
 }
@@ -530,6 +544,7 @@ func terminal(d *bohuxv1.Deployment) bool {
 // removeWorkloads stops what the agent left running: every Compose artifact it wrote
 // is brought down (rule 2 makes that possible without Bohux).
 func removeWorkloads(t *testing.T, stateDir string) {
+	removeSwarmStacks(t)
 	_ = filepath.WalkDir(filepath.Join(stateDir, "workloads"), func(path string, e os.DirEntry, err error) error {
 		if err == nil && e.Name() == "compose.yaml" {
 			if out, err := exec.Command("docker", "compose", "-f", path, "down", "-v", "--remove-orphans").CombinedOutput(); err != nil {
@@ -538,6 +553,23 @@ func removeWorkloads(t *testing.T, stateDir string) {
 		}
 		return nil
 	})
+}
+
+// removeSwarmStacks removes the stacks a Swarm end-to-end run left on the manager.
+// On a daemon that is not a manager the list fails and there is nothing to do.
+func removeSwarmStacks(t *testing.T) {
+	out, err := exec.Command("docker", "stack", "ls", "--format", "{{.Name}}").Output()
+	if err != nil {
+		return
+	}
+	for _, name := range strings.Fields(string(out)) {
+		if !strings.HasPrefix(name, "bohux-") {
+			continue
+		}
+		if out, err := exec.Command("docker", "stack", "rm", name).CombinedOutput(); err != nil {
+			t.Logf("stack rm %s: %v: %s", name, err, out)
+		}
+	}
 }
 
 // TestRestoreDrill is ADR-0020 item 7's drill: deploy two Releases, back up, wipe the

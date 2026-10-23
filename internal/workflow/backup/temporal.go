@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"go.temporal.io/api/enums/v1"
@@ -24,6 +23,17 @@ type Schedule struct {
 	Cron string
 	// TaskQueue overrides TaskQueue (tests use their own).
 	TaskQueue string
+	// ID overrides ScheduleID. An install has one nightly backup, so this is for
+	// tests: the ID is a server-wide name, and two tests sharing it would delete
+	// each other's schedule.
+	ID string
+}
+
+func (s Schedule) id() string {
+	if s.ID == "" {
+		return ScheduleID
+	}
+	return s.ID
 }
 
 func (s Schedule) cron() string {
@@ -40,6 +50,10 @@ func (s Schedule) queue() string {
 	return s.TaskQueue
 }
 
+// Queue is the task queue this schedule starts workflows on, which is the queue the
+// shared worker has to poll.
+func (s Schedule) Queue() string { return s.queue() }
+
 func (s Schedule) action() *client.ScheduleWorkflowAction {
 	return &client.ScheduleWorkflowAction{ID: WorkflowID, Workflow: WorkflowName, TaskQueue: s.queue()}
 }
@@ -49,7 +63,7 @@ func (s Schedule) action() *client.ScheduleWorkflowAction {
 func EnsureSchedule(ctx context.Context, c client.Client, s Schedule) error {
 	spec := client.ScheduleSpec{CronExpressions: []string{s.cron()}}
 	_, err := c.ScheduleClient().Create(ctx, client.ScheduleOptions{
-		ID: ScheduleID, Spec: spec, Action: s.action(),
+		ID: s.id(), Spec: spec, Action: s.action(),
 		Overlap: enums.SCHEDULE_OVERLAP_POLICY_SKIP, CatchupWindow: catchupWindow,
 	})
 	if err == nil {
@@ -58,7 +72,7 @@ func EnsureSchedule(ctx context.Context, c client.Client, s Schedule) error {
 	if !errors.Is(err, temporal.ErrScheduleAlreadyRunning) {
 		return fmt.Errorf("create backup schedule: %w", err)
 	}
-	err = c.ScheduleClient().GetHandle(ctx, ScheduleID).Update(ctx, client.ScheduleUpdateOptions{
+	err = c.ScheduleClient().GetHandle(ctx, s.id()).Update(ctx, client.ScheduleUpdateOptions{
 		DoUpdate: func(in client.ScheduleUpdateInput) (*client.ScheduleUpdate, error) {
 			sch := in.Description.Schedule
 			sch.Spec = &spec
@@ -73,9 +87,9 @@ func EnsureSchedule(ctx context.Context, c client.Client, s Schedule) error {
 	return nil
 }
 
-// RemoveSchedule deletes the nightly schedule; one that does not exist is not an error.
-func RemoveSchedule(ctx context.Context, c client.Client) error {
-	err := c.ScheduleClient().GetHandle(ctx, ScheduleID).Delete(ctx)
+// RemoveSchedule deletes the schedule s names; one that does not exist is not an error.
+func RemoveSchedule(ctx context.Context, c client.Client, s Schedule) error {
+	err := c.ScheduleClient().GetHandle(ctx, s.id()).Delete(ctx)
 	var notFound *serviceerror.NotFound
 	if err == nil || errors.As(err, &notFound) {
 		return nil
@@ -83,47 +97,11 @@ func RemoveSchedule(ctx context.Context, c client.Client) error {
 	return fmt.Errorf("delete backup schedule: %w", err)
 }
 
-// retry is how long Run waits between attempts while Temporal is unreachable.
-const retry = 5 * time.Second
-
-// Run makes Temporal match the configuration, then serves backups until ctx ends.
-// With acts nil (no recipient configured), it removes the schedule and returns.
-// Temporal being unreachable is never fatal: it keeps trying, and the control plane
-// serves meanwhile.
-func Run(ctx context.Context, c client.Client, s Schedule, acts *Activities) {
-	if acts == nil {
-		until(ctx, "remove backup schedule", func() error { return RemoveSchedule(ctx, c) })
-		return
-	}
-	var w worker.Worker
-	until(ctx, "start backup worker", func() error {
-		// A fresh worker per attempt: one whose Start failed is not reused.
-		w = worker.New(c, s.queue(), worker.Options{})
-		w.RegisterWorkflowWithOptions(Workflow, workflow.RegisterOptions{Name: WorkflowName})
-		w.RegisterActivity(acts)
-		return w.Start()
-	})
-	if ctx.Err() != nil {
-		return
-	}
-	defer w.Stop()
-	until(ctx, "ensure backup schedule", func() error { return EnsureSchedule(ctx, c, s) })
-	slog.InfoContext(ctx, "backup schedule set", "cron", s.cron(), "dir", acts.Dir, "keep", acts.Keep)
-	<-ctx.Done()
-}
-
-// until calls f every retry until it succeeds or ctx ends.
-func until(ctx context.Context, what string, f func() error) {
-	for {
-		err := f()
-		if err == nil {
-			return
-		}
-		slog.WarnContext(ctx, what+": Temporal unavailable; retrying", "err", err, "in", retry)
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(retry):
-		}
-	}
+// Register adds the backup workflow and its activities to w. The worker that polls
+// this task queue must know every workflow type on it, so registration is separate
+// from the worker's lifecycle: `internal/workflow/maintenance` owns that, and the
+// restore drill registers onto the same worker (ADR-0051 item 1).
+func Register(w worker.Worker, acts *Activities) {
+	w.RegisterWorkflowWithOptions(Workflow, workflow.RegisterOptions{Name: WorkflowName})
+	w.RegisterActivity(acts)
 }

@@ -37,29 +37,51 @@ work is in right now*.
 
 ## Current focus
 
-- **Working branch:** `claude/relaxed-rubin-76m7dl`
-- **Slice:** S26 — SLO gate and automatic rollback (v0.3, ADR-0050) done, after
-  S21–S25. v0.2 is done except the items O35 lists.
-- **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). Open for the
-  owner: O2 (footprint on a 2 GB VPS) and the proposed ADRs.
-- **Exact next step:** every remaining roadmap item needs an owner decision. Ask the
-  owner to pick the next slice: v0.2's O35 (managed Postgres/Redis, envelope
-  encryption, team invites) or a v0.3 item (the SLO gate's optional PromQL source with
-  OTEL correlation and deploy markers, preview environments, migrations as a gated
-  step, scheduled restore drills, cron jobs, Compose apps, volumes and S3 backups), or
-  hardening: a Swarm end-to-end test, CI via a PR (O24). Review the proposed ADRs
-  (O19–O43).
+- **Working branch:** `claude/loving-shannon-rplqcg`. The session of 2026-10-23 was
+  assigned this branch rather than `claude/relaxed-rubin-76m7dl`, which is merged into
+  `main` (PR #1) and no longer carries unmerged work. New work starts from `main`.
+- **Slice:** S28 — hardening **done**: the Swarm end-to-end run, the agent bug it found
+  and its fix, the conformance gap that let the bug through, the `e2e-swarm` CI job, and
+  the ADR audit. S27 (scheduled restore drills, ADR-0051) is done before it.
+- **CI runs and nearly passes, for the first time ever (O24 answered).** PR #2 went
+  from 5 of 10 jobs failing to 9 of 11 green in S28; `proto`, `conformance-swarm` and
+  `e2e` had never passed at all. What is left is in O45, including one real failure
+  (`TestBuilderRailpack`) and the `buf.lock` commit only you can make.
+- **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). v0.2 is done
+  except the items O35 lists. Open for the owner: O2 (footprint on a 2 GB VPS) and the
+  proposed ADRs (O19–O44).
+- **Exact next step:** finish O45 — two real failures, each the *last* check of its
+  job: `selfdeploy`'s missing per-App resource sample (pre-existing, S16/ADR-0040) and
+  `TestBuilderRailpack`'s empty release label (possibly a defect in ADR-0047's build
+  path). Both are diagnosed as far as this container allows. Then every remaining roadmap item needs an owner decision —
+  ask the owner to pick: v0.2's O35 (managed Postgres/Redis, envelope encryption, team invites)
+  or a v0.3 item (the SLO gate's optional PromQL source with OTEL correlation and
+  deploy markers, preview environments, migrations as a gated step, cron jobs, Compose
+  apps, volumes and S3 backups), or hardening: a Swarm end-to-end test, and checking
+  the CI matrix that ran on `main` with PR #1 (O24). Review the proposed ADRs
+  (O19–O44); **O44 (ADR-0051) is the one with a security trade-off to weigh**, since a
+  drill-enabled install holds an age private key that decrypts its own archives.
 
 ## Next session prompt
 
-> Read CLAUDE.md and docs/plan/03-progress.md. Start Postgres, Docker, Temporal and
-> OpenBao (tracker *Known gaps*, including the disk and swarm-daemon notes). Then ask
-> me, with the choices *Current focus* lists, which slice to take next; write its ADR
-> first as proposed, then the code, on branch `claude/relaxed-rubin-76m7dl`. Verify
-> with build, vet, golangci-lint (also with the integration tag), unit, integration,
-> e2e, and the conformance suites the change touches. Tick boxes, update the tracker
-> and the next session prompt, commit, push, and give me the next prompt. If you hit
-> a decision only I can make, ask me before building.
+> Read CLAUDE.md and docs/plan/03-progress.md. Start the services with the scratchpad
+> `services.sh` pattern in *Known gaps*, and regenerate `gen/` through the
+> scratch-workspace workaround — it is not committed and buf.build is blocked here.
+> Then finish **O45** on branch `claude/loving-shannon-rplqcg`, reading PR #2's job logs
+> from the runner rather than guessing. In order: (0) `selfdeploy` fails only on
+> `hello reported no resource sample` — pre-existing, and S28 lists what is already
+> ruled out; check whether the Docker provider's `Usage` refs carry the App ID
+> `attachUsage` keys on, and what `GetAppUsage` reads. (1) `TestBuilderRailpack` fails with
+> `release label = "", want rel-rp-3` — decide whether the Railpack build path
+> (ADR-0047) really fails to stamp `io.bohux.release`, which image retention and
+> workload status both read, and fix it or the test accordingly; it cannot be run in
+> this container, so verify it by pushing and reading the run. (2) Check `selfdeploy`,
+> which had not finished when S28 ended. (3) `conformance-swarm` flaked once on
+> `an_interrupted_apply_converges_without_duplicates` — make that case robust under
+> Swarm or establish it is environmental, without weakening it. Do not skip, disable or
+> loosen a test to get green. When CI is green, tell me, and ask which slice to take
+> next with the choices *Current focus* lists. Tick boxes, update the tracker and the
+> next session prompt, commit, push, and give me the next prompt.
 
 ## Waiting on the owner
 
@@ -107,6 +129,9 @@ work is in right now*.
 | O41 | Accept or reject ADR-0048 (a Deployment's notifications run in their own `notify/<deployment id>` workflow, a child abandoned when the deploy run ends, so the App is free at once; runs from before keep notifying inline behind a version gate; recorded histories replayed in a unit test). Amends ADR-0038 item 3 | S24 |
 | O42 | Accept or reject ADR-0049 (canary deploys: strategy CANARY with one weight 1–99% and a bake 1m–24h per deployment; the weight rides on the workload outside the spec hash; Caddy weighted round robin across the two slots; the workflow's CANARY state watches health with a 30 s grace, then promotes by reassigning with weight 0; PromoteDeployment ends the bake, CancelDeployment aborts). Changes deployment.proto and agent.proto; migration 00024 | S25 |
 | O43 | Accept or reject ADR-0050 (SLO gate: Caddy writes an access log beside its admin socket with only upstream, status and duration; the agent tails it and reports per-slot counters in memory; `App.slo` = availability 0.9–0.99999, optional latency threshold (a histogram bound) and target, max burn rate (default 10), watch 1m–1h (default 10m); burn rate over the window since the hold began, no verdict under 50 requests; judged during a canary's bake and, otherwise, in a new `VERIFYING` state; violations roll back with `SLO_AVAILABILITY`/`SLO_LATENCY`). Item 6 amended while proposed: the CLI, not a deploy log, says an unrouted App is judged by health alone. Changes app.proto, agent.proto, deployment.proto; migration 00025 | S26 |
+| O44 | Accept or reject ADR-0051 (scheduled restore drills: a weekly Temporal schedule on the backup's queue; opt-in through a drill age identity on the host whose public half becomes a second recipient on every archive; throwaway state per run — a scratch database created by a `CREATEDB` `bohux_drill` role, a `BYPASSRLS` `bohux_drill_admin` role with `GRANT SET ON PARAMETER session_replication_role` to load the rows, a temp data dir, and a KV mount of its own that the drill wipes; checks beyond restore's own; the verdict logged and written as JSON under the archives' retention; `bohux admin drill` to run one by hand). **The host holding an age private key is the trade-off to weigh** — item 2 keeps the operator's own key off the host, and drills stay off unless an identity is configured. Item 7 (the config keys) was added while proposed, and item 7 again in S27b to accept the identity as a value as well as a file (the control plane as an App gets its config as env vars). S27a and S27b are built on it | S27a, S27b |
+| O45 | **CI now passes except one real failure.** S28 took PR #2 from 5 of 10 jobs failing to 9 of 11 green (`selfdeploy` was still running at the end of the session — check it). Three jobs had **never** passed; the causes and fixes are under S28. What is left: (0) `selfdeploy` fails only on its last check, `hello reported no resource sample` — pre-existing (identical on `334c1dd`), diagnosis and what is already ruled out are under S28. (1) `integration` fails only on `TestBuilderRailpack` — `release label = "", want rel-rp-3`. A real assertion, newly visible, and not reproducible in the cloud container because ghcr.io is blocked there; if the Railpack build path (ADR-0047) does not stamp `io.bohux.release`, image retention and workload status both read that label, so this is worth tracing properly. (2) `conformance-swarm` flaked once on `an_interrupted_apply_converges_without_duplicates` having passed it twice — timing-sensitive under Swarm. (3) **You**: commit `buf.lock` from a machine with Buf Schema Registry access (`buf dep update`), which removes both `buf.lock` workarounds in `ci.yml` | A green matrix; and the Railpack label, if it is a real defect |
+| O46 | **Which rule decides an ADR's status?** `.claude/skills/write-adr/` says "Status starts `proposed`, becomes `accepted` on merge", which would make ADRs 0020–0051 accepted already (they merged in PR #1). This tracker instead asks you to accept each one (O1, O6–O44). S28's audit confirms all 32 are referenced from code, so the two rules disagree only on paperwork — but they do disagree. Pick one: either the skill's merge rule (and the O-items close), or per-ADR acceptance (and the skill should say so). Statuses were deliberately left untouched | 32 ADRs reading `proposed` while the code depends on them |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
 ## v0.1 slices
@@ -1157,7 +1182,177 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       agentapi test helper now read it from `Receive` (TestConnect's flake: 30/30
       under load after)
 
+## Hardening slices
+
+### S28 — Swarm end-to-end, the gate's missing case, and the ADR audit ✅
+No new features. The owner picked hardening over a v0.3 feature, and it paid for itself:
+the first end-to-end run against Swarm found a bug that defeated rule 5 on any provider
+that updates in place.
+
+- [x] **A bug in the agent, found by the Swarm e2e and fixed.** `reconcile.go` re-read
+      Status after Apply and mapped running-and-healthy to HEALTHY without checking the
+      status described the spec it had just applied. A provider that updates in place
+      keeps the previous release running and healthy under its own hash while the new
+      one rolls out, so the agent reported the **new** release as healthy on the **old**
+      release's health. The deploy's health gate matches on release ID and generation —
+      both already correct — so it accepted that: a broken Release reported SUCCEEDED in
+      two seconds and never rolled back. Docker recreates its container, so the stale
+      status is never both running and healthy there and the bug was invisible
+- [x] **The conformance suite never checked the unhealthy direction.** It waited for
+      workloads to become healthy and never required that a failing probe reports
+      unhealthy, so a provider reporting every running workload healthy passed the gate
+      (rule 4) with the health gate turned into a no-op. That is how the bug above
+      reached `main`. New case added; the in-memory reference provider now models a
+      target that serves only `/healthz` instead of reporting healthy whenever it runs,
+      and `alwaysHealthy` joins the broken providers that prove each check bites
+- [x] `cmd/bohux/e2e_swarm_test.go`: failure path first (a Release that never turns
+      healthy leaves the previous one serving), then deploy, serve, redeploy, roll back
+      with the CLI, and the artifacts-on-disk check (rules 2 and 3). `startStack` takes
+      the provider as a parameter; swarm stacks are torn down beside Compose projects
+- [x] CI job `e2e-swarm`, its own job because a swarm manager cannot have live-restore
+      (ADR-0045) and the Docker e2e job requires it (ADR-0020)
+- [x] **ADR audit.** Every proposed ADR from 0019 to 0051 is referenced from code
+      (2–27 non-generated files each), so the tracker's "built on already" is true for
+      all of them: there is no orphan paper decision, and rejecting one now would mean
+      reverting shipped code. Statuses were **not** changed — that is O46
+- [x] **CI ran for the first time (O24) and was red: five of ten jobs failed.** Driven
+      from 5 red to 1 real failure in four pushes, each verified by reading the run.
+      Every cause was in the workflow or in an untested privilege assumption, not in the
+      product:
+      - `proto` had **never** passed. `buf breaking` compared against the base as a git
+        input, and buf will not resolve dependencies for one, so with no committed
+        `buf.lock` every PR failed on `google/api/field_behavior.proto` whatever its
+        diff. Now the base is checked out and its deps resolved the way the working
+        tree's already were. The check keeps its teeth (verified locally that
+        `--against <directory>` still catches a deleted field) rather than being
+        loosened, which rule 9 depends on. Committing `buf.lock` is still the clean fix
+        and removes both workarounds — it needs registry access (O45)
+      - `conformance-swarm` had **never** passed: the Swarm provider enters each task's
+        network namespace to probe it (ADR-0045 item 4), which needs root, and the job
+        ran as the runner's user. `docs/providers/swarm.md` already said the agent runs
+        as root; the job simply did not test the provider as it is used
+      - `e2e` had **never** passed: enabling live-restore restarts the Docker daemon,
+        which killed the Postgres **service container** the runner had already started,
+        so every run died on "connection refused" before a test body. A `services:`
+        container always starts before the first step, so Postgres is now started by a
+        step after the restart. The new `e2e-swarm` job, which does not restart the
+        daemon, passing with the same service block is what pinned this down
+      - `integration` failed on `TestCaddy`: Caddy's admin socket is created as root
+        inside its container, so the runner's user could not connect. Now run as root,
+        as the agent runs on a real node and as the suite is run locally
+      - **A false green, caught and fixed:** `sudo -E` does not survive the runner's
+        sudoers, so it dropped every `BOHUX_TEST_*` variable. The integration tests
+        reported "not set", and `e2e-swarm` went **green while skipping both its
+        tests**. The variables are passed explicitly now, and that job asserts its two
+        tests reported PASS rather than trusting the exit status
+- [x] **`selfdeploy` diagnosed, and it is pre-existing.** It reaches its *last* check
+      and fails only on `hello reported no resource sample` (ADR-0040 / S16). Everything
+      before it passes, including the whole v0.1 exit criterion: Bohux deploys itself,
+      rolls itself back, recovers from a version of itself that cannot start (242 s),
+      triggers the nightly backup, serves an App on a route, and redeploys it with 138
+      requests and no failures. The identical failure, same message, is on head
+      `334c1dd` — S27's end, before anything in S28 — so it is not this slice's
+      - Ruled out already: the agent is not erroring (no "sample workload usage"
+        warning in the log), `GetAppUsage` answers `ok` repeatedly so the API is
+        serving an empty value, the sample is not stale (the *node* sample from the
+        same `Latest()` call is present), and `attachUsage` already sums per App across
+        slots, so ADR-0035's two-slot routing is not the cause. What is left to check
+        is whether the Docker provider's `Usage` refs carry the App ID that
+        `attachUsage` keys on, and what `GetAppUsage` reads on the control-plane side
+- [ ] **Left for O45**: `integration` now fails only on `TestBuilderRailpack`
+      (`release label = "", want rel-rp-3`) — a real assertion, visible for the first
+      time because the job never got that far before, and not reproducible in this
+      container (ghcr.io is blocked). If the Railpack path really does not stamp
+      `io.bohux.release`, image retention and status both read those labels.
+      `conformance-swarm` also flaked once on `an_interrupted_apply_converges_without_duplicates`
+      after passing it twice, so that case is timing-sensitive under Swarm
+
 ## v0.3 slices
+
+### S27 — Scheduled restore drills (ADR-0051)
+Split in two: the drill itself, then the schedule around it. The vision's "backups are
+proven by scheduled restore drills" is only half kept until S27b ships, because
+`TestRestoreDrill` in CI proves the restore *code* against a stack the test built, not
+an install's own archives.
+
+#### S27a — the drill, and `bohux admin drill` ✅
+- [x] Proposed ADR-0051 (O44). The design was checked against a real Postgres 16 before
+      it was written down: a `CREATEDB` owner passes `MigrateTo`'s privileged-role
+      check, the owner **cannot** `COPY` into a `FORCE ROW LEVEL SECURITY` table
+      ("COPY FROM not supported with row-level security"), a `BYPASSRLS` role can once
+      the owner grants it, `SET session_replication_role` needs
+      `GRANT SET ON PARAMETER`, and a role with no grants in the live database sees
+      none of its tables. That is what fixed the two-role split in item 3
+- [x] `internal/drill`: `Run` restores an archive into a scratch database, a temp data
+      directory and its own KV mount, and tears all three down pass or fail; `Verdict`
+      and `Check` carry names, counts and times only (rule 3)
+- [x] Checks beyond restore's own: the manifest's tables all present, row counts per
+      table, a live tenant, a live **owner token** (an install nobody can administer is
+      not restored), the node CA present, loadable, unexpired and reported by pin, and
+      every live secret ref readable at the version Postgres records for it
+- [x] Failure path tested first (rule 5): a truncated archive, a wrong identity, an
+      archive with no owner token, an archive whose values were never backed up, and a
+      drill with no mount — each leaves no scratch database, no secret in the drill
+      mount and no temp directory, and the verdict comes back for the caller to record
+- [x] Found by the tests: restore refuses a secrets-bearing archive with no OpenBao
+      before any check runs, so that case is a `restore` failure, not a `secrets` one;
+      and the reachable `secrets` failure is an archive whose **metadata** is there and
+      whose values are not (a backup taken with no OpenBao configured) — now its own
+      test
+- [x] `bohux admin drill` (`--json` for the verdict the schedule will record); the
+      drill-mount guard moved ahead of opening the identity file, so being pointed at
+      the live mount is refused before anything is touched
+- [x] Checked live on a real install: a backup taken before the control plane had ever
+      started failed `node-ca` ("every agent would have to re-register"), and one taken
+      after it passed every check with a CA pin matching `openssl`'s on the live file.
+      No scratch database, mount path or temp directory left behind
+- [x] `docs/reference/config.md` (with the private-key-on-the-host warning), runbook
+      Section D (drill an archive, read each failure by check name, create the roles and
+      mount on an upgraded install), `docs/runbooks/README.md`
+
+#### S27b — the weekly schedule and the install ✅
+- [x] `internal/workflow/drill`: `DrillWorkflow` and the `bohux-restore-drill-weekly`
+      schedule, drilling the newest archive `backupwf.Newest` finds. A failed check is
+      returned **non-retryable** (re-drilling reaches the same verdict and costs another
+      full restore); no verdict at all is infrastructure and gets the one retry
+- [x] **One worker, not two.** Both schedules fire onto the backup's task queue, and a
+      worker that polls a queue must know every workflow type on it — two workers each
+      knowing only their own would fail each other's tasks. So `backupwf.Run` was split
+      into `Register` + schedule calls, and the new `internal/workflow/maintenance`
+      owns the worker lifecycle, the retry-while-Temporal-is-down loop, and both
+      schedules. Its integration test triggers both to prove the shared worker serves
+      both types
+- [x] The backup activity takes `Recipients []string`, so the drill key's public half
+      rides on every archive (ADR-0051 item 2). The activity takes no arguments, so its
+      input shape in workflow history did not change and no worker versioning was
+      needed — ADR-0051's consequence about that was over-cautious
+- [x] `controlplane.DrillConfig` with `--drill-*` flags: off unless an identity is
+      configured, refused at start if it names the live KV mount or lacks a drill role,
+      and switched off (with a warning) when nothing writes archives to drill
+- [x] **ADR-0051 item 7 amended while proposed:** the identity is also accepted as a
+      value (`BOHUX_DRILL_IDENTITY`), file winning, because the control plane runs as
+      an App of itself and gets its configuration as secret env vars (ADR-0032) — the
+      same pair the OpenBao token and SMTP password use. A path alone could not reach it
+- [x] The verdict written to `<backup dir>/drills/<UTC time>.json`, 0600, pruned under
+      the archives' retention; it is recorded **before** a failure is returned, since a
+      workflow cannot return both a value and an error and the finding is the point
+- [x] Installer: `bohux_drill` (CREATEDB, no BYPASSRLS) and `bohux_drill_admin`
+      (BYPASSRLS + `GRANT SET ON PARAMETER session_replication_role`), granted nothing
+      in `bohux_app`; the `bohux-drill` KV mount; `BOHUX_DRILL_IDENTITY` documented with
+      the host-key warning, and refused without a backup recipient
+- [x] Failure path first again: a failed check recorded and not retried, an empty
+      archive directory, an infrastructure failure retried once and recording nothing,
+      and switching either schedule off removing it
+- [x] Found on the way: both schedule IDs are fixed server-wide names, so the new
+      package's tests and the backup's deleted each other's schedules when `go test` ran
+      the packages in parallel. `Schedule.ID` is now overridable for tests, and
+      `RemoveSchedule` takes the schedule it is removing
+- [x] Tick the roadmap's "Scheduled automated restore drills"
+- [ ] **Not done, deliberately:** `scripts/selfdeploy-test.sh` does not trigger a drill.
+      It would need an age **private** key at test time, and committing one to the repo
+      is not acceptable; generating one needs a keygen the binary does not have. The
+      maintenance integration test covers the schedule against a real Temporal instead.
+      Worth revisiting if `bohux` ever grows a key-generation command
 
 ### S26 — SLO gate and automatic rollback from ingress traffic (ADR-0050) ✅
 - [x] Owner chose: metrics from the node's ingress (PromQL optional, later), an SLO as
@@ -1257,9 +1452,9 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       Compose container on the overlay reachable by alias (by hand)
 - [x] CI job `conformance-swarm` (the runner's dockerd becomes the manager);
       `docs/providers/swarm.md`
-- [ ] Not done: an end-to-end run of the control plane and agent deploying to Swarm
-      (the routing is unit-tested and the provider conformance-tested, not the two
-      together); the resource view does not sample Swarm workloads
+- [x] The end-to-end run of the control plane and agent deploying to Swarm — done in
+      S28, and it found a real agent bug on its first try
+- [ ] Not done: the resource view does not sample Swarm workloads
 
 
 ### S20 — Monorepo watch paths (ADR-0044) ✅
@@ -1274,6 +1469,34 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
       signed deliveries inside and outside the paths (integration), CLI
 
 ## Known gaps and notes
+- **The container's Docker bridge can break beyond the documented recipe (2026-10-23,
+  S28).** After several dockerd restarts in one session, `docker0` lost its veth
+  attachments: `Failed to add veth… to bridge via netlink: Device does not exist`, so
+  `bohux-mirror` cannot start, the buildx builder cannot reach the mirror, and every
+  build test fails with `BUILD_FAILED`. Restarting dockerd did **not** fix it this time,
+  and the container has no `ip` tooling to repair the bridge by hand. It is not a code
+  problem — `TestBuildEndToEnd` fails the same way on the parent commit — so a fresh
+  session is the remedy. Restart the main dockerd as few times as possible: start it
+  once, with the swarm daemon on its own data root and socket.
+- **A second swarm daemon, for the Swarm e2e (S28).** `BOHUX_TEST_SWARM_HOST` points the
+  test at it, and `BOHUX_TEST_BUILD_NETWORK=none` is needed because that daemon runs
+  with `--bridge none`, so builds have no default network. Start it with the
+  swarm-daemon recipe below, then `docker swarm init --advertise-addr 127.0.0.1`. Do not
+  guard the start with `pgrep -f <its own command line>`: the pattern matches the
+  starting shell and silently skips the daemon.
+- **`TestRestoreDrill` still races occasionally (seen once, 2026-10-23, S27b).** The
+  rollback after a restore failed with `failed_precondition: a deployment of this app is
+  already in progress` — the race ADR-0048 and S24 addressed. It did not reproduce in 3
+  isolated runs, a repeat full-suite run, or on the parent commit, so it is rare and not
+  tied to the drill work. If it appears again, the in-progress deployment the restored
+  rows carry is the thing to look at: the test waits for a node report newer than the
+  restore, which proves the agent is back but not that the previous deployment has been
+  reconciled to a terminal state.
+- **Starting the services after a worker restart:** the session's services all die with
+  the worker. The scratchpad `services.sh` of 2026-10-23 brings back Postgres, Docker,
+  Temporal, OpenBao, the registry mirror and the buildx builder in one go, and prints a
+  health line for each; the Docker image steps can take several minutes on a cold
+  container, while the four core services are up within about 15 s.
 - **A swarm daemon in the cloud container (S21):** the main dockerd has live-restore,
   so swarm runs on a second one, without iptables or a default bridge so it leaves the
   main daemon alone:
@@ -1404,6 +1627,90 @@ Rule 8: the UI gets nothing the CLI lacks, so the CLI comes first.
   1.24–1.26). Raising the `go` directive is cheap and its own commit when wanted.
 
 ## Session log (newest first)
+
+### 2026-10-23 (S28) — branch `claude/loving-shannon-rplqcg`
+- Owner picked hardening over a v0.3 feature, and said to open the PR. Both paid off,
+  and the PR paid off more than the slice did.
+- **PR #2 opened: CI ran for the first time ever, five of ten jobs failed, and four
+  pushes took it to 9 of 11 green.** `proto`, `conformance-swarm` and `e2e` had **never**
+  passed — not once, for reasons that had nothing to do with any diff: a `buf breaking`
+  base whose dependencies cannot resolve, a provider health check that needs root, and a
+  live-restore restart that killed the Postgres service container the job depended on.
+  Every "verified" in this tracker before today meant one cloud container's word for it.
+- **A false green, caught:** `sudo -E` silently dropped the test environment, and
+  `e2e-swarm` passed while skipping both of its tests. Fixed, and that job now asserts
+  its tests reported PASS instead of trusting the exit status. Worth remembering that a
+  green tick is a claim like any other.
+- An honest correction mid-session: my first PR comment said the `buf.lock` gap blocked
+  the pipeline and needed the owner's registry access. Reading the next run showed the
+  working tree resolved its deps fine and only the *base* did not, which was fixable in
+  CI without any registry access. The comment overstated the blocker.
+- **The Swarm end-to-end run found a real bug on its first attempt**, and it was in the
+  agent, not the provider: a broken Release deployed to Swarm reported SUCCEEDED in two
+  seconds. The reconciler trusted a Status it had not checked the hash of, so a rolling
+  update let the previous release's health stand in for the new one's and the health
+  gate rule 5 arms was bypassed. Fixed, with a reconciler regression test written first.
+- **And the gate had a hole that let it through:** the conformance suite only ever waited
+  for healthy and never required unhealthy to be reported. Closed, and the in-memory
+  reference provider had to start modelling a probe instead of reporting healthy
+  whenever a workload runs.
+- ADR audit: all 32 proposed ADRs (0019–0051) are referenced from code, so "built on
+  already" is true for every one. Statuses left alone — the repo's own `write-adr` skill
+  and this tracker disagree about who marks an ADR accepted (O46).
+- Verified: gofmt, build, vet (all three tag sets), golangci-lint plain and integration
+  (0 issues), full unit suite with race, integration 25/26 (the documented
+  `TestBuilderRailpack` ghcr.io gap), **both** conformance suites green with the new
+  case, and the Swarm e2e green. The Docker e2e's `TestRestoreDrill` passed 3/3 in
+  isolation and in the final full run; `TestBuildEndToEnd` fails in this container now
+  for an environment reason that also fails on the parent commit — see *Known gaps*.
+
+### 2026-10-23 (S27b) — branch `claude/loving-shannon-rplqcg`
+- The restore drill is on a weekly schedule. The design change the code forced: both
+  schedules fire onto one task queue, and a Temporal worker that polls a queue must
+  know every workflow type on it, so two packages each starting their own worker would
+  have failed each other's tasks. `backupwf.Run` is split into `Register` plus the
+  schedule calls, and `internal/workflow/maintenance` now owns the worker. Its
+  integration test triggers both schedules to prove it.
+- ADR-0051 item 7 amended while proposed: the drill identity is also accepted as a
+  value, because the control plane runs as an App of itself and gets its config as
+  secret env vars, so a file path alone never reaches it.
+- Found on the way: the two schedule IDs are fixed server-wide names, so the new
+  package's tests and the backup's deleted each other's schedules when `go test` ran
+  the packages in parallel. `Schedule.ID` is overridable now and `RemoveSchedule` takes
+  the schedule it removes. Both suites then passed twice in a row.
+- Verified: gofmt, build, vet (both tag sets), golangci-lint (plain and integration, 0
+  issues), the full unit suite with race, the integration suite (25 of 26 packages;
+  the one failure is the documented `TestBuilderRailpack` ghcr.io gap, unchanged from
+  before this slice), and the full e2e suite.
+- **One e2e flake worth knowing about:** on the first full e2e run `TestRestoreDrill`
+  failed with `rollback: failed_precondition: a deployment of this app is already in
+  progress` — the ADR-0048 race S24 was meant to close. It did not reproduce: 3 isolated
+  runs and a repeat full-suite run on this branch all passed, and the same commit's
+  parent passed both isolated and full-suite. So it is not this slice's regression, but
+  the race is narrowed rather than gone. Recorded under *Known gaps*.
+
+### 2026-10-23 (S27a) — branch `claude/loving-shannon-rplqcg`
+- A fresh container and a new branch: `claude/relaxed-rubin-76m7dl` is merged into
+  `main` (PR #1), so this branch was fast-forwarded to `main` and work continues from
+  there. Full environment setup was needed again — Postgres, Docker, Temporal, OpenBao,
+  `buf` and the protoc plugins installed from scratch, and `gen/` regenerated through
+  the scratch-workspace workaround in *Known gaps* (buf.build is still blocked).
+- Owner picked scheduled restore drills. ADR-0051 proposed (O44) after checking the
+  Postgres role mechanics empirically — that is where the two-role split came from.
+  The slice was too big for one session, so it is split: S27a (the drill and the
+  command) is done, S27b (the schedule and the installer) is next.
+- The drill found a real failure on its first live run: an archive taken before the
+  control plane had ever started carries no node CA, which would force every agent to
+  re-register. Exactly the class of failure a drill exists for.
+- Verified: gofmt, build, vet, golangci-lint (plain and with the integration tag, 0
+  issues both), the full unit suite with race, and the integration suite — 23 of 24
+  packages green, including `internal/drill`. The one failure is `TestBuilderRailpack`,
+  the documented gap in *Known gaps* (ghcr.io blobs are blocked here, so the Railpack
+  frontend image has to be hand-built); it was failing before this slice and the slice
+  touches nothing near it. The other four build and image failures of the first run
+  were the missing registry mirror and buildx builder, and pass once *Known gaps*'
+  recipe is applied. Also drilled two real archives by hand on a real install. No
+  provider and no proto changed, so no conformance run; the web UI is untouched.
 
 ### 2026-10-22 (S26) — branch `claude/relaxed-rubin-76m7dl`
 - Owner picked the SLO gate (ingress metrics, target + burn rate, canary bake + watch

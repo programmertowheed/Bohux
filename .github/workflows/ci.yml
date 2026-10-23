@@ -35,7 +35,16 @@ jobs:
             echo "Base has no S1 contract yet; skipping buf breaking."
             exit 0
           fi
-          buf breaking --against "${{ github.event.repository.clone_url }}#branch=${{ github.base_ref }}"
+          # The base has no committed buf.lock either, and buf will not resolve
+          # dependencies for a git input, so comparing against the remote branch
+          # failed on google/api/field_behavior.proto for every PR. Check the base
+          # out and resolve its deps the way the working tree's are resolved above,
+          # then compare against that directory. Remove along with the step above
+          # once buf.lock is committed.
+          base="$(mktemp -d)/base"
+          git worktree add --detach "$base" "origin/${{ github.base_ref }}"
+          test -f "$base/buf.lock" || (cd "$base" && buf dep update)
+          buf breaking --against "$base"
 
   go:
     runs-on: ubuntu-latest
@@ -125,8 +134,17 @@ jobs:
       - name: Pull the ingress image
         # The real-Caddy test skips without it (ADR-0034).
         run: docker pull caddy:2.8.4-alpine
+      # As root: the agent's ingress talks to Caddy's admin socket, which Caddy creates
+      # as root inside its container, so TestCaddy cannot connect as the runner's own
+      # user. The agent runs as root on a real node (ADR-0030).
       - name: Integration tests
-        run: go test -tags=integration -race -count=1 ./internal/... ./cmd/... ./providers/docker/...
+        run: |
+          sudo env "PATH=$PATH" \
+            BOHUX_TEST_POSTGRES_URL="$BOHUX_TEST_POSTGRES_URL" \
+            BOHUX_TEST_TEMPORAL_ADDRESS="$BOHUX_TEST_TEMPORAL_ADDRESS" \
+            BOHUX_TEST_OPENBAO_ADDR="$BOHUX_TEST_OPENBAO_ADDR" \
+            BOHUX_TEST_OPENBAO_TOKEN="$BOHUX_TEST_OPENBAO_TOKEN" \
+            go test -tags=integration -race -count=1 ./internal/... ./cmd/... ./providers/docker/...
 
   # Provider conformance against a real Docker daemon (CLAUDE.md rule 4, ADR-0025).
   conformance-docker:
@@ -176,25 +194,22 @@ jobs:
         run: |
           docker swarm init --advertise-addr 127.0.0.1
           docker pull busybox:1.36
+      # As root: the Swarm provider's health check enters each task's network
+      # namespace, which needs privileges the runner's own user does not have
+      # (ADR-0045 item 4, docs/providers/swarm.md). The agent runs as root on a real
+      # node, so this is how the provider is actually used.
       - name: Swarm conformance
-        run: go test -count=1 -v -timeout 20m ./providers/_conformance -provider=swarm
+        run: sudo env "PATH=$PATH" go test -count=1 -v -timeout 20m ./providers/_conformance -provider=swarm
 
   # Control plane + agent + Docker + Temporal in one process tree: deploy, recreate,
   # roll back a broken Release (rule 5), build from Git, and the backup → wipe →
   # restore → rollback drill (ADR-0020 item 7).
   e2e:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16.4-alpine
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
+    # Postgres is started by a step below, not as a `services:` container: enabling
+    # live-restore restarts the Docker daemon, and a service container started before
+    # that restart does not survive it (live-restore is not yet on when it happens),
+    # so every run failed with "connection refused" before a test body ran.
     env:
       BOHUX_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
       BOHUX_TEST_TEMPORAL_ADDRESS: 127.0.0.1:7233
@@ -222,6 +237,16 @@ jobs:
           sudo mv /tmp/daemon.json "$f"
           sudo systemctl restart docker
           test "$(docker info --format '{{.LiveRestoreEnabled}}')" = true
+      - name: Start Postgres (after the daemon restart, so it survives)
+        run: |
+          docker run -d --name bohux-ci-postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres \
+            --health-cmd "pg_isready -U postgres" --health-interval 5s --health-retries 20 \
+            postgres:16.4-alpine
+          for i in $(seq 60); do
+            docker exec bohux-ci-postgres pg_isready -U postgres && exit 0
+            sleep 2
+          done
+          docker logs bohux-ci-postgres; exit 1
       - name: Start a Temporal dev server
         run: |
           curl -sSL https://github.com/temporalio/cli/releases/download/v1.4.1/temporal_cli_1.4.1_linux_amd64.tar.gz | tar xz -C /tmp temporal
@@ -230,6 +255,69 @@ jobs:
           cat /tmp/temporal.log; exit 1
       - name: End to end (deploy, build, restore drill)
         run: go test -tags=integration,e2e -count=1 -v -timeout 25m ./cmd/bohux
+
+  # The same control plane and agent, deploying to Swarm (ADR-0045). Its own job
+  # because a swarm manager cannot have live-restore, which the e2e job above turns on
+  # for the Docker provider.
+  e2e-swarm:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      BOHUX_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+      BOHUX_TEST_TEMPORAL_ADDRESS: 127.0.0.1:7233
+      BOHUX_TEST_SWARM_HOST: unix:///var/run/docker.sock
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.47.2
+          setup_only: true
+      - name: Install code generators
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6
+          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.17.0
+      - name: Generate
+        run: |
+          test -f buf.lock || buf dep update
+          buf generate
+      - name: Start a single-manager swarm
+        run: |
+          docker swarm init --advertise-addr 127.0.0.1
+          docker pull busybox:1.36
+      - name: Start a Temporal dev server
+        run: |
+          curl -sSL https://github.com/temporalio/cli/releases/download/v1.4.1/temporal_cli_1.4.1_linux_amd64.tar.gz | tar xz -C /tmp temporal
+          nohup /tmp/temporal server start-dev --headless --ip 127.0.0.1 --port 7233 > /tmp/temporal.log 2>&1 &
+          for i in $(seq 60); do /tmp/temporal operator cluster health --address 127.0.0.1:7233 && exit 0; sleep 1; done
+          cat /tmp/temporal.log; exit 1
+      # As root, for the same reason as the conformance job above.
+      - name: End to end on Swarm
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" \
+            BOHUX_TEST_POSTGRES_URL="$BOHUX_TEST_POSTGRES_URL" \
+            BOHUX_TEST_TEMPORAL_ADDRESS="$BOHUX_TEST_TEMPORAL_ADDRESS" \
+            BOHUX_TEST_SWARM_HOST="$BOHUX_TEST_SWARM_HOST" \
+            go test -tags=integration,e2e -count=1 -v -timeout 25m -run TestSwarm ./cmd/bohux \
+            2>&1 | tee /tmp/e2e-swarm.log
+          # These tests skip themselves when their environment is missing, and a skip
+          # must not read as a pass: this job exists to run them. It caught exactly
+          # that when sudo dropped BOHUX_TEST_SWARM_HOST.
+          grep -q -- '--- PASS: TestSwarmDeployRollsBackABrokenRelease' /tmp/e2e-swarm.log
+          grep -q -- '--- PASS: TestSwarmDeployAndRollback' /tmp/e2e-swarm.log
 
   # v0.1's exit criterion on a real host with systemd (ADR-0030, ADR-0031): install
   # Bohux, deploy a new version of itself, roll itself back, recover from a version of

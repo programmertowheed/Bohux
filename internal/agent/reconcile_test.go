@@ -28,6 +28,11 @@ type fakeProvider struct {
 	applies   int
 	destroyed []provider.ResourceRef
 	pulls     map[provider.ResourceRef]string
+	// rolling makes Apply behave like a provider that updates a workload in place:
+	// the previous release keeps running, healthy, under its own hash until converge
+	// is called. Swarm's rolling update does exactly this; Docker's recreate does not.
+	rolling bool
+	pending map[provider.ResourceRef]provider.Status
 }
 
 func newFake() *fakeProvider {
@@ -76,8 +81,25 @@ func (f *fakeProvider) Apply(_ context.Context, req provider.ApplyRequest) (prov
 			st.Endpoints[p.GetContainerPort()] = fmt.Sprintf("%s:%d", host, p.GetContainerPort())
 		}
 	}
+	if _, serving := f.running[req.Spec.Ref]; f.rolling && serving {
+		if f.pending == nil {
+			f.pending = map[provider.ResourceRef]provider.Status{}
+		}
+		f.pending[req.Spec.Ref] = st
+		return provider.ApplyResult{Changed: true}, nil
+	}
 	f.running[req.Spec.Ref] = st
 	return provider.ApplyResult{Changed: true}, nil
+}
+
+// converge finishes a rolling update: the new release replaces the old one.
+func (f *fakeProvider) converge(ref provider.ResourceRef) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if st, ok := f.pending[ref]; ok {
+		f.running[ref] = st
+		delete(f.pending, ref)
+	}
 }
 
 func (f *fakeProvider) Status(_ context.Context, ref provider.ResourceRef) (provider.Status, error) {
@@ -418,4 +440,59 @@ func TestReconcileExtraProvider(t *testing.T) {
 	if len(other.destroyed) != 1 || other.destroyed[0] != ref("swarm-app") {
 		t.Errorf("removed through %v; want the owning provider", other.destroyed)
 	}
+}
+
+// A provider that updates a workload in place keeps the previous release running and
+// healthy, under its own hash, while the new one rolls out. Reporting that as healthy
+// would let the deploy's health gate accept the old release's health as the new
+// release's, so a broken Release would be declared a success and never roll back —
+// exactly what rule 5 exists to prevent. Found by the Swarm end-to-end run: Docker
+// recreates its container, so the stale state is never both running and healthy there.
+func TestReconcileDoesNotReportAStaleReleaseHealthy(t *testing.T) {
+	ctx := context.Background()
+	signer, err := pki.LoadOrCreate(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := testState(t, signer)
+	c, err := OpenCache(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := newFake()
+	r := &Reconciler{State: st, Cache: c, Provider: fake}
+
+	assign(t, signer, st, c, 1, map[string]string{"api": "s1"})
+	if got := state(t, r.Once(ctx), "api"); got != agentv1.WorkloadState_WORKLOAD_STATE_HEALTHY {
+		t.Fatalf("first convergence reported %v, want HEALTHY", got)
+	}
+
+	// From here the target updates in place.
+	fake.rolling = true
+	assign(t, signer, st, c, 2, map[string]string{"api": "s2"})
+
+	if got := state(t, r.Once(ctx), "api"); got == agentv1.WorkloadState_WORKLOAD_STATE_HEALTHY {
+		t.Error("the new release was reported HEALTHY while the previous one was still serving: " +
+			"the deploy's health gate would accept the old release's health")
+	} else if got != agentv1.WorkloadState_WORKLOAD_STATE_APPLYING {
+		t.Errorf("mid-rollout state %v, want APPLYING", got)
+	}
+
+	// Once the rollout finishes, the new release is healthy on its own hash.
+	fake.converge(ref("api"))
+	if got := state(t, r.Once(ctx), "api"); got != agentv1.WorkloadState_WORKLOAD_STATE_HEALTHY {
+		t.Errorf("after the rollout finished, state %v, want HEALTHY", got)
+	}
+}
+
+// state returns the reported state of one app in a report.
+func state(t *testing.T, rep *agentv1.StatusReport, app string) agentv1.WorkloadState {
+	t.Helper()
+	for _, ws := range rep.GetWorkloads() {
+		if ws.GetAppId() == app {
+			return ws.GetState()
+		}
+	}
+	t.Fatalf("no workload %q in report %v", app, rep)
+	return agentv1.WorkloadState_WORKLOAD_STATE_UNSPECIFIED
 }

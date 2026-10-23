@@ -475,6 +475,13 @@ func (r *Reconciler) converge(ctx context.Context, ref provider.ResourceRef, w *
 	}
 	ws.ReadyReplicas = st.ReadyReplicas
 	switch {
+	case !st.Exists || st.Hash != spec.Hash:
+		// The target is not running this spec yet. A provider that updates a workload
+		// in place keeps the previous release running and healthy under its own hash
+		// while the new one rolls out, and calling that healthy would let the deploy's
+		// health gate accept the old release's health as the new release's — a broken
+		// Release would be declared a success and never roll back (rule 5).
+		ws.State = agentv1.WorkloadState_WORKLOAD_STATE_APPLYING
 	case st.Running && st.Healthy:
 		ws.State = agentv1.WorkloadState_WORKLOAD_STATE_HEALTHY
 	case st.Running:

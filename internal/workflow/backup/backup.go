@@ -58,8 +58,11 @@ type Result struct {
 // Activities holds the backup's configuration. None of it enters workflow history:
 // the DSN and the OpenBao token stay in the worker (rule 3).
 type Activities struct {
-	// Recipient is the age public key archives are encrypted to.
-	Recipient string
+	// Recipients are the age public keys archives are encrypted to: the operator's
+	// own, and the restore drill's when drills are on (ADR-0051 item 2). Any one of
+	// their private keys can decrypt an archive, so adding the drill's does not put
+	// the operator's key on the host.
+	Recipients []string
 	// DatabaseURL is the read-only BYPASSRLS role's DSN (ADR-0033 item 3).
 	DatabaseURL string
 	// Bao is OpenBao, nil when the control plane runs without secrets.
@@ -104,9 +107,17 @@ func Workflow(ctx workflow.Context) (Result, error) {
 // file that looks like a backup. Every attempt writes a new name, so a retry never
 // overwrites a finished archive.
 func (a *Activities) WriteBackup(ctx context.Context) (Result, error) {
-	to, err := age.ParseX25519Recipient(a.Recipient)
-	if err != nil {
-		return Result{}, temporal.NewNonRetryableApplicationError("backup recipient is not an age public key", "BadRecipient", err)
+	if len(a.Recipients) == 0 {
+		return Result{}, temporal.NewNonRetryableApplicationError("backup has no recipient", "BadRecipient", nil)
+	}
+	to := make([]age.Recipient, 0, len(a.Recipients))
+	for _, r := range a.Recipients {
+		parsed, err := age.ParseX25519Recipient(r)
+		if err != nil {
+			return Result{}, temporal.NewNonRetryableApplicationError(
+				"backup recipient is not an age public key", "BadRecipient", err)
+		}
+		to = append(to, parsed)
 	}
 	if err := os.MkdirAll(a.Dir, 0o700); err != nil {
 		return Result{}, fmt.Errorf("backup directory: %w", err)
@@ -126,7 +137,7 @@ func (a *Activities) WriteBackup(ctx context.Context) (Result, error) {
 		}
 	}()
 	stop := heartbeat(ctx)
-	m, err := a.write()(ctx, f, []age.Recipient{to},
+	m, err := a.write()(ctx, f, to,
 		backup.Source{AdminDSN: a.DatabaseURL, Bao: a.Bao, DataDir: a.DataDir})
 	stop()
 	if err != nil {
@@ -185,6 +196,30 @@ func (a *Activities) PruneBackups(ctx context.Context) ([]string, error) {
 		slog.InfoContext(ctx, "backups pruned", "files", pruned, "kept", min(len(archives), keep))
 	}
 	return pruned, nil
+}
+
+// ErrNoArchives means a directory holds no finished archive.
+var ErrNoArchives = errors.New("no backup archive")
+
+// Newest returns the path of the most recent finished archive in dir. The name layout
+// is a UTC timestamp, so the newest is the last in lexical order. This package owns
+// the naming convention, so it answers the question for the restore drill too, rather
+// than letting a second regexp for the same names exist.
+func Newest(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", dir, err)
+	}
+	newest := ""
+	for _, e := range entries {
+		if n := e.Name(); e.Type().IsRegular() && archiveName.MatchString(n) && n > newest {
+			newest = n
+		}
+	}
+	if newest == "" {
+		return "", fmt.Errorf("%w in %s", ErrNoArchives, dir)
+	}
+	return filepath.Join(dir, newest), nil
 }
 
 func trimPartial(n string) string {

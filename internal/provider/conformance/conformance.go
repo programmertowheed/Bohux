@@ -20,6 +20,9 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
+	bohuxv1 "github.com/bohumix/bohux/gen/bohux/v1"
 	"github.com/bohumix/bohux/internal/provider"
 )
 
@@ -138,6 +141,36 @@ func (h *Harness) converged(ctx context.Context, hash string) error {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("not converged to %.12s with %d replicas: status %+v, %d instances",
 				hash, h.replicas, last, instances)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
+// unhealthy waits until Status reports the workload running under hash but not
+// healthy. Running matters as much as the health: a provider that reports the workload
+// as stopped has failed a different way, and the deploy's health gate would be reading
+// the wrong signal.
+func (h *Harness) unhealthy(ctx context.Context, hash string) error {
+	deadline := time.Now().Add(h.S.Timeout)
+	var last provider.Status
+	for {
+		st, err := h.S.Provider.Status(ctx, h.Ref)
+		if err != nil {
+			return fmt.Errorf("status: %w", err)
+		}
+		last = st
+		if st.Exists && st.Running && !st.Healthy {
+			if st.Message == "" {
+				return errors.New("status reports unhealthy without a message saying why")
+			}
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("a failing health check never reported unhealthy: status %+v", last)
 		}
 		select {
 		case <-ctx.Done():
@@ -299,6 +332,37 @@ func Cases() []Case {
 				return fmt.Errorf("unchanged re-apply churned the target: %v -> %v", before, after)
 			}
 			return nil
+		}},
+		{"a failing health check reports unhealthy", func(ctx context.Context, h *Harness) error {
+			// Running and healthy are different questions, and the gate that makes
+			// rule 5's rollback fire depends on the second one. A provider that calls
+			// a workload healthy because its container is up turns that gate into a
+			// no-op, so the suite proves the unhealthy direction too — not only that
+			// a working app eventually reports healthy.
+			sp := h.spec(h.release)
+			if sp.Runtime.GetHealth() == nil {
+				return errors.New("the subject's fixture declares no health check; this suite requires one")
+			}
+			broken := proto.Clone(sp.Runtime).(*bohuxv1.Runtime)
+			broken.Health.Path = "/bohux-conformance-missing-" + randomHex(4)
+			sp.Runtime = broken
+			// The hash is the agent's change key and does not cover the health path,
+			// so derive a distinct one to keep the two states apart in Status.
+			sum := sha256.Sum256([]byte(sp.Hash + "|unhealthy"))
+			sp.Hash = hex.EncodeToString(sum[:])
+			if _, err := h.S.Provider.Apply(ctx, provider.ApplyRequest{Spec: sp}); err != nil {
+				return fmt.Errorf("apply with a failing health check: %w", err)
+			}
+			if err := h.unhealthy(ctx, sp.Hash); err != nil {
+				return err
+			}
+			// Put the working spec back, so every case after this one runs against a
+			// healthy workload.
+			good, _, err := h.apply(ctx, h.release)
+			if err != nil {
+				return err
+			}
+			return h.converged(ctx, good.Hash)
 		}},
 		{"secrets only in the secret file", func(ctx context.Context, h *Harness) error {
 			arts, err := h.S.Inspector.Artifacts(ctx, h.Ref)
