@@ -50,9 +50,10 @@ work is in right now*.
 - **v0.1 is code-complete**: the exit criterion runs in CI (`selfdeploy`). v0.2 is done
   except the items O35 lists. Open for the owner: O2 (footprint on a 2 GB VPS) and the
   proposed ADRs (O19–O44).
-- **Exact next step:** finish O45 — trace `TestBuilderRailpack`'s empty release label
-  (the one real failure left, and possibly a defect in ADR-0047's build path), and
-  confirm `selfdeploy`. Then every remaining roadmap item needs an owner decision —
+- **Exact next step:** finish O45 — two real failures, each the *last* check of its
+  job: `selfdeploy`'s missing per-App resource sample (pre-existing, S16/ADR-0040) and
+  `TestBuilderRailpack`'s empty release label (possibly a defect in ADR-0047's build
+  path). Both are diagnosed as far as this container allows. Then every remaining roadmap item needs an owner decision —
   ask the owner to pick: v0.2's O35 (managed Postgres/Redis, envelope encryption, team invites)
   or a v0.3 item (the SLO gate's optional PromQL source with OTEL correlation and
   deploy markers, preview environments, migrations as a gated step, cron jobs, Compose
@@ -67,7 +68,10 @@ work is in right now*.
 > `services.sh` pattern in *Known gaps*, and regenerate `gen/` through the
 > scratch-workspace workaround — it is not committed and buf.build is blocked here.
 > Then finish **O45** on branch `claude/loving-shannon-rplqcg`, reading PR #2's job logs
-> from the runner rather than guessing. In order: (1) `TestBuilderRailpack` fails with
+> from the runner rather than guessing. In order: (0) `selfdeploy` fails only on
+> `hello reported no resource sample` — pre-existing, and S28 lists what is already
+> ruled out; check whether the Docker provider's `Usage` refs carry the App ID
+> `attachUsage` keys on, and what `GetAppUsage` reads. (1) `TestBuilderRailpack` fails with
 > `release label = "", want rel-rp-3` — decide whether the Railpack build path
 > (ADR-0047) really fails to stamp `io.bohux.release`, which image retention and
 > workload status both read, and fix it or the test accordingly; it cannot be run in
@@ -126,7 +130,7 @@ work is in right now*.
 | O42 | Accept or reject ADR-0049 (canary deploys: strategy CANARY with one weight 1–99% and a bake 1m–24h per deployment; the weight rides on the workload outside the spec hash; Caddy weighted round robin across the two slots; the workflow's CANARY state watches health with a 30 s grace, then promotes by reassigning with weight 0; PromoteDeployment ends the bake, CancelDeployment aborts). Changes deployment.proto and agent.proto; migration 00024 | S25 |
 | O43 | Accept or reject ADR-0050 (SLO gate: Caddy writes an access log beside its admin socket with only upstream, status and duration; the agent tails it and reports per-slot counters in memory; `App.slo` = availability 0.9–0.99999, optional latency threshold (a histogram bound) and target, max burn rate (default 10), watch 1m–1h (default 10m); burn rate over the window since the hold began, no verdict under 50 requests; judged during a canary's bake and, otherwise, in a new `VERIFYING` state; violations roll back with `SLO_AVAILABILITY`/`SLO_LATENCY`). Item 6 amended while proposed: the CLI, not a deploy log, says an unrouted App is judged by health alone. Changes app.proto, agent.proto, deployment.proto; migration 00025 | S26 |
 | O44 | Accept or reject ADR-0051 (scheduled restore drills: a weekly Temporal schedule on the backup's queue; opt-in through a drill age identity on the host whose public half becomes a second recipient on every archive; throwaway state per run — a scratch database created by a `CREATEDB` `bohux_drill` role, a `BYPASSRLS` `bohux_drill_admin` role with `GRANT SET ON PARAMETER session_replication_role` to load the rows, a temp data dir, and a KV mount of its own that the drill wipes; checks beyond restore's own; the verdict logged and written as JSON under the archives' retention; `bohux admin drill` to run one by hand). **The host holding an age private key is the trade-off to weigh** — item 2 keeps the operator's own key off the host, and drills stay off unless an identity is configured. Item 7 (the config keys) was added while proposed, and item 7 again in S27b to accept the identity as a value as well as a file (the control plane as an App gets its config as env vars). S27a and S27b are built on it | S27a, S27b |
-| O45 | **CI now passes except one real failure.** S28 took PR #2 from 5 of 10 jobs failing to 9 of 11 green (`selfdeploy` was still running at the end of the session — check it). Three jobs had **never** passed; the causes and fixes are under S28. What is left: (1) `integration` fails only on `TestBuilderRailpack` — `release label = "", want rel-rp-3`. A real assertion, newly visible, and not reproducible in the cloud container because ghcr.io is blocked there; if the Railpack build path (ADR-0047) does not stamp `io.bohux.release`, image retention and workload status both read that label, so this is worth tracing properly. (2) `conformance-swarm` flaked once on `an_interrupted_apply_converges_without_duplicates` having passed it twice — timing-sensitive under Swarm. (3) **You**: commit `buf.lock` from a machine with Buf Schema Registry access (`buf dep update`), which removes both `buf.lock` workarounds in `ci.yml` | A green matrix; and the Railpack label, if it is a real defect |
+| O45 | **CI now passes except one real failure.** S28 took PR #2 from 5 of 10 jobs failing to 9 of 11 green (`selfdeploy` was still running at the end of the session — check it). Three jobs had **never** passed; the causes and fixes are under S28. What is left: (0) `selfdeploy` fails only on its last check, `hello reported no resource sample` — pre-existing (identical on `334c1dd`), diagnosis and what is already ruled out are under S28. (1) `integration` fails only on `TestBuilderRailpack` — `release label = "", want rel-rp-3`. A real assertion, newly visible, and not reproducible in the cloud container because ghcr.io is blocked there; if the Railpack build path (ADR-0047) does not stamp `io.bohux.release`, image retention and workload status both read that label, so this is worth tracing properly. (2) `conformance-swarm` flaked once on `an_interrupted_apply_converges_without_duplicates` having passed it twice — timing-sensitive under Swarm. (3) **You**: commit `buf.lock` from a machine with Buf Schema Registry access (`buf dep update`), which removes both `buf.lock` workarounds in `ci.yml` | A green matrix; and the Railpack label, if it is a real defect |
 | O46 | **Which rule decides an ADR's status?** `.claude/skills/write-adr/` says "Status starts `proposed`, becomes `accepted` on merge", which would make ADRs 0020–0051 accepted already (they merged in PR #1). This tracker instead asks you to accept each one (O1, O6–O44). S28's audit confirms all 32 are referenced from code, so the two rules disagree only on paperwork — but they do disagree. Pick one: either the skill's merge rule (and the O-items close), or per-ADR acceptance (and the skill should say so). Statuses were deliberately left untouched | 32 ADRs reading `proposed` while the code depends on them |
 | O5 | Where do an App's **non-secret** env vars live? The spec gives App only Source, Runtime, SecretRefs; `Environment.config` is env-wide. Options: `App.env` map, or Environment.config only | Adding a field to App before v0.1 (non-breaking) |
 
@@ -1241,6 +1245,20 @@ that updates in place.
         reported "not set", and `e2e-swarm` went **green while skipping both its
         tests**. The variables are passed explicitly now, and that job asserts its two
         tests reported PASS rather than trusting the exit status
+- [x] **`selfdeploy` diagnosed, and it is pre-existing.** It reaches its *last* check
+      and fails only on `hello reported no resource sample` (ADR-0040 / S16). Everything
+      before it passes, including the whole v0.1 exit criterion: Bohux deploys itself,
+      rolls itself back, recovers from a version of itself that cannot start (242 s),
+      triggers the nightly backup, serves an App on a route, and redeploys it with 138
+      requests and no failures. The identical failure, same message, is on head
+      `334c1dd` — S27's end, before anything in S28 — so it is not this slice's
+      - Ruled out already: the agent is not erroring (no "sample workload usage"
+        warning in the log), `GetAppUsage` answers `ok` repeatedly so the API is
+        serving an empty value, the sample is not stale (the *node* sample from the
+        same `Latest()` call is present), and `attachUsage` already sums per App across
+        slots, so ADR-0035's two-slot routing is not the cause. What is left to check
+        is whether the Docker provider's `Usage` refs carry the App ID that
+        `attachUsage` keys on, and what `GetAppUsage` reads on the control-plane side
 - [ ] **Left for O45**: `integration` now fails only on `TestBuilderRailpack`
       (`release label = "", want rel-rp-3`) — a real assertion, visible for the first
       time because the job never got that far before, and not reproducible in this
