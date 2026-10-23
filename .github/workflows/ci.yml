@@ -231,6 +231,56 @@ jobs:
       - name: End to end (deploy, build, restore drill)
         run: go test -tags=integration,e2e -count=1 -v -timeout 25m ./cmd/bohux
 
+  # The same control plane and agent, deploying to Swarm (ADR-0045). Its own job
+  # because a swarm manager cannot have live-restore, which the e2e job above turns on
+  # for the Docker provider.
+  e2e-swarm:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      BOHUX_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+      BOHUX_TEST_TEMPORAL_ADDRESS: 127.0.0.1:7233
+      BOHUX_TEST_SWARM_HOST: unix:///var/run/docker.sock
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.47.2
+          setup_only: true
+      - name: Install code generators
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6
+          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.17.0
+      - name: Generate
+        run: |
+          test -f buf.lock || buf dep update
+          buf generate
+      - name: Start a single-manager swarm
+        run: |
+          docker swarm init --advertise-addr 127.0.0.1
+          docker pull busybox:1.36
+      - name: Start a Temporal dev server
+        run: |
+          curl -sSL https://github.com/temporalio/cli/releases/download/v1.4.1/temporal_cli_1.4.1_linux_amd64.tar.gz | tar xz -C /tmp temporal
+          nohup /tmp/temporal server start-dev --headless --ip 127.0.0.1 --port 7233 > /tmp/temporal.log 2>&1 &
+          for i in $(seq 60); do /tmp/temporal operator cluster health --address 127.0.0.1:7233 && exit 0; sleep 1; done
+          cat /tmp/temporal.log; exit 1
+      - name: End to end on Swarm
+        run: go test -tags=integration,e2e -count=1 -v -timeout 25m -run TestSwarm ./cmd/bohux
+
   # v0.1's exit criterion on a real host with systemd (ADR-0030, ADR-0031): install
   # Bohux, deploy a new version of itself, roll itself back, recover from a version of
   # itself that cannot start.
