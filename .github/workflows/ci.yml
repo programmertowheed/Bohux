@@ -134,8 +134,11 @@ jobs:
       - name: Pull the ingress image
         # The real-Caddy test skips without it (ADR-0034).
         run: docker pull caddy:2.8.4-alpine
+      # As root: the agent's ingress talks to Caddy's admin socket, which Caddy creates
+      # as root inside its container, so TestCaddy cannot connect as the runner's own
+      # user. The agent runs as root on a real node (ADR-0030).
       - name: Integration tests
-        run: go test -tags=integration -race -count=1 ./internal/... ./cmd/... ./providers/docker/...
+        run: sudo -E env "PATH=$PATH" go test -tags=integration -race -count=1 ./internal/... ./cmd/... ./providers/docker/...
 
   # Provider conformance against a real Docker daemon (CLAUDE.md rule 4, ADR-0025).
   conformance-docker:
@@ -197,17 +200,10 @@ jobs:
   # restore → rollback drill (ADR-0020 item 7).
   e2e:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16.4-alpine
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
+    # Postgres is started by a step below, not as a `services:` container: enabling
+    # live-restore restarts the Docker daemon, and a service container started before
+    # that restart does not survive it (live-restore is not yet on when it happens),
+    # so every run failed with "connection refused" before a test body ran.
     env:
       BOHUX_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
       BOHUX_TEST_TEMPORAL_ADDRESS: 127.0.0.1:7233
@@ -235,6 +231,16 @@ jobs:
           sudo mv /tmp/daemon.json "$f"
           sudo systemctl restart docker
           test "$(docker info --format '{{.LiveRestoreEnabled}}')" = true
+      - name: Start Postgres (after the daemon restart, so it survives)
+        run: |
+          docker run -d --name bohux-ci-postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres \
+            --health-cmd "pg_isready -U postgres" --health-interval 5s --health-retries 20 \
+            postgres:16.4-alpine
+          for i in $(seq 60); do
+            docker exec bohux-ci-postgres pg_isready -U postgres && exit 0
+            sleep 2
+          done
+          docker logs bohux-ci-postgres; exit 1
       - name: Start a Temporal dev server
         run: |
           curl -sSL https://github.com/temporalio/cli/releases/download/v1.4.1/temporal_cli_1.4.1_linux_amd64.tar.gz | tar xz -C /tmp temporal
