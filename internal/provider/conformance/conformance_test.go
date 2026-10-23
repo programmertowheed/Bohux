@@ -18,7 +18,8 @@ func memorySubject(p provider.Provider, insp conformance.Inspector) conformance.
 		Fixture: func(ref provider.ResourceRef, release int, replicas int32) provider.Spec {
 			return provider.Spec{Ref: ref, Release: fmt.Sprintf("r%d", release),
 				Image: fmt.Sprintf("mem:%d", release), Runtime: &bohuxv1.Runtime{Replicas: replicas,
-					Ports: []*bohuxv1.Port{{ContainerPort: 8080}}}}
+					Ports:  []*bohuxv1.Port{{ContainerPort: 8080}},
+					Health: &bohuxv1.HealthCheck{Path: "/healthz", Port: 8080, TimeoutSeconds: 1}}}
 		},
 		LogMarker: func(release int) string { return fmt.Sprintf("started r%d", release) },
 	}
@@ -102,6 +103,18 @@ func (n noEndpoints) Status(ctx context.Context, ref provider.ResourceRef) (prov
 	return st, err
 }
 
+// alwaysHealthy reports a workload healthy whenever it is running, which is what the
+// agent's reconciler used to trust: it turns the deploy's health gate into a no-op.
+type alwaysHealthy struct{ *memory.Provider }
+
+func (a alwaysHealthy) Status(ctx context.Context, ref provider.ResourceRef) (provider.Status, error) {
+	st, err := a.Provider.Status(ctx, ref)
+	if st.Running {
+		st.Healthy, st.Message = true, ""
+	}
+	return st, err
+}
+
 func TestBrokenProvidersFail(t *testing.T) {
 	tests := []struct {
 		name string
@@ -123,6 +136,9 @@ func TestBrokenProvidersFail(t *testing.T) {
 		{"no endpoints for the ingress", func(m *memory.Provider) (provider.Provider, conformance.Inspector) {
 			return noEndpoints{m}, m
 		}, "ingress endpoints are reported and reachable"},
+		{"healthy whenever it is running", func(m *memory.Provider) (provider.Provider, conformance.Inspector) {
+			return alwaysHealthy{m}, m
+		}, "a failing health check reports unhealthy"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
